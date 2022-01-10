@@ -3,18 +3,18 @@
 The library contains optimised NN (Neural Network) functions for various Espressif chipsets.
 
 * Supported platforms:
-   - TensorFlow Lite Micro (TFLite Micro). Repo can be found [here](https://github.com/espressif/tflite-micro-esp-examples)
+   * TensorFlow Lite Micro (TFLite Micro). Repo can be found [here](https://github.com/espressif/tflite-micro-esp-examples)
 
 * Supported ESP chipsets include:
-   - ESP32-S3 (Assembly versions optimised to benefit from vector instructions of ESP32-S3)
-   - ESP32 (ANSI C versions)
+   * ESP32-S3 (Assembly versions optimised to benefit from vector instructions of ESP32-S3)
+   * ESP32 (ANSI C versions)
 
-### Performance:
+## Performance
 
-### Performance for s8 versions:
+### Kernelwise performance for s8 versions:
 
-  - Kernelwise performance on ESP32-S3 chip
-    * Ticks taken for kernel to execute
+  * Kernelwise performance on ESP32-S3 chip
+    * Numbers are ticks taken for kernel to execute
     * Chip config: 240MHz, SPI: QPI 80MHz, Data cache: 64KB
 
     | Function        | ANSI C  | ESP32-S3 Opt  | Opt Ratio | Data info   | Memory    |
@@ -34,16 +34,16 @@ The library contains optimised NN (Neural Network) functions for various Espress
 
 ## Configuration
 
-  - To configure, please use `idf.py menuconfig` and under `ESP-NN` select `NN_OPTIMIZATIONS`
-  - There are two options presented:
+  * To configure, please use `idf.py menuconfig` and under `ESP-NN` select `NN_OPTIMIZATIONS`
+  * There are two options presented:
      * Optimized versions
      * ANSI C
 
-  - Default selection is for `Optimized versions`. For ESP32-S3, assembly versions are automatically selected, whereas for ESP32,  ANSI-C versions are selected by default.
-  - For debugging purposes, you may want to select `ANSI C`
+  * Default selection is for `Optimized versions`. For ESP32-S3, assembly versions are automatically selected, whereas for ESP32,  ANSI-C versions are selected by default.
+  * For debugging purposes, you may want to select `ANSI C`
 
 
-## Reporting Issues
+## Contributing
 
 If you encounter an issue with ESP-NN, or wish to submit a feature request, please use the Issues section on the Github.
 
