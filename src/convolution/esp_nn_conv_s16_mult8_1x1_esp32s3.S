@@ -24,21 +24,20 @@
     .global esp_nn_conv_s16_mult8_1x1_esp32s3
 
 esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
-    # scratch_buf = 0
-    # gra_spill_temp_164 = 36, in_channels-7
+    # scratch_buf = 0   // to store qacc regs need 36 bytes
+    # gra_spill_temp_164 = 36, channel itr, (in_channels - 1) >> 3
+    # gra_spill_temp_165 = 40, i_out
     # gra_spill_temp_166 = 44, in_channels
     # gra_spill_temp_167 = 48, in_channels/8 - 1
-    # gra_spill_temp_168 = 52
+    # gra_spill_temp_168 = 52, in_channels-7
     # gra_spill_temp_169 = 56, input
-    # gra_spill_temp_180 = 60, filter_data
-    # gra_spill_temp_171 = 64
-    # gra_spill_temp_172 = 68
-    # gra_spill_temp_173 = 72
+    # gra_spill_temp_170 = 60, filter_data
+    # gra_spill_temp_171 = 64, input_offset
+    # gra_spill_temp_172 = 68, input_ptr
+    # gra_spill_temp_173 = 72, bias
     # gra_spill_temp_174 = 76, in_channels*8
     # gra_spill_temp_175 = 80, size-7
     # gra_spill_temp_176 = 84, size
-    # gra_spill_temp_177 = 88
-    # gra_spill_temp_181 = 92
 
  // registers:
  // a2: int8_t *input_data
@@ -49,54 +48,56 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
  // a7: int16_t *filter_data
 
  // on stack:
- // int32_t *bias
- // int8_t *out_data
- // uint16_t out_wd
- // uint16_t out_ht
- // uint16_t out_channels
- // int32_t out_offset
- // int32_t *out_shift
- // int32_t *out_mult
- // int32_t activation_min
- // int32_t activation_max
- // void *buffer /* scratch buffer */
+ // int32_t *bias           // 160
+ // int8_t *out_data        // 164
+ // uint16_t out_wd         // 168
+ // uint16_t out_ht         // 172
+ // uint16_t out_channels   // 176
+ // int32_t out_offset      // 180
+ // int32_t *out_shift      // 184
+ // int32_t *out_mult       // 188
+ // int32_t activation_min  // 192
+ // int32_t activation_max  // 196
+ // void *buffer // tmp buf // 200
 
     entry   a1,160                      #
     s32i    a5,a1,44                    # [0]  gra_spill_temp_166, in_channels
     s32i    a6,a1,64                    # [2]  id:619 input_offset+0x0
-    s32i    a7,a1,60                    # [1]  gra_spill_temp_180, filter_data
+    s32i    a7,a1,60                    # [1]  gra_spill_temp_170, filter_data
     mul16u  a8,a3,a4                    # [3]  size = input_wd * input_ht;
     s32i    a2,a1,56                    # [0]  gra_spill_temp_169, input
     l32i    a4,a1,164                   # [1]  id:624 out_data+0x0
+    mov.n   a3,a1                       # [52]  scratch_buf
+
     s32i    a8,a1,84                    # [4]  gra_spill_temp_176, size
-    blti    a8,8,.prepare_leftover      # [5]
+    blti    a8,8,.prepare_leftover      # [5] // process remaining lines one by one
     addi    a9,a8,-7                    # [32]
     s32i    a9,a1,80                    # [33]  gra_spill_temp_175, size-7
 
     s32i    a2,a1,68                    # [2]  gra_spill_temp_172 , input_ptr
     srai    a15,a5,3                    # [7] `in_ch/8` loop_cnt
     movi.n  a11,0                       # [10]
-    s32i    a11,a1,92                   # [11]  gra_spill_temp_181
-    s32i.n  a15,a1,52                   # [14]  gra_spill_temp_168
-    addi    a3,a15,-1                   # [17]  `in_ch/8` loop_cnt - 1
-    s32i    a3,a1,48                    # [18]  gra_spill_temp_167
-    slli    a8,a5,3                     # [19]  in_channels*8
-    s32i    a8,a1,76                    # [20]  gra_spill_temp_174
-    addi    a3,a5,-7                    # [31]
-    s32i    a3,a1,36                    # [34]  gra_spill_temp_164
-    mov.n   a3,a1                       # [36]  scratch_buf
+    s32i    a11,a1,40                   # [11]  gra_spill_temp_165
+    addi    a15,a15,-1                  # [17]  `in_ch/8` loop_cnt - 1
+    s32i    a15,a1,48                   # [18]  gra_spill_temp_167
+    slli    a9,a5,3                     # [19]  in_channels*8
+    s32i    a9,a1,76                    # [20]  gra_spill_temp_174
+    addi    a15,a5,-7                   # [31]
+    s32i    a15,a1,52                   # [34]  gra_spill_temp_168
 
 .outer_loop: // for (; i_out < size - 7; i_out += 8) {
 
     l32i    a10,a1,200                  # [1]  gra_spill_temp_165, buffer
     l32i.n  a11,a1,44                   # [1]  gra_spill_temp_166, input_channels
     l32i.n  a8,a1,68                    # [2]  gra_spill_temp_172, input_ptr
-    l32i.n  a9,a1,52                    # [3]  gra_spill_temp_168, loop_counter
+    srai    a9,a11,3                    # [7] `in_ch/8` loop_cnt for transpose loop
 
     ee.zero.q   q7                      # [0]
-    addi        a12,a1,64                   # [6]
-    ee.vldbc.16 q5,a12              # [0*II+16]  id:638 input_offset
+    addi        a12,a1,64               # [6]
+    ee.vldbc.16 q5,a12                  # [0*II+16]  id:638 input_offset
 
+    // load and transose 8 lines of input 8xchannels,
+    // add input offset and store 16 bit data to tmp buffer
     loopgtz a9,.transpose_loop_end  # [10]
     mov.n                   a9,a8
     ee.vld.l.64.xp          q0,a9,a11
@@ -140,22 +141,20 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
  # 471          const int32_t *out_shift_ptr = out_shift;
     l32i    a6,a1,184                   # [0]  out_shift
     l32i    a2,a1,188                   # [1]  out_mult
-    l32i    a5,a1,60                    # [2]  gra_spill_temp_180, filter
+    l32i    a5,a1,60                    # [2]  gra_spill_temp_170, filter
     l32i    a9,a1,160                   # [3]  gra_spill_temp_170, bias
  # 472          for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-    l16ui   a8,a1,176               # [5]  id:620 out_channels+0x0
+    l16ui   a8,a1,176                   # [5]  id:620 out_channels+0x0
     s32i    a9,a1,72                    # [5]  gra_spill_temp_173
-    blti    a8,1,.outer_ch_loop_end             # [6]
+    blti    a8,1,.outer_ch_loop_end
 
-    movi.n  a7,0                    # [0]
-
- # 489              for (int32_t in_ch_idx = 8; in_ch_idx < in_channels - 7; in_ch_idx += 8) {
+    movi.n  a7,0
 
 .out_ch_loop:   # 0xf3e
     l32i    a8,a1,200                   # [4]  gra_spill_temp_165, buffer_ptr
-    ee.zero.qacc                    # [3]
-    l32i    a10,a1,36                   # [1]  gra_spill_temp_164, in_channels-7
-    l32i    a9,a1,48                # [1]  gra_spill_temp_167, in_channels/8 - 1
+    ee.zero.qacc                        # [3]
+    l32i    a10,a1,52                   # [1]  gra_spill_temp_168, in_channels-7
+    l32i    a9,a1,48                    # [1]  gra_spill_temp_167, in_channels/8 - 1
     ee.vld.128.ip                   q7,a5,16            # [5] filter
     ee.vld.128.ip                   q0,a8,16
     ee.vld.128.ip                   q1,a8,16
@@ -213,31 +212,31 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     s8i     a8,a1,15                    # [32]  scratch_buf+15
 
  # finally get 32 bit results in q0, q4
-    movi.n              a10,16                  # [18]
-    ee.vld.128.ip       q0,a3,0             # [33]  id:692
+    movi.n              a10,16
+    ee.vld.128.ip       q0,a3,0
     ee.srcmb.s16.qacc   q4,a10,0        # [34] //high 16 bits
-    l32i                a9,a1,160                   # [17]  gra_spill_temp_170, bias
-    l32i                a10,a1,72                   # [0]  gra_spill_temp_173, bias_ptr
-    ee.vzip.16          q0,q4               # [35], 32 bit result
+    l32i                a9,a1,160       # [17]  gra_spill_temp_170, bias
+    l32i                a10,a1,72       # [0]  gra_spill_temp_173, bias_ptr
+    ee.vzip.16          q0,q4           # [35], 32 bit result
 
  # add bias
-    beqz.n          a9,.no_bias             # [36]
-    ee.vldbc.32.ip  q6,a10,4                # [2]  id:694
+    beqz.n          a9,.no_bias
+    ee.vldbc.32.ip  q6,a10,4
     s32i            a10,a1,72           # [3]  gra_spill_temp_173, bias_ptr
     ee.vadds.s32    q0,q0,q6            # [4]
     ee.vadds.s32    q4,q4,q6            # [5]
 .no_bias:   # 0x102e
 
-    l32i.n  a11,a6,0                # [1]  id:696
-    st.qr   q4,a1,0                 # [2]  gra_spill_temp_200-112
-    l32i.n  a10,a2,0                # [3]  id:695
+    l32i.n  a11,a6,0                    # [1]  id:696
+    st.qr   q4,a1,0                     # [2]  gra_spill_temp_200-160
+    l32i.n  a10,a2,0                    # [3]  id:695
     .global esp_nn_multiply_by_quantized_mult_asm_esp32s3
     call8   esp_nn_multiply_by_quantized_mult_asm_esp32s3   # [4]  esp_nn_multiply_by_quantized_mult_asm_esp32s3
 
-    l32i.n  a10,a2,0                # [0]  id:697, mult
-    l32i.n  a11,a6,0                # [2]  id:698, shift
-    st.qr   q0,a1,16                # [3]  gra_spill_temp_197-112
-    ld.qr   q0,a1,0                 # [4]  gra_spill_temp_200-112
+    l32i.n  a10,a2,0                    # [0]  id:697, mult
+    l32i.n  a11,a6,0                    # [2]  id:698, shift
+    st.qr   q0,a1,16                    # [3]  gra_spill_temp_197-160
+    ld.qr   q0,a1,0                     # [4]  gra_spill_temp_200-160
     call8   esp_nn_multiply_by_quantized_mult_asm_esp32s3   # [5]  esp_nn_multiply_by_quantized_mult_asm_esp32s3
 
     addi.n  a6,a6,4                     # out_shift_ptr++
@@ -248,7 +247,7 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
 # load broadcast, activation and out_offset
     ee.vldbc.32     q4,a9               # [14]  id:699 out_offset
-    ld.qr           q5,a1,16                # [18]  gra_spill_temp_197-112
+    ld.qr           q5,a1,16            # [18]  gra_spill_temp_197-160
     ee.vldbc.32     q2,a10              # [11]  id:700 activation_min
     ee.vldbc.32     q3,a8               # [12]  id:701 activation_max
 
@@ -262,7 +261,7 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     ee.vmin.s32     q0,q0,q3            # [23]
     ee.vmax.s32     q0,q0,q2            # [24]
 
-    l16ui           a9,a1,176                   # [33]  out_channels
+    l16ui           a9,a1,176           # [33]  out_channels
 
 # unzip and store
     ee.vunzip.16    q0,q1               # [25]
@@ -297,48 +296,48 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     s8i     a14,a12,0                   # [28]
     s8i     a11,a10,0                   # [31]
 
-    addi.n  a4,a4,1                 # [29] out_data++;
-    addi.n  a7,a7,1                 # [3]
-    bne     a7,a9,.out_ch_loop              # [61]
+    addi.n  a4,a4,1                     # [29] out_data++;
+    addi.n  a7,a7,1
+    bne     a7,a9,.out_ch_loop
 
 .outer_ch_loop_end:
 
     subx8   a11,a9,a9                   # (7 * out_channels);
     l32i    a10,a1,76                   # [1]  gra_spill_temp_174, in_channels * 8
-    l32i    a15,a1,92                   # [4]  gra_spill_temp_181
+    l32i    a15,a1,40                   # [4]  gra_spill_temp_165
     l32i    a9,a1,68                    # [2]  gra_spill_temp_172
     l32i    a8,a1,80                    # [0]  gra_spill_temp_175, size-7
     add.n   a4,a4,a11                   # [5] out_data += (7 * out_channels);
-    addi.n  a15,a15,8               # [6]
-    s32i    a15,a1,92                   # [7]  gra_spill_temp_181
+    addi.n  a15,a15,8
+    s32i    a15,a1,40                   # [7]  gra_spill_temp_165
     add.n   a9,a9,a10                   # [8]
     s32i    a9,a1,68                    # [9]  gra_spill_temp_172
     blt     a15,a8,.outer_loop          # [10]
 
  # check if leftover
-    l32i    a12,a1,92
+    l32i    a15,a1,40
     l32i    a13,a1,84                   # [1]  gra_spill_temp_176, size
     l32i    a8,a1,44                    # [0]  gra_spill_temp_166, in_channels
-    bge     a12, a13, .return_function  # no leftover
+    bge     a15, a13, .return_function  # no leftover
 
-
+// This block below processes one input channel line at a time.
 .process_leftover:
-    l32i    a15,a1,92                   # [1]  gra_spill_temp_181, i_out
+    l32i    a15,a1,40                   # [1]  gra_spill_temp_165, i_out
     l32i    a14,a1,56                   # [2]  gra_spill_temp_169, input
     mull    a15,a15,a8                  # [3] in_channels * i_out
     addi.n  a8,a8,-1                    # [4] in_channels - 1
     add.n   a14,a14,a15                 # [5] input_ptr = in_channels * i_out + input
     srai    a8,a8,3                     # [6] iterations, (in_channels - 1) >> 3
-    s32i    a8,a1,88                    # [7]  gra_spill_temp_177, iterations
+    s32i    a8,a1,36                    # [7]  gra_spill_temp_164, iterations
     s32i    a14,a1,68                   # [8]  gra_spill_temp_172, in_channels * i_out + input
+    addi            a12,a1,64
+    ee.vldbc.16     q4,a12              # [8]  id:716 input_offset
 
 .leftover_outer_loop:
-#<loop> Loop body line 576, nesting depth: 1, estimated iterations: 100
 
     l32i    a15,a1,184                  # [0]  out_shift
     l32i    a2,a1,188                   # [1]  out_mult
-    l16ui   a9,a1,176                   # [5]  id:620 out_channels+0x0
-    l32i    a8,a1,60                    # [3]  gra_spill_temp_180, filter_data
+    l32i    a8,a1,60                    # [3]  gra_spill_temp_170, filter_data
     l32i    a5,a1,160                   # [0]  gra_spill_temp_170, bias
     movi.n  a11,0                       # [2]
 
@@ -346,17 +345,12 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
     ee.zero.qacc                            # [0]
     ee.zero.q       q3                      # [1]
-    l32i.n          a9,a1,68                        # [4]  gra_spill_temp_172, input_ptr
-    l32i.n          a14,a1,44                       # [1]  gra_spill_temp_166, in_channels
-    addi            a12,a1,64                       # [5]
-    l32i            a10,a1,88                       # [1]  gra_spill_temp_177, iterations, (in_channels - 1) >> 3
+    l32i.n          a9,a1,68                # [4]  gra_spill_temp_172, input_ptr
+    l32i            a10,a1,36               # [1]  gra_spill_temp_164, iterations, (in_channels - 1) >> 3
     ee.vld.l.64.ip          q0,a9,8         # [7]  id:717, input
-    ee.vldbc.16             q4,a12              # [8]  id:716 input_offset
-    ee.vcmp.lt.s8           q7,q0,q3            # [9]
-    ee.vzip.8               q0,q7                   # [10]
+    ee.vcmp.lt.s8           q7,q0,q3
+    ee.vzip.8               q0,q7
     ee.vadds.s16.ld.incp    q1,a8,q0,q0,q4  # [11]  id:718, add offset and load filter
-
-    blti    a14,8,.leftover_inner_loop_end          # [13]
 
     loopgtz a10,.leftover_inner_loop_end        # [3]
 
@@ -384,42 +378,42 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
     ee.st.qacc_h.l.128.ip   a3,16       # [17]  id:724
     ee.st.qacc_h.h.32.ip    a3,-32      # [18]  id:725
+    l16ui   a13,a1,16                   # [30]  scratch_buf+16
     l8ui    a14,a1,21                   # [23]  scratch_buf+21
     l8ui    a9,a1,22                    # [22]  scratch_buf+22
     l16ui   a10,a1,26                   # [21]  scratch_buf+26
-    l8ui    a13,a1,32                   # [19]  scratch_buf+32
+    s16i    a13,a1,8                    # [31]  scratch_buf+8
     l8ui    a12,a1,31                   # [20]  scratch_buf+31
+    l8ui    a13,a1,32                   # [19]  scratch_buf+32
     s8i     a14,a1,10                   # [24]  scratch_buf+10
     s8i     a9,a1,11                    # [25]  scratch_buf+11
     s16i    a10,a1,12                   # [26]  scratch_buf+12
-    s8i     a13,a1,15                   # [28]  scratch_buf+15
     s8i     a12,a1,14                   # [27]  scratch_buf+14
-    l16ui   a13,a1,16                   # [30]  scratch_buf+16
-    movi.n  a12,16                  # [29]
-    s16i    a13,a1,8                    # [31]  scratch_buf+8
+    s8i     a13,a1,15                   # [28]  scratch_buf+15
+    movi.n  a12,16
 
 # get data now
-    ee.vld.128.ip       q0,a3,0             # [32]  id:726
-    ee.srcmb.s16.qacc   q1,a12,0        # [33]
-    ee.vzip.16          q0,q1               # [34]
+    ee.vld.128.ip       q0,a3,0
+    ee.srcmb.s16.qacc   q1,a12,0
+    ee.vzip.16          q0,q1
 
-    ee.vadds.s32    q0,q0,q1            # [35]
-    ee.movi.32.a    q0,a10,3            # [36]
-    ee.movi.32.a    q0,a9,2             # [37]
-    ee.movi.32.a    q0,a14,0            # [38]
-    add.n           a9,a9,a10                   # [39]
-    ee.movi.32.a    q0,a10,1            # [40]
-    add.n           a14,a14,a10                 # [41]
-    add.n           a14,a14,a9                  # [42]
+    ee.vadds.s32    q0,q0,q1
+    ee.movi.32.a    q0,a10,3
+    ee.movi.32.a    q0,a9,2
+    ee.movi.32.a    q0,a14,0
+    add             a9,a9,a10
+    ee.movi.32.a    q0,a10,1
+    add             a14,a14,a10
+    add             a14,a14,a9
 
 # a14 contains conv_out
     l32i    a9,a1,160                   # [43]  gra_spill_temp_170, bias ptr
-    l32i.n  a6,a15,0                # [44]  id:730, shift
+    l32i.n  a6,a15,0                    # [44]  id:730, shift
     beqz.n  a9,.leftover_multiply_by_quant_mult             # [45]
 
 # load and add bias
-    l32i.n  a9,a5,0                 # [0]  id:728
-    add.n   a14,a14,a9                  # [2]
+    l32i.n  a9,a5,0
+    add.n   a14,a14,a9
 
 .leftover_multiply_by_quant_mult:   # 0x12e7
     l32i.n  a9,a2,0                 # [0]  id:729, mult
@@ -430,9 +424,9 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
     sub     a7,a10,a6               # right_shift
 
-    l32r    a13,.nudge_val          # [0]
-    mulsh   a12,a9,a14                  # [8]
-    mull    a14,a9,a14                  # [10]
+    l32r    a13,.nudge_val
+    mulsh   a12,a9,a14
+    mull    a14,a9,a14
     ssai    31
 
     addi.n  a2,a2,4                 # [0] mult
@@ -442,18 +436,18 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
     add     a13,a14,a13             # low part
     saltu   a14,a13,a14
-    add.n   a9,a12,a14             # high part
+    add     a9,a12,a14              # high part
     src     a12,a9,a13
 
     blti    a7,1,.leftover_skip_div_by2
 
-    addi    a14,a7,-1
+    addi.n  a14,a7,-1
     ssl     a14
-    movi.n  a10,1                   # [14]
+    movi.n  a10,1
     sll     a10,a10                     # 1 << (exponent - 1)
     extui   a14,a12,31,1
     ssr     a7
-    sub     a10,a10,a14                 # 1 << (exponent - 1) + (val < 0)
+    sub     a10,a10,a14                 # 1 << (exponent - 1) - (val < 0)
     add     a12,a12,a10                 # val += to_add
     sra     a12,a12
 
@@ -464,31 +458,31 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     l32i    a14,a1,196                  # [31]  id:731 activation_max+0x0
 
 // add offset, apply activation and store
-    add.n   a10,a10,a12                 # [32]
-    max     a9,a9,a10                   # [33]
-    min     a14,a14,a9                  # [34]
-    s8i     a14,a4,0                    # [36]  id:734
-    addi.n  a4,a4,1                 # [37]
+    add.n   a10,a10,a12
+    max     a9,a9,a10
+    min     a14,a14,a9
+    s8i     a14,a4,0
+    addi.n  a4,a4,1
 
-    bne     a11,a13,.leftover_out_ch_loop           # [38]
+    bne     a11,a13,.leftover_out_ch_loop
 
-    l32i    a15,a1,44                   # [0]  gra_spill_temp_166
+    l32i    a15,a1,44                   # [0]  gra_spill_temp_166, in_channels
     l32i    a14,a1,68                   # [1]  gra_spill_temp_172, input_ptr
-    l32i    a13,a1,92                   # [2]  gra_spill_temp_181
-    l32i    a12,a1,84                   # [3]  gra_spill_temp_176
-    addi.n  a13,a13,1               # [4]
-    s32i    a13,a1,92                   # [5]  gra_spill_temp_181
-    add.n   a14,a14,a15                 # [7]
+    l32i    a13,a1,40                   # [2]  gra_spill_temp_165, i_out
+    l32i    a12,a1,84                   # [3]  gra_spill_temp_176, size
+    addi.n  a13,a13,1                   # [4]
+    s32i    a13,a1,40                   # [5]  gra_spill_temp_165, i_out
+    add     a14,a14,a15                 # [7]  input_ptr += in_channels
     s32i    a14,a1,68                   # [8]  gra_spill_temp_172, input_ptr
-    bne     a12,a13, .leftover_outer_loop
+    blt     a13,a12,.leftover_outer_loop
 
 .return_function:
     retw.n              # [9]
 
 .prepare_leftover:
-    mov.n   a3,a1                       # [0]  scratch_buf
-    movi.n  a12,0                   # [4]
-    s32i    a12,a1,92                   # [9]  gra_spill_temp_181
-    j   .process_leftover                   # [13]
+    l32i    a8,a1,44                    # [0]  gra_spill_temp_166, in_channels
+    movi.n  a15,0
+    s32i    a15,a1,40                   # [7]  gra_spill_temp_165, i_out
+    j   .process_leftover
 
     .size   esp_nn_conv_s16_mult8_1x1_esp32s3, . - esp_nn_conv_s16_mult8_1x1_esp32s3

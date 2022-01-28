@@ -343,7 +343,7 @@ int esp_nn_get_conv_scratch_size_esp32s3(const uint16_t input_wd,
     int input_size = input_wd * input_ht * in_ch;
     int transpose_buf_size = 8 * in_ch; /* to store intermediate data */
     int align_buf_size = 32; /* extra buffer for alignment */
-    return  2 * (filter_size + input_size +  transpose_buf_size) + align_buf_size;
+    return 2 * (filter_size + input_size +  transpose_buf_size) + align_buf_size;
 }
 
 void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
@@ -386,7 +386,6 @@ void esp_nn_conv_s8_esp32s3(const int8_t *input,
     }
 
     if (channels % 8 == 0 && filter_wd == 1 && filter_ht == 1 &&
-            (input_wd * input_ht > 7) && /* TBD: remove this limitation */
             pad_wd == 0 && pad_ht == 0 && stride_wd == 1 && stride_ht == 1) {
         int scratch_offset = (int) (filter_data16 + filter_size);
         void *scratch_buf = (void *) (scratch_offset + 16 - (scratch_offset & 15));
