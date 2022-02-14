@@ -228,15 +228,14 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 .no_bias:   # 0x102e
 
     l32i.n  a11,a6,0                    # [1]  id:696
-    st.qr   q4,a1,0                     # [2]  gra_spill_temp_200-160
     l32i.n  a10,a2,0                    # [3]  id:695
     .global esp_nn_multiply_by_quantized_mult_asm_esp32s3
     call8   esp_nn_multiply_by_quantized_mult_asm_esp32s3   # [4]  esp_nn_multiply_by_quantized_mult_asm_esp32s3
 
     l32i.n  a10,a2,0                    # [0]  id:697, mult
     l32i.n  a11,a6,0                    # [2]  id:698, shift
-    st.qr   q0,a1,16                    # [3]  gra_spill_temp_197-160
-    ld.qr   q0,a1,0                     # [4]  gra_spill_temp_200-160
+    mv.qr   q5,q0
+    mv.qr   q0,q4
     call8   esp_nn_multiply_by_quantized_mult_asm_esp32s3   # [5]  esp_nn_multiply_by_quantized_mult_asm_esp32s3
 
     addi.n  a6,a6,4                     # out_shift_ptr++
@@ -247,7 +246,6 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
 # load broadcast, activation and out_offset
     ee.vldbc.32     q4,a9               # [14]  id:699 out_offset
-    ld.qr           q5,a1,16            # [18]  gra_spill_temp_197-160
     ee.vldbc.32     q2,a10              # [11]  id:700 activation_min
     ee.vldbc.32     q3,a8               # [12]  id:701 activation_max
 
