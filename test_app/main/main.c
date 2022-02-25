@@ -71,6 +71,8 @@ void app_main()
     printf("max_pool, c %u opt %u\n", total_c, total_opt);
     esp_nn_fully_connected_s8_test();
     printf("fully_connected, c %u opt %u\n", total_c, total_opt);
+    esp_nn_softmax_s8_test();
+    printf("softmax, c %u opt %u\n", total_c, total_opt);
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */

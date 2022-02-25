@@ -20,6 +20,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "esp_nn_ansi_headers.h"
 
 /************************** Basic math functions *****************************/
 
@@ -254,3 +255,7 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32s3
 
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_esp32s3
+
+#define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_opt
+#define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_opt
+#define esp_nn_softmax_s8 esp_nn_softmax_s8_opt

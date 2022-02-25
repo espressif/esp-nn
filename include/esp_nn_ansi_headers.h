@@ -229,3 +229,55 @@ void esp_nn_fully_connected_s8_ansi(const int8_t *input_data,
                                     const int32_t out_mult,
                                     const int32_t activation_min,
                                     const int32_t activation_max);
+
+/**
+ * @brief   Get scratch buffer size needed by softmax function
+ *
+ * @param   width
+ * @param   height
+ * @return  size in bytes
+ *
+ * @note    buffer must be 4 byte aligned
+ */
+int32_t esp_nn_get_softmax_scratch_size_ansi(const int32_t width, const int32_t height);
+
+/* ANSI C function to be hooked up when optimised version needed */
+int32_t esp_nn_get_softmax_scratch_size_opt(const int32_t width, const int32_t height);
+
+/**
+ * @brief   Set scratch buffer to be used by softmax function
+ *
+ * @param   buffer  this can be NULL if one needs to unset it
+ *                  must be aligned to 4 bytes
+ */
+void esp_nn_set_softmax_scratch_buf_ansi(void *buffer);
+
+/* ANSI C function to be hooked up when optimised version needed */
+void esp_nn_set_softmax_scratch_buf_opt(void *buffer);
+
+/**
+ * @brief       reference softmax function
+ *
+ * @note        inputs type: int8_t, output: int8_t
+ */
+void esp_nn_softmax_s8_ansi(const int8_t *input_data,
+                            const int32_t height,
+                            const int32_t width,
+                            const int32_t mult,
+                            const int32_t shift,
+                            const int32_t diff_min,
+                            int8_t *output_data);
+
+/**
+ * @brief       optimised version of softmax function
+ *
+ * @note        the function uses extra buffer (4 * width bytes)
+ *              hence, scratch buffers must be set before calling this.
+ */
+void esp_nn_softmax_s8_opt(const int8_t *input_data,
+                           const int32_t height,
+                           const int32_t width,
+                           const int32_t mult,
+                           const int32_t shift,
+                           const int32_t diff_min,
+                           int8_t *output_data);

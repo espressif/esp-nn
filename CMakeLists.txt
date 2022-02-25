@@ -7,6 +7,8 @@ set(c_srcs
     "src/convolution/esp_nn_conv_ansi.c"
     "src/convolution/esp_nn_depthwise_conv_ansi.c"
     "src/fully_connected/esp_nn_fully_connected_ansi.c"
+    "src/softmax/esp_nn_softmax_ansi.c"
+    "src/softmax/esp_nn_softmax_opt.c"
     "src/pooling/esp_nn_avg_pool_ansi.c"
     "src/pooling/esp_nn_max_pool_ansi.c")
 
