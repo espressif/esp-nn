@@ -27,6 +27,8 @@ void esp_nn_fully_connected_s8_test();
 
 void esp_nn_relu6_s8_test();
 
+void esp_nn_softmax_s8_test();
+
 /* uint8_t ops tests */
 void esp_nn_add_elementwise_u8_test();
 
