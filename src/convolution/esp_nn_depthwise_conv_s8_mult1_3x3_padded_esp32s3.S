@@ -32,26 +32,23 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     # gra_spill_temp_110 = 68 // bias_ptr
     # gra_spill_temp_111 = 72 // 2 * (input_wd * channels)
     # gra_spill_temp_112 = 76 // input_data
-    # gra_spill_temp_130 = 136
-    # gra_spill_temp_118 = 140
-    # gra_spill_temp_119 = 144
-    # gra_spill_temp_120 = 148
-    # gra_spill_temp_121 = 152
-    # gra_spill_temp_113 = 156 // input_wd * channels
-    # gra_spill_temp_114 = 160 // input_wd
+    # gra_spill_temp_118 = 96
+    # gra_spill_temp_119 = 100
+    # gra_spill_temp_120 = 104
+    # gra_spill_temp_121 = 108
+    # gra_spill_temp_113 = 112 // input_wd * channels
+    # gra_spill_temp_114 = 116 // input_wd
+    # gra_spill_temp_130 = 120
 
-    # gra_spill_temp_140 = 16
     # gra_spill_temp_141 = 0
-    # gra_spill_temp_136 = 112
+    # gra_spill_temp_120 = 16
     # gra_spill_temp_137 = 80
-    # gra_spill_temp_138 = 96
 
 // offset+bias factor
+    # gra_spill_temp_134 = 128 //256-128
+    # gra_spill_temp_135 = 144 //256-112
+    # gra_spill_temp_133 = 160 //256-96
     # gra_spill_temp_132 = 176 //256-80
-    # gra_spill_temp_133 = 192 //256-64
-    # gra_spill_temp_134 = 208 //256-48
-    # gra_spill_temp_135 = 224 //256-32
-    # gra_spill_temp_139 = 240 //256-16
 
 
  // registers:
@@ -78,7 +75,7 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
 
     entry   a1,320                      #
     mul16u  a7,a7,a5
-    s32i    a3,a1,160                   # [0]  gra_spill_temp_114, input_wd
+    s32i    a3,a1,116                   # [0]  gra_spill_temp_114, input_wd
     s32i    a6,a1,48                    # [1]  gra_spill_temp_107, input_offset
     s32i    a7,a1,40                    # gra_spill_temp_103, stride_wd*channels
 
@@ -95,7 +92,7 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     movi.n  a9,0                    # [13]
     s32i    a12,a1,56                   # [9]  gra_spill_temp_106 // out_shift_ptr
     s32i    a9,a1,60                    # [14]  gra_spill_temp_108, ch_idx
-    s32i    a15,a1,156                  # [12]  gra_spill_temp_113, input_wd*channels
+    s32i    a15,a1,112                  # [12]  gra_spill_temp_113, input_wd*channels
     l32i    a9,a1,352                   # [24]  id:665 out_mult+0x0
     slli    a15,a15,1                   # [15]
     s32i    a15,a1,72                   # [23]  gra_spill_temp_111, 2 * (input_wd * channels)
@@ -108,7 +105,7 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     l32i            a9,a1,48                    # [0]  gra_spill_temp_107, input_offset
     ee.zero.q       q2                      # [3]
     add.n           a13,a6,a13                  # [4]
-    s32i            a13,a1,152                  # [5]  gra_spill_temp_121
+    s32i            a13,a1,108                  # [5]  gra_spill_temp_121
 
 // multiply accumulate filter points
     ee.vld.128.xp   q1,a13,a2           # [6]  id:673
@@ -204,7 +201,7 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     mull            a13,a9,a13                  # [98]
     l32i            a8,a1,332                   # [99]
     ee.movi.32.a    q1,a10,0            # [103]
-    ee.movi.32.q    q0,a13,1            # [144]
+    ee.movi.32.q    q0,a13,1            # [100]
     srai            a12,a10,16                  # [105]
     sext            a10,a10,15                  # [106]
     mull            a12,a9,a12                  # [107]
@@ -238,26 +235,26 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
 .Lt_7_5378: # 0xeef
 
 // store offset+bias factor (q1,q4,q0,q3)
-    st.qr           q4,a10,-32                  # [17]  gra_spill_temp_135-256
-    st.qr           q3,a10,-48                  # [21]  gra_spill_temp_134-256
-    st.qr           q1,a10,-64                  # [7]  gra_spill_temp_133-256
+    st.qr           q4,a10,-112                  # [17]  gra_spill_temp_135-256
+    st.qr           q3,a10,-128                  # [21]  gra_spill_temp_134-256
+    st.qr           q1,a10,-96                  # [7]  gra_spill_temp_133-256
     st.qr           q0,a10,-80                  # [8]  gra_spill_temp_132-256
 
 // prepare height loop
     movi.n  a15,0                   # [1]
     movi.n  a8,0                    # [2]
     movi.n  a9,0                    # [3]
-    s32i    a9,a1,144                   # [4]  gra_spill_temp_119
-    s32i    a8,a1,148                   # [5]  gra_spill_temp_120
-    s32i    a15,a1,140                  # [6]  gra_spill_temp_118
+    s32i    a9,a1,100                   # [4]  gra_spill_temp_119
+    s32i    a8,a1,104                   # [5]  gra_spill_temp_120
+    s32i    a15,a1,96                  # [6]  gra_spill_temp_118
 
 // height loop
 .Lt_7_6402: # 0xf0c
-    l32i    a4,a1,148                   # [2]  gra_spill_temp_120 // out_y * (input_wd * stride_ht) * channels)
-    l32i    a8,a1,144                   # [3]  gra_spill_temp_119 // initialised to 0 before height loop
+    l32i    a4,a1,104                   # [2]  gra_spill_temp_120 // out_y * (input_wd * stride_ht) * channels)
+    l32i    a8,a1,100                   # [3]  gra_spill_temp_119 // initialised to 0 before height loop
     l32i    a5,a1,76                    # [1]  gra_spill_temp_112, input_data
     l32i    a3,a1,60                    # [0]  gra_spill_temp_108, ch_idx
-    l32i    a7,a1,156                   # [1]  gra_spill_temp_113, input_wd*channels
+    l32i    a7,a1,112                   # [1]  gra_spill_temp_113, input_wd*channels
     l32i    a10,a1,336                  # [0]  out_wd
     add.n   a4,a4,a5                    # [4] // input_data + (out_y * stride_ht) * input_wd * channels
     mov.n   a5,a8                       # [5] // index
@@ -265,12 +262,12 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     l32i    a4,a1,72                    # [9]  gra_spill_temp_111, 2 * (input_wd * channels)
     add.n   a7,a7,a3                    # [7] // input_row1 = (input_wd * channels)
     add.n   a8,a8,a10                   # [8]
-    s32i    a8,a1,136                   # [10]  gra_spill_temp_130
+    s32i    a8,a1,120                   # [10]  gra_spill_temp_130
     add.n   a4,a4,a3                    # [11] // input_row2
 
 // width loop
 .Lt_7_7170: # 0xf32
-    l32i                    a9,a1,152                   # [3]  gra_spill_temp_121, filter_ptr
+    l32i                    a9,a1,108                   # [3]  gra_spill_temp_121, filter_ptr
     ee.zero.qacc                    # [2]
     mov.n                   a12,a3                      # [4]
     mov.n                   a11,a7                      # [1]
@@ -369,10 +366,10 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
 
 // load in_offset+bias factor
     addmi           a14,a1,256                  # [86]
-    ld.qr           q7,a14,-48                  # [87]  gra_spill_temp_134-256
-    ld.qr           q4,a14,-32                  # [89]  gra_spill_temp_135-256
+    ld.qr           q7,a14,-128                  # [87]  gra_spill_temp_134-256
+    ld.qr           q4,a14,-112                  # [89]  gra_spill_temp_135-256
     l32i.n          a15,a1,16               # [90]  qacc_scratch+16
-    ld.qr           q2,a14,-64                  # [91]  gra_spill_temp_133-256
+    ld.qr           q2,a14,-96                  # [91]  gra_spill_temp_133-256
     slli            a11,a9,28                   # [92]
     slli            a10,a9,8                    # [93]
     srai            a10,a10,12                  # [94]
@@ -389,58 +386,45 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
     or              a8,a8,a9                    # [108]
 
 // insert to q6
-    ee.movi.32.q    q6,a11,0            # [144]
+    ee.movi.32.q    q6,a11,0            # [100]
     ee.movi.32.q    q6,a10,1            # [107]
     ee.movi.32.q    q6,a8,2             # [112]
     ee.movi.32.q    q6,a15,3            # [113]
 
     ee.vadds.s32    q1,q1,q2            # [110]
-    st.qr           q1,a1,112                   # [111]  gra_spill_temp_136
- # 657                  q0 = esp_nn_multiply_by_quantized_mult_ver1_esp32s3(q0, out_mult_ptr, out_shift_ptr);
+    ee.vadds.s32    q6,q6,q7            # [114]
+    st.qr           q1,a1,16                   # [111]  gra_spill_temp_120
     s32i.n          a7,a1,32                # [0] // tmp
     s32i.n          a6,a1,36                # [106] // tmp
     l32i            a7,a1,52                # [109]  gra_spill_temp_105, out_mult_ptr
     l32i            a6,a1,56                # [106]  gra_spill_temp_106, out_shift_ptr
     addi.n          a10,a7,0
     addi.n          a11,a6,0
-    ee.vadds.s32    q6,q6,q7            # [114]
-    st.qr           q6,a1,96                # [115]  gra_spill_temp_138-256
     call8   esp_nn_multiply_by_quantized_mult_ver1_esp32s3     # [116]  esp_nn_multiply_by_quantized_mult_ver1_esp32s3
 
- # 658                  out_mult_ptr += 4;
- # 659                  out_shift_ptr += 4;
- # 661                  q1 = esp_nn_multiply_by_quantized_mult_ver1_esp32s3(q1, out_mult_ptr, out_shift_ptr);
-    addmi       a14,a1,256                  # [1]
-    st.qr       q0,a14,-16                  # [3]  gra_spill_temp_139-256
+    mv.qr       q5,q0
     ld.qr       q0,a1,80                # [4]  gra_spill_temp_137-256
     addi.n      a10,a7,16
     addi.n      a11,a6,16
     call8   esp_nn_multiply_by_quantized_mult_ver1_esp32s3     # [5]  esp_nn_multiply_by_quantized_mult_ver1_esp32s3
 
- # 662                  out_mult_ptr += 4;
- # 663                  out_shift_ptr += 4;
- # 665                  q2 = esp_nn_multiply_by_quantized_mult_ver1_esp32s3(q2, out_mult_ptr, out_shift_ptr);
-    st.qr       q0,a1,16                # [4]  gra_spill_temp_140
-    ld.qr       q0,a1,112                   # [5]  gra_spill_temp_136
+    mv.qr       q4,q0
+    ld.qr       q0,a1,16                   # [5]  gra_spill_temp_120
     addi.n      a10,a7,32
     addi.n      a11,a6,32
-
     call8   esp_nn_multiply_by_quantized_mult_ver1_esp32s3     # [6]  esp_nn_multiply_by_quantized_mult_ver1_esp32s3
 
- # 666                  out_mult_ptr += 4;
- # 667                  out_shift_ptr += 4;
- # 669                  q3 = esp_nn_multiply_by_quantized_mult_ver1_esp32s3(q3, out_mult_ptr, out_shift_ptr);
     st.qr       q0,a1,0                 # [3]  gra_spill_temp_141
-    ld.qr       q0,a1,96                    # [4]  gra_spill_temp_138-256
+    mv.qr       q0,q6
     addi.n      a10,a7,48
     addi.n      a11,a6,48
-
     call8   esp_nn_multiply_by_quantized_mult_ver1_esp32s3     # [6]  esp_nn_multiply_by_quantized_mult_ver1_esp32s3
+
 
     l32i.n  a6,a1,36                # [106]  // tmp
     l32i.n  a7,a1,32                # [0]  // tmp
     l32i    a15,a1,40                   # gra_spill_temp_103, stride_wd * channels
-    l32i    a11,a1,136                  # [3]  gra_spill_temp_130
+    l32i    a11,a1,120                  # [3]  gra_spill_temp_130
 
     add.n   a3,a3,a15                   # [0]
     add.n   a4,a4,a15                   # [1]
@@ -450,8 +434,7 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
  // add offset, apply activation and store
     addmi   a13,a1,256                  # [8]
     ld.qr   q3,a1,0                 # [10]  gra_spill_temp_141
-    ld.qr   q2,a13,-16                  # [11]  gra_spill_temp_139-256
-    ld.qr   q4,a1,16                # [12]  gra_spill_temp_140
+    mv.qr   q2,q5
     addi    a8,a13,88                   # [14]
     addi    a9,a13,100                  # [15]
     addi    a15,a13,104                 # [13]
@@ -478,24 +461,23 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
 
 .Lt_7_6658: # 0x112f
 #<loop> Part of loop body line 548, head labeled .Lt_7_6402
-    l32i    a15,a1,156                  # [3]  gra_spill_temp_113, input_wd*channels
+    l32i    a15,a1,112                  # [3]  gra_spill_temp_113, input_wd*channels
     l32i    a10,a1,320                  # gra_spill_temp_103
     l32i    a13,a1,340                  # [0]  // out_ht
-    l32i    a9,a1,160                   # [1]  gra_spill_temp_114, input_wd
-    l32i    a12,a1,140                  # [4]  gra_spill_temp_118
+    l32i    a9,a1,116                   # [1]  gra_spill_temp_114, input_wd
+    l32i    a12,a1,96                  # [4]  gra_spill_temp_118
     mull    a15,a10,a15                 # // (input_wd * stride_ht) * channels
-    l32i    a14,a1,148                  # [5]  gra_spill_temp_120
-    l32i    a8,a1,144                   # [2]  gra_spill_temp_119
+    l32i    a14,a1,104                  # [5]  gra_spill_temp_120
+    l32i    a8,a1,100                   # [2]  gra_spill_temp_119
 
     addi.n  a12,a12,1               # [6]
-    s32i    a12,a1,140                  # [7]  gra_spill_temp_118
+    s32i    a12,a1,96                  # [7]  gra_spill_temp_118
     add.n   a14,a14,a15                 # [8]
     add.n   a8,a8,a9                    # [9]
-    s32i    a8,a1,144                   # [10]  gra_spill_temp_119
-    s32i    a14,a1,148                  # [11]  gra_spill_temp_120, (input_wd * stride_wd) * channels
+    s32i    a8,a1,100                   # [10]  gra_spill_temp_119
+    s32i    a14,a1,104                  # [11]  gra_spill_temp_120, (input_wd * stride_wd) * channels
     bne     a12,a13,.Lt_7_6402              # [13] // iterate over height loop
 
-.Lt_7_5890: # 0x1156
 #<loop> Part of loop body line 348, head labeled .Lt_7_5122
     l32i    a11,a1,56                   # [6]  gra_spill_temp_106 // out_shift_ptr
     l32i    a15,a1,52                   # [2]  gra_spill_temp_105, out_mult_ptr
