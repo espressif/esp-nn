@@ -16,7 +16,10 @@
 // this barely changes any accuracy
 // keep this disabled for better performance
 
+#ifndef SKIP_NUDGE
+    # set SKIP_NUDGE flag for ~20% faster (but not bit-exact) quantisation
     .set use_nudge, 1
+#endif
 
     .text
     .literal_position
