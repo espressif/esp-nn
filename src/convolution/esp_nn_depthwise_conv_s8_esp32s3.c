@@ -423,18 +423,27 @@ void esp_nn_depthwise_conv_s8_esp32s3(const int8_t *input_data,
                                                                   stride_wd, stride_ht, filter_aligned, bias,
                                                                   out_data, out_wd, out_ht, out_offset, out_shift,
                                                                   out_mult, activation_min, activation_max);
-            } else if ((pad_wd == 0) && (pad_ht == 0) &&
-                    // because this does not handle padding offset cases yet, run just for stride (1, 1).
-                    // end padding of input with `-input_offset` should solve this
-                    (stride_wd == 1) && (stride_ht == 1)) {
+            } else if ((channels % 16 == 0) && (pad_wd == 0) && (pad_ht == 0)) {
                 /* process in 8 bits */
                 int8_t *filter_aligned = (int8_t *) scratch_buffer;
+                int8_t *input_padded = (int8_t *) scratch_buffer + filter_size + align_len;
+
+                // check if we need to pad additionally
+                int pad_right = (out_wd * stride_wd + filter_wd - 1) - input_wd;
+                int pad_bottom = (out_ht * stride_ht + filter_ht - 1) - input_ht;
+                if (pad_right || pad_bottom) { // pad right and bottom
+                    esp_nn_aligned_s8_pad_end_with_value(input_data, input_padded, input_wd, input_ht,
+                                                         channels, -input_offset, pad_right, pad_bottom);
+                } else {
+                    input_padded = (int8_t *) input_data;
+                }
                 memcpy(filter_aligned, filter_data, filter_size);
-                esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(input_data, input_wd, input_ht, channels, input_offset,
-                                                                  stride_wd, stride_ht, filter_aligned,
-                                                                  bias, out_data, out_wd, out_ht, out_offset, out_shift,
+                esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(input_padded, input_wd + pad_right,
+                                                                  input_ht + pad_bottom, channels, input_offset,
+                                                                  stride_wd, stride_ht, filter_aligned, bias,
+                                                                  out_data, out_wd, out_ht, out_offset, out_shift,
                                                                   out_mult, activation_min, activation_max);
-            } else { /* (channels % 8) == 0 && pad_wd == 1 && pad_ht == 1 */
+            } else { /* (channels % 8) == 0 */
                 esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
                 esp_nn_depthwise_conv_s16_mult1_3x3_esp32s3(input_data16, input_wd, input_ht, channels,
