@@ -335,15 +335,27 @@ static void esp_nn_conv_s8_pad_valid_ch3_3x3(const int8_t *input_data,
 int esp_nn_get_conv_scratch_size_esp32s3(const uint16_t input_wd,
                                          const uint16_t input_ht,
                                          const uint16_t in_ch,
+                                         const uint16_t stride_wd,
+                                         const uint16_t stride_ht,
+                                         const uint16_t pad_wd,
+                                         const uint16_t pad_ht,
                                          const uint16_t out_ch,
                                          const uint16_t filter_wd,
                                          const uint16_t filter_ht)
 {
     int filter_size = filter_wd * filter_ht * in_ch * out_ch;
     int input_size = input_wd * input_ht * in_ch;
-    int transpose_buf_size = 8 * in_ch; /* to store intermediate data */
+
+    int transpose_buf_size = 2 * (8 * in_ch); /* to store intermediate data */
+    if (input_wd * input_ht < 8) {
+        transpose_buf_size = 0; // not using this for leftover
+    }
     int align_buf_size = 32; /* extra buffer for alignment */
-    return 2 * (filter_size + input_size +  transpose_buf_size) + align_buf_size;
+    if (in_ch % 8 == 0 && filter_wd == 1 && filter_ht == 1 &&
+            pad_wd == 0 && pad_ht == 0 && stride_wd == 1 && stride_ht == 1) {
+        return filter_size + transpose_buf_size + align_buf_size;
+    }
+    return 2 * (filter_size + input_size) +  transpose_buf_size + align_buf_size;
 }
 
 void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)

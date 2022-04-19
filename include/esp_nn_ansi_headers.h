@@ -138,6 +138,10 @@ void esp_nn_conv_s8_ansi(const int8_t *input_data,
 int esp_nn_get_conv_scratch_size_ansi(const uint16_t input_wd,
                                       const uint16_t input_ht,
                                       const uint16_t in_ch,
+                                      const uint16_t stride_wd,
+                                      const uint16_t stride_ht,
+                                      const uint16_t pad_wd,
+                                      const uint16_t pad_ht,
                                       const uint16_t out_ch,
                                       const uint16_t filter_wd,
                                       const uint16_t filter_ht);
@@ -147,8 +151,14 @@ int esp_nn_get_depthwise_conv_scratch_size_ansi(const uint16_t input_wd,
                                                 const uint16_t input_ht,
                                                 const uint16_t channels,
                                                 const uint16_t ch_mult,
+                                                const uint16_t stride_wd,
+                                                const uint16_t stride_ht,
+                                                const uint16_t pad_wd,
+                                                const uint16_t pad_ht,
                                                 const uint16_t filter_wd,
-                                                const uint16_t filter_ht);
+                                                const uint16_t filter_ht,
+                                                const uint16_t out_wd,
+                                                const uint16_t out_ht);
 void esp_nn_set_depthwise_conv_scratch_buf_ansi(const void *buf);
 
 /************************** Activation functions *****************************/
