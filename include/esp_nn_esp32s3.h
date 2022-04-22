@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
 
 /************************** Basic math functions *****************************/

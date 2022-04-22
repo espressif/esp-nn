@@ -18,8 +18,7 @@
  * @file        Header definitions to include for esp_nn reference functions
  */
 
-#include <stdint.h>
-
+#include "esp_nn_defs.h"
 /************************** Basic math functions ****************************/
 
 /**
