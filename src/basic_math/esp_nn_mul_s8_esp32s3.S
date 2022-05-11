@@ -33,9 +33,9 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     # gra_spill_temp_6 = 28
     # gra_spill_temp_7 = 32
     # gra_spill_temp_8 = 36
+    # gra_spill_temp_<> = 40
     # gra_spill_temp_<> = 44
     # gra_spill_temp_<> = 48
-    # gra_spill_temp_<> = 56
     # gra_spill_temp_13 = 64
 
  // registers:
@@ -47,11 +47,11 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
  // a7: const int32_t out_offset
 
  // on stack:
- // const int32_t out_mult
- // const int32_t out_shift
- // const int32_t activation_min
- // const int32_t activation_max
- // const int32_t size
+ // 120: const int32_t out_mult
+ // 124: const int32_t out_shift
+ // 128: const int32_t activation_min
+ // 132: const int32_t activation_max
+ // 136: const int32_t size
 
     entry   a1,120                      #
     s32i.n  a4,a1,24                # [0]  gra_spill_temp_5, input1_offset
@@ -64,7 +64,7 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     blti    a3,1,.Lt_0_11522            # [0] // exit
 
     s32i.n  a2,a1,16                    # [9]  gra_spill_temp_3, input1
-    s32i    a7,a1,56                    # [4]  id:358 out_offset+0x0
+    s32i    a7,a1,40                    # [4]  id:358 out_offset+0x0
     movi.n  a11,0                       # [3]
     mov.n   a12,a2                      # [10]
     s32i    a4,a1,44                # [13]  id:356 input1_offset+0x0
@@ -212,7 +212,7 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
 // add offset, apply activation
     addi            a8,a1,132                   # [54]
     ee.vldbc.32     q4,a8               # [55]  id:385 activation_max
-    addi            a5,a1,56                    # [8]
+    addi            a5,a1,40                    # [8]
     ee.vldbc.32     q6,a5               # [10]  id:384 out_offset
     addi            a7,a1,128                   # [4]
     ee.vadds.s32    q0,q0,q6            # [13] // add out_offset
@@ -285,7 +285,7 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     sra     a3,a3               // right shift
 .skip_div_by_pow_of_2_remains:
 
-    l32i.n  a6,a1,56                    # [32], out_offset
+    l32i.n  a6,a1,40                    # [32], out_offset
     l32i.n  a8,a1,132                   # [35], act_max
     l32i.n  a7,a1,128                   # [36], act_min
 

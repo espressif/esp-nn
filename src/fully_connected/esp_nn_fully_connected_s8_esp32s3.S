@@ -38,9 +38,9 @@
 
 esp_nn_fully_connected_s8_esp32s3:  # 0x4
     # qacc_scratch = 0
-    // 40
-    // 44
-    # qacc_scratch_ptr = 48
+    // 40, filter_offset
+    // 44, input_offset
+    # gra_spill_temp_7 = 48
     # gra_spill_temp_0 = 52
     # gra_spill_temp_1 = 56
     # gra_spill_temp_2 = 60
@@ -48,18 +48,17 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     # gra_spill_temp_4 = 68
     # gra_spill_temp_5 = 72
     # gra_spill_temp_6 = 76
-    # gra_spill_temp_7 = 80
 
-    entry   a1,160                      #
+    entry   a1,112                      #
     s32i.n  a5,a1,60                # [0]  gra_spill_temp_2, filter_data
-    s32i    a7,a1,80                    # [1]  gra_spill_temp_7, bias
+    s32i    a7,a1,48                    # [1]  gra_spill_temp_7, bias
     s32i    a6,a1,40                    # [2]  id:252 filter_offset+0x0
     s32i    a3,a1,44                    # [3]  id:251 input_offset+0x0
     mov.n   a13,a2                      # [5]
     mov.n   a12,a4                      # [6]
 
  // out_channel loop
-    l16ui       a2,a1,164                   # [7]  id:255 out_channels+0x0
+    l16ui       a2,a1,116                   # [7]  id:255 out_channels+0x0
     addi        a4,a1,40                # [8]
     addi        a8,a1,44                # [9]
     ee.vldbc.16 q5,a8               # [10]  id:253 input_offset
@@ -68,15 +67,15 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
 
     ee.zero.q   q7                      # [0]
     srai        a11,a12,3                   # [2]
-    l32i        a10,a1,176                  # [5]  id:257 out_mult+0x0
-    l32i        a8,a1,160                   # [6]  id:259 out_data+0x0
+    l32i        a10,a1,128                  # [5]  id:257 out_mult+0x0
+    l32i        a8,a1,112                   # [6]  id:259 out_data+0x0
     addi        a9,a12,-7                   # [7]
     s32i        a9,a1,76                    # [8]  gra_spill_temp_6
     s32i        a8,a1,72                    # [9]  gra_spill_temp_5
     s32i        a11,a1,64                   # [14]  gra_spill_temp_3
     slli        a11,a11,3                   # [16]
     s32i        a11,a1,68                   # [18]  gra_spill_temp_4
-    l32i        a10,a1,172                  # [25]  id:256 out_shift+0x0
+    l32i        a10,a1,124                  # [25]  id:256 out_shift+0x0
     movi.n      a15,0                   # [17]
     mov.n       a14,a7                      # [15]
     max         a11,a10,a15                 # [29]
@@ -190,7 +189,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
 
 // add bias
 .Lt_0_9730: # 0x20f
-    l32i    a8,a1,80                    # [0]  gra_spill_temp_7, bias
+    l32i    a8,a1,48                    # [0]  gra_spill_temp_7, bias
     beqz.n  a8,.Lt_0_10754          # [2], skip_bias
 
     l32i.n  a9,a14,0                # [0]  id:301
@@ -208,7 +207,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     add.n   a10,a10,a12                 # [0]
     addi.n  a14,a14,4               # [1]
 
-    l32i    a4,a1,176                   # [2]  gra_spill_temp_10 //out_mult
+    l32i    a4,a1,128                   # [2]  gra_spill_temp_10 //out_mult
     add.n   a11,a11,a12                 # [6]
 
 // multiply add nudge and pick high32
@@ -235,13 +234,13 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     sra     a3,a3                       # [31]
 .skip_divide_by2:
 
-    l32i    a8,a1,168                   # [41]  out_offset
-    l32i    a7,a1,180                   # [44] // activation_min
-    l32i    a4,a1,184                   # [45] // activation_max
+    l32i    a8,a1,120                   # [41]  out_offset
+    l32i    a7,a1,132                   # [44] // activation_min
+    l32i    a4,a1,136                   # [45] // activation_max
 
     add.n   a8,a8,a3                    # [46] // add out_offset
     l32i    a6,a1,72                    # [47]  gra_spill_temp_5
-    l32i.n  a3,a1,164                   # [48]  out_channels
+    l32i.n  a3,a1,116                   # [48]  out_channels
     max     a7,a7,a8                    # [49]
     add.n   a6,a15,a6                   # [50]
     min     a4,a4,a7                    # [51]
