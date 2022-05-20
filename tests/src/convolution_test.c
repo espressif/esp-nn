@@ -240,12 +240,16 @@ void esp_nn_depthwise_conv_s8_test()
             out_mult[i] = 0x7eb0e200 + rand() % 50;
         }
 
-        int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(input_wd, input_ht,
-                                                                      channels, ch_mult,
-                                                                      stride_wd, stride_ht,
-                                                                      pad_wd, pad_ht,
-                                                                      filter_wd, filter_ht,
-                                                                      out_wd, out_ht);
+        data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
+        data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
+        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
+        dw_conv_params_t conv_params = {.in_offset = input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
+                                        .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
+                                        .dilation = {0, 0}, .activation = {activation_min, activation_max}};
+        quant_data_t quant_data = {.shift = out_shift, .mult = out_mult};
+
+        int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
+                                                                      &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
             scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -267,11 +271,8 @@ void esp_nn_depthwise_conv_s8_test()
         }
 
         /* C function */
-        esp_nn_depthwise_conv_s8_ansi(input, input_wd, input_ht, channels, input_offset,
-                                    pad_wd, pad_ht, stride_wd, stride_ht, ch_mult,
-                                    filter_data + 4, filter_wd, filter_ht,
-                                    bias + 1, out_data_c, out_wd, out_ht, out_offset, out_shift,
-                                    out_mult, activation_min, activation_max);
+        esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 4,
+                                      bias + 1, &output_dims, out_data_c, &conv_params, &quant_data);
 
         if (itr == 0) {
             profile_c_end();
@@ -279,11 +280,8 @@ void esp_nn_depthwise_conv_s8_test()
         }
 
         /* Optimized function */
-        esp_nn_depthwise_conv_s8(input, input_wd, input_ht, channels, input_offset,
-                                pad_wd, pad_ht, stride_wd, stride_ht, ch_mult,
-                                filter_data + 4, filter_wd, filter_ht,
-                                bias + 1, out_data_opt, out_wd, out_ht, out_offset, out_shift,
-                                out_mult, activation_min, activation_max);
+        esp_nn_depthwise_conv_s8(&input_dims, input, &filter_dims, filter_data + 4,
+                                 bias + 1, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         if (itr == 0) {
             /* disable profiler */
@@ -512,9 +510,16 @@ void esp_nn_conv_s8_test()
             out_mult[i] = 0x7f67f4f8 + rand() % 50;
         }
 
-        int scratch_buf_size = esp_nn_get_conv_scratch_size(in_wd, in_ht, in_channels,
-                                                            stride_wd, stride_ht, pad_wd, pad_ht,
-                                                            out_channels, filter_wd, filter_ht);
+        data_dims_t input_dims = {.width = in_wd, .height = in_ht, .channels = in_channels, 1};
+        data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = out_channels, 1};
+        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
+        conv_params_t conv_params = {.in_offset = input_offset, .out_offset = out_offset,
+                                    .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
+                                    .dilation = {0, 0}, .activation = {activation_min, activation_max}};
+        quant_data_t quant_data = {.shift = out_shift, .mult = out_mult};
+
+        int scratch_buf_size = esp_nn_get_conv_scratch_size(&input_dims, &filter_dims,
+                                                            &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
             void *scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -536,11 +541,8 @@ void esp_nn_conv_s8_test()
         }
 
         /* C function */
-        esp_nn_conv_s8_ansi(input, in_wd, in_ht, in_channels, input_offset,
-                            pad_wd, pad_ht, stride_wd, stride_ht,
-                            filter_data + 2, filter_wd, filter_ht, bias,
-                            out_data_c, out_wd, out_ht, out_channels, out_offset, out_shift,
-                            out_mult, activation_min, activation_max);
+        esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 2,
+                            bias, &output_dims, out_data_c, &conv_params, &quant_data);
 
         if (itr == 0) {
             profile_c_end();
@@ -548,11 +550,8 @@ void esp_nn_conv_s8_test()
         }
 
         /* Optimized function */
-        esp_nn_conv_s8(input, in_wd, in_ht, in_channels, input_offset,
-                    pad_wd, pad_ht, stride_wd, stride_ht,
-                    filter_data + 2, filter_wd, filter_ht, bias,
-                    out_data_opt, out_wd, out_ht, out_channels, out_offset, out_shift,
-                    out_mult, activation_min, activation_max);
+        esp_nn_conv_s8(&input_dims, input, &filter_dims, filter_data + 2,
+                       bias, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         if (itr == 0) {
             /* disable profiler */
