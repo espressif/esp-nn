@@ -44,8 +44,8 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t filter_ht, filter_wd, ch_mult;
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
-    // run for 10 iterations
-    for (int itr = 0; itr < 10; itr++) {
+    // run for 15 iterations
+    for (int itr = 0; itr < 15; itr++) {
         /* prepare data */
         switch (itr) {
         case 0: // (ch_mult 1, (channels % 16) = 0), filter (3,3), pad (0,0)
@@ -144,22 +144,52 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
-        default:
-            input_wd = 4;
-            input_ht = 4;
+        case 8: // same as case 7, with large parameters
+            input_wd = 58;
+            input_ht = 58;
             filter_ht = 3;
             filter_wd = 3;
-            ch_mult = 4;
-            channels = 4;
-            pad_wd = 1;
-            pad_ht = 1;
-            stride_wd = 1;
-            stride_ht = 1;
+            ch_mult = 1;
+            channels = 128;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 9: // (ch_mult 1, (channels % 16) = 0), filter (3,3), pad (0,0)  stride (2,2)
+            input_wd = 6;
+            input_ht = 6;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        default:
+            input_wd = 6;
+            input_ht = 6;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 16;
+            stride_wd = rand() % 2 + 1;
+            stride_ht = stride_wd;
+            pad_wd = stride_wd == 1 ? 0 : rand() % 2;
+            pad_ht = pad_wd;
+            printf("stride(%d), pad (%d)\t", stride_wd, pad_wd);
             break;
         }
 
         uint16_t out_wd = (input_wd - filter_wd + 1) / stride_wd;
         uint16_t out_ht = (input_ht - filter_ht + 1) / stride_ht;
+        if (itr == 9) {
+            // expect the function to handle this gracefully
+            out_wd += 1;
+            out_ht += 1;
+        }
         int in_size = input_wd * input_ht * channels;
         int out_size = out_wd * out_ht * channels * ch_mult;
         int filter_size = filter_wd * filter_ht * channels * ch_mult + 4;
@@ -211,8 +241,11 @@ void esp_nn_depthwise_conv_s8_test()
         }
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(input_wd, input_ht,
-                                                                    channels, ch_mult,
-                                                                    filter_wd, filter_ht);
+                                                                      channels, ch_mult,
+                                                                      stride_wd, stride_ht,
+                                                                      pad_wd, pad_ht,
+                                                                      filter_wd, filter_ht,
+                                                                      out_wd, out_ht);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
             scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -480,6 +513,7 @@ void esp_nn_conv_s8_test()
         }
 
         int scratch_buf_size = esp_nn_get_conv_scratch_size(in_wd, in_ht, in_channels,
+                                                            stride_wd, stride_ht, pad_wd, pad_ht,
                                                             out_channels, filter_wd, filter_ht);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS

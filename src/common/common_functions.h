@@ -144,7 +144,7 @@ static void esp_nn_aligned_s8_pad_with_value(const int8_t *src, int8_t *dst,
                                              const uint16_t pad_ht)
 {
     /* memset with pad_val */
-    memset(dst, pad_val, ((input_wd + 2 * pad_wd) * (input_ht + 2 * pad_ht)) * channels * 2);
+    memset(dst, pad_val, ((input_wd + 2 * pad_wd) * (input_ht + 2 * pad_ht)) * channels);
     dst += (pad_wd + input_wd + pad_wd) * channels;
 
     for (int i = 0; i < input_ht; i++) {
@@ -156,7 +156,6 @@ static void esp_nn_aligned_s8_pad_with_value(const int8_t *src, int8_t *dst,
     }
 }
 
-#if 0
 static void esp_nn_aligned_s8_pad_end_with_value(const int8_t *src, int8_t *dst,
                                                  const uint16_t input_wd,
                                                  const uint16_t input_ht,
@@ -169,13 +168,16 @@ static void esp_nn_aligned_s8_pad_end_with_value(const int8_t *src, int8_t *dst,
         for (int j = 0; j < input_wd * channels; j++) {
             *dst++ = *src++;
         }
-        memset(dst, pad_val, pad_wd * channels);
-        dst += pad_wd * channels;
+        if (pad_wd) {
+            memset(dst, pad_val, pad_wd * channels);
+            dst += pad_wd * channels;
+        }
     }
     /* pad end `pad_ht` lines at end */
-    memset(dst, pad_val, (input_wd + pad_wd) * pad_ht * channels);
+    if (pad_ht) {
+        memset(dst, pad_val, (input_wd + pad_wd) * pad_ht * channels);
+    }
 }
-#endif
 
 /**
  * @brief       convert 8 bit input data to 16 bit

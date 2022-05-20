@@ -19,23 +19,23 @@
 
 static int16_t *scratch_buffer = NULL;
 
-extern void esp_nn_conv_s16_mult8_1x1_esp32s3(const int8_t *input_data,
-                                              const uint16_t input_wd,
-                                              const uint16_t input_ht,
-                                              const uint16_t in_channels,
-                                              const int32_t input_offset,
-                                              const int16_t *filter_data,
-                                              const int32_t *bias,
-                                              int8_t *out_data,
-                                              const uint16_t out_wd,
-                                              const uint16_t out_ht,
-                                              const uint16_t out_channels,
-                                              const int32_t out_offset,
-                                              const int32_t *out_shift,
-                                              const int32_t *out_mult,
-                                              const int32_t activation_min,
-                                              const int32_t activation_max,
-                                              void *buffer /* scratch buffer */);
+extern void esp_nn_conv_s8_mult8_1x1_esp32s3(const int8_t *input_data,
+                                             const uint16_t input_wd,
+                                             const uint16_t input_ht,
+                                             const uint16_t in_channels,
+                                             const int32_t input_offset,
+                                             const int8_t *filter_aligned,
+                                             const int32_t *bias,
+                                             int8_t *out_data,
+                                             const uint16_t out_wd,
+                                             const uint16_t out_ht,
+                                             const uint16_t out_channels,
+                                             const int32_t out_offset,
+                                             const int32_t *out_shift,
+                                             const int32_t *out_mult,
+                                             const int32_t activation_min,
+                                             const int32_t activation_max,
+                                             void *buffer /* scratch buffer */);
 
 extern void esp_nn_conv_s16_mult4_1x1_esp32s3(const int16_t *input_data,
                                               const uint16_t input_wd,
@@ -335,15 +335,27 @@ static void esp_nn_conv_s8_pad_valid_ch3_3x3(const int8_t *input_data,
 int esp_nn_get_conv_scratch_size_esp32s3(const uint16_t input_wd,
                                          const uint16_t input_ht,
                                          const uint16_t in_ch,
+                                         const uint16_t stride_wd,
+                                         const uint16_t stride_ht,
+                                         const uint16_t pad_wd,
+                                         const uint16_t pad_ht,
                                          const uint16_t out_ch,
                                          const uint16_t filter_wd,
                                          const uint16_t filter_ht)
 {
     int filter_size = filter_wd * filter_ht * in_ch * out_ch;
     int input_size = input_wd * input_ht * in_ch;
-    int transpose_buf_size = 8 * in_ch; /* to store intermediate data */
+
+    int transpose_buf_size = 2 * (8 * in_ch); /* to store intermediate data */
+    if (input_wd * input_ht < 8) {
+        transpose_buf_size = 0; // not using this for leftover
+    }
     int align_buf_size = 32; /* extra buffer for alignment */
-    return 2 * (filter_size + input_size +  transpose_buf_size) + align_buf_size;
+    if (in_ch % 8 == 0 && filter_wd == 1 && filter_ht == 1 &&
+            pad_wd == 0 && pad_ht == 0 && stride_wd == 1 && stride_ht == 1) {
+        return filter_size + transpose_buf_size + align_buf_size;
+    }
+    return 2 * (filter_size + input_size) +  transpose_buf_size + align_buf_size;
 }
 
 void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
@@ -387,15 +399,16 @@ void esp_nn_conv_s8_esp32s3(const int8_t *input,
 
     if (channels % 8 == 0 && filter_wd == 1 && filter_ht == 1 &&
             pad_wd == 0 && pad_ht == 0 && stride_wd == 1 && stride_ht == 1) {
-        int scratch_offset = (int) (filter_data16 + filter_size);
+        int8_t *filter_aligned = (int8_t *) scratch_buffer;
+        int scratch_offset = (int) (filter_aligned + filter_size);
         void *scratch_buf = (void *) (scratch_offset + 16 - (scratch_offset & 15));
-        esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
-        esp_nn_conv_s16_mult8_1x1_esp32s3(
-            input, input_wd, input_ht, channels, input_offset, filter_data16,
+        memcpy(filter_aligned, filter_data, filter_size); // copy to aligned address
+        esp_nn_conv_s8_mult8_1x1_esp32s3(
+            input, input_wd, input_ht, channels, input_offset, filter_aligned,
             bias, out_data, out_wd, out_ht, out_channels, out_offset,
             out_shift, out_mult, activation_min, activation_max, scratch_buf);
     } else if (channels % 4 == 0 && filter_wd == 1 && filter_ht == 1 &&
-            (input_wd * input_ht) % 16 == 0 && /* TODO: remove this check */
+            (input_wd * input_ht) % 4 == 0 && /* TODO: remove this check */
             pad_wd == 0 && pad_ht == 0 && stride_wd == 1 && stride_ht == 1) {
         int scratch_offset = (int) (input_data16 + input_size);
         void *scratch_buf = (void *) (scratch_offset + 16 - (scratch_offset & 15));

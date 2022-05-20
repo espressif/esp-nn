@@ -18,12 +18,12 @@
     .literal_position
 //    .literal  .nudge_val, 1073741824
 
-    # Program Unit: esp_nn_conv_s16_mult8_1x1_esp32s3
-    .type   esp_nn_conv_s16_mult8_1x1_esp32s3, @function
+    # Program Unit: esp_nn_conv_s8_mult8_1x1_esp32s3
+    .type   esp_nn_conv_s8_mult8_1x1_esp32s3, @function
     .align   4
-    .global esp_nn_conv_s16_mult8_1x1_esp32s3
+    .global esp_nn_conv_s8_mult8_1x1_esp32s3
 
-esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
+esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     # scratch_buf = 0   // to store qacc regs need 36 bytes
     # gra_spill_temp_164 = 36, channel itr, (in_channels - 1) >> 3
     # gra_spill_temp_165 = 40, i_out
@@ -153,11 +153,15 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 .out_ch_loop:   # 0xf3e
     l32i    a8,a1,200                   # [4]  gra_spill_temp_165, buffer_ptr
     ee.zero.qacc                        # [3]
+    ee.zero.q                       q5  #
     l32i    a10,a1,52                   # [1]  gra_spill_temp_168, in_channels-7
     l32i    a9,a1,48                    # [1]  gra_spill_temp_167, in_channels/8 - 1
-    ee.vld.128.ip                   q7,a5,16            # [5] filter
+    ee.vld.l.64.ip                  q7,a5,8     # load filter 8 values
     ee.vld.128.ip                   q0,a8,16
     ee.vld.128.ip                   q1,a8,16
+    ee.vcmp.lt.s8                   q6,q7,q5
+    ee.vzip.8                       q7,q6
+
     ee.vsmulas.s16.qacc.ld.incp     q2,a8,q0,q7,0
     ee.vsmulas.s16.qacc.ld.incp     q3,a8,q1,q7,1
     ee.vsmulas.s16.qacc.ld.incp     q0,a8,q2,q7,2
@@ -170,7 +174,9 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
 
     ee.vsmulas.s16.qacc.ld.incp q0,a8,q2,q7,6   # [0*II+0]  id:657
     ee.vsmulas.s16.qacc.ld.incp q1,a8,q3,q7,7   # [0*II+1]  id:658
-    ee.vld.128.ip               q7,a5,16        # [0*II+2]  id:659, filter
+    ee.vld.l.64.ip              q7,a5,8        # [0*II+2]  id:659, filter
+    ee.vcmp.lt.s8               q6,q7,q5
+    ee.vzip.8                   q7,q6
     ee.vsmulas.s16.qacc.ld.incp q2,a8,q0,q7,0   # [0*II+4]  id:660
     ee.vsmulas.s16.qacc.ld.incp q3,a8,q1,q7,1   # [0*II+5]  id:661
     ee.vsmulas.s16.qacc.ld.incp q0,a8,q2,q7,2   # [0*II+6]  id:662
@@ -346,16 +352,22 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     l32i.n          a9,a1,68                # [4]  gra_spill_temp_172, input_ptr
     l32i            a10,a1,36               # [1]  gra_spill_temp_164, iterations, (in_channels - 1) >> 3
     ee.vld.l.64.ip          q0,a9,8         # [7]  id:717, input
-    ee.vcmp.lt.s8           q7,q0,q3
-    ee.vzip.8               q0,q7
-    ee.vadds.s16.ld.incp    q1,a8,q0,q0,q4  # [11]  id:718, add offset and load filter
+    ee.vld.l.64.ip          q1,a8,8         # [7]  filter
+    ee.vcmp.lt.s8           q6,q0,q3
+    ee.vcmp.lt.s8           q7,q1,q3
+    ee.vzip.8               q0,q6
+    ee.vzip.8               q1,q7
+    ee.vadds.s16            q0,q0,q4  # [11]  id:718, add offset
 
     loopgtz a10,.leftover_inner_loop_end        # [3]
 
-    ee.vmulas.s16.qacc.ld.ip    q1,a8,16,q0,q1  # mula(q0,q1), load next filter q1
+    ee.vmulas.s16.qacc          q0,q1  # mula(q0,q1)
     ee.vld.l.64.ip              q0,a9,8         # load 8 input values
+    ee.vld.l.64.ip              q1,a8,8         # [7]  load filter
     ee.vcmp.lt.s8               q2,q0,q3        # sign
+    ee.vcmp.lt.s8               q7,q1,q3
     ee.vzip.8                   q0,q2           # 16 bit input
+    ee.vzip.8                   q1,q7           # 16 bit filter
     ee.vadds.s16                q0,q0,q4        # add offset
 .leftover_inner_loop_end:   # 0x1262
 
@@ -483,4 +495,4 @@ esp_nn_conv_s16_mult8_1x1_esp32s3:  # 0xdbc
     s32i    a15,a1,40                   # [7]  gra_spill_temp_165, i_out
     j   .process_leftover
 
-    .size   esp_nn_conv_s16_mult8_1x1_esp32s3, . - esp_nn_conv_s16_mult8_1x1_esp32s3
+    .size   esp_nn_conv_s8_mult8_1x1_esp32s3, . - esp_nn_conv_s8_mult8_1x1_esp32s3

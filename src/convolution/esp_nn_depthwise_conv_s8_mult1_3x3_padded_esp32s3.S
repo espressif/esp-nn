@@ -15,6 +15,10 @@
     .text
     .literal_position
 
+// processes multiple of 16 channels
+// already padded version. no additional padding needed
+// simply keep sliding filter window by stride_size
+
     # Program Unit: esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3
     .type   esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3, @function
     .align   4
@@ -61,17 +65,17 @@ esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3:  # 0xccc
 
  // on stack:
 
- // stride_ht
- // filter_data
- // *bias
- // *out_data
- // out_wd
- // out_ht
- // out_offset
- // *out_shift
- // *out_mult
- // activation_min
- // activation_max
+ // 320: stride_ht
+ // 324: filter_data
+ // 328: *bias
+ // 332: *out_data
+ // 336: out_wd
+ // 340: out_ht
+ // 344: out_offset
+ // 348: *out_shift
+ // 352: *out_mult
+ // 356: activation_min
+ // 360: activation_max
 
     entry   a1,320                      #
     mul16u  a7,a7,a5

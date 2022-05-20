@@ -13,33 +13,31 @@
 // limitations under the License.
 
     .text
-    .align  8
+    .align  4
     .literal_position
-    .literal    .LC3_26_189, 1073741824
+    .literal    .nudge_val, 1073741824
 
     # Program Unit: esp_nn_add_elementwise_s8_esp32s3
     .type   esp_nn_add_elementwise_s8_esp32s3, @function
-    .align   8
+    .align   4
     .global esp_nn_add_elementwise_s8_esp32s3
 
 esp_nn_add_elementwise_s8_esp32s3:  # 0x4
-    # 0,4: unused
-    # gra_spill_temp_1 = 8
+    # temp_neg_out_shift = 0
+    # temp_neg_input2_shift = 4
+    # temp_neg_input1_shift = 8
     # gra_spill_temp_2 = 12
     # gra_spill_temp_3 = 16
     # gra_spill_temp_4 = 20
     # gra_spill_temp_5 = 24
     # gra_spill_temp_6 = 28
-    # gra_spill_temp_7 = 32 // unused
+    # gra_spill_temp_7 = 32
     # gra_spill_temp_8 = 36
     # gra_spill_temp_9 = 40
     # gra_spill_temp_10 = 44
     # gra_spill_temp_11 = 48
     # gra_spill_temp_12 = 52
     # gra_spill_temp_13 = 56
-    # gra_spill_temp_14 = 60
-    # gra_spill_temp_15 = 64
-    # gra_spill_temp_16 = 68
 
  // a2 : *input1_data
  // a3 : *input2_data
@@ -48,40 +46,40 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
  // a6 : input1_mult
  // a7 : input2_mult
  // On stack:
- // input1_shift
- // input2_shift
- // left_shift
- // *output
- // out_offset
- // out_mult, loaded in `a8`
- // out_shift
- // activation_min
- // activation_max
- // size
+ // 80: input1_shift
+ // 84: input2_shift
+ // 88: left_shift
+ // 92: *output
+ // 96: out_offset
+ // 100: out_mult, loaded in `a8`
+ // 104: out_shift
+ // 108: activation_min
+ // 112: activation_max
+ // 116: size
 
-    entry       a1,120                      #
+    entry       a1,80                      #
     s32i.n      a4,a1,48                    # [10]  gra_spill_temp_11, input1_offset
     s32i.n      a5,a1,52                    # [0]  gra_spill_temp_12, input2_offset
-    s32i.n      a2,a1,8                 # [5]  gra_spill_temp_1, input1_data
+    s32i.n      a2,a1,32                 # [5]  gra_spill_temp_7, input1_data
     s32i.n      a3,a1,12                    # [3]  gra_spill_temp_2, input2_data
 
-    l32i        a12,a1,156                  # [11]  id:720 size+0x0
+    l32i        a12,a1,116                  # [11]  id:720 size+0x0
     mov.n       a14,a2                      # [6]
     mov.n       a10,a3                      # [8]
     blti        a12,1,.Lt_0_15106           # [1] // exit
 
-    l32i        a3,a1,120                   # [0]  id:721 input1_shift+0x0
-    l32i        a13,a1,124                  # [1]  id:722 input2_shift+0x0
-    l32i        a2,a1,144                   # [8]  id:723 out_shift+0x0
-    l32i        a8,a1,140                   # [1]  out_mult
+    l32i        a3,a1,80                   # [0]  id:721 input1_shift+0x0
+    l32i        a13,a1,84                  # [1]  id:722 input2_shift+0x0
+    l32i        a2,a1,104                   # [8]  id:723 out_shift+0x0
+    l32i        a8,a1,100                   # [1]  out_mult
 
     neg         a3,a3                       # [12]
     neg         a13,a13                     # [7]
     neg         a2,a2                       # [11]
 
-    s32i.n      a3,a1,68                    # [12]  gra_spill_temp_16, -input1_shift
-    s32i.n      a13,a1,64                   # [7]  gra_spill_temp_15, -input2_shift
-    s32i.n      a2,a1,60                    # [16]  gra_spill_temp_14, -out_shift
+    s32i.n      a3,a1,8                    # [12]  temp_neg_input1_shift, -input1_shift
+    s32i.n      a13,a1,4                   # [7]  temp_neg_input2_shift, -input2_shift
+    s32i.n      a2,a1,0                    # [16]  temp_neg_out_shift, -out_shift
 
     movi.n      a5,1
     addi        a9,a3,-1
@@ -101,9 +99,9 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 
     movi.n      a2,0
     blti        a12,12,.Lt_0_12546          # [23]
-    l32i        a9,a1,132                   # [17]  id:1279 output+0x0
+    l32i        a9,a1,92                   # [17]  id:1279 output+0x0
 
-    l32i        a13,a1,156                  # [20]
+    l32i        a13,a1,116                  # [20]
     srai        a13,a13,3                   # [21]
     s32i.n      a13,a1,56                   # [22]  gra_spill_temp_13
 
@@ -114,7 +112,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 
 .Lt_0_11778:    # 0x96
     ee.zero.q       q6                      # [8]
-    l32i            a15,a1,128                  # [6]  left_shift
+    l32i            a15,a1,88                  # [6]  left_shift
     ee.vld.l.64.ip  q0,a14,8        # [9]  id:729
     s32i.n          a9,a1,44                    # [10]  gra_spill_temp_10, out_ptr
     s32i.n          a14,a1,40                   # [20]  gra_spill_temp_9
@@ -130,7 +128,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     ee.vsl.32       q0,q0                   # [41], left_shift
     ee.vsl.32       q2,q2                   # [42], left_shift
 
-    l32r            a9,.LC3_26_189              # [15], nudge
+    l32r            a9,.nudge_val              # [15], nudge
 
 // mulhi32 for q0
     ee.movi.32.a    q0,a3,2             # [44]
@@ -215,7 +213,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     mull            a5,a6,a5                    # [53]
     ee.movi.32.q    q2,a15,1            # [62]
 
-    l32i            a3,a1,68                    # [12]  gra_spill_temp_16, -input1_shift
+    l32i            a3,a1,8                    # [12]  temp_neg_input1_shift, -input1_shift
     add             a5,a5,a9
     saltu           a2,a5,a9
     add.n           a13,a13,a2
@@ -243,7 +241,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     ee.vld.l.64.ip  q1,a10,8        # [11]  id:1290
     addi.n          a15,a1,52                   # [12]
     ee.vldbc.16     q7,a15              # [19]  id:1278 input2_offset
-    l32i            a15,a1,128                  # [6]  left_shift
+    l32i            a15,a1,88                  # [6]  left_shift
     s32i            a10,a1,36                   # [14]  gra_spill_temp_8
     ee.vcmp.lt.s8   q3,q1,q6            # [271]
     wsr.sar         a15                     # [21], load shift for left shift
@@ -337,7 +335,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     mulsh           a13,a7,a5                   # [51]
     mull            a5,a7,a5                    # [53]
     ee.movi.32.q    q3,a15,1            # [62]
-    l32i            a14,a1,64                   # [7]  gra_spill_temp_15, -input2_shift
+    l32i            a14,a1,4                   # [7]  temp_neg_input2_shift, -input2_shift
 
     add             a5,a5,a9
     saltu           a2,a5,a9
@@ -449,7 +447,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     mulsh           a13,a8,a5                   # [51]
     mull            a5,a8,a5                    # [53]
     ee.movi.32.q    q1,a15,1            # [62]
-    l32i            a14,a1,60                   # [738]  gra_spill_temp_14, -out_shift
+    l32i            a14,a1,0                   # [738]  temp_neg_out_shift, -out_shift
 
     add             a5,a5,a9
     saltu           a2,a5,a9
@@ -476,17 +474,17 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 .skip_div_by2_out:
 
 // add offset and apply activation
-    addi            a15,a1,136
+    addi            a15,a1,96
     ee.vldbc.32     q3,a15              # [809]  id:802 out_offset
     ee.vadds.s32    q0,q0,q3            # [811]
     ee.vadds.s32    q1,q1,q3            # [812]
-    addi            a13,a1,148
-    addi            a14,a1,152
+    addi            a13,a1,108
+    addi            a14,a1,112
     ee.vldbc.32     q3,a14              # [813]  id:803 activation_max
     ee.vmin.s32     q0,q0,q3            # [815]
     ee.vmin.s32     q1,q1,q3            # [816]
     ee.vldbc.32     q3,a13              # [817]  id:804 activation_min
-    l32i            a13,a1,64                   # [818]  gra_spill_temp_15
+    l32i            a13,a1,4                   # [818]  temp_neg_input2_shift
     ee.vmax.s32     q1,q1,q3            # [819]
     ee.vmax.s32     q0,q0,q3            # [820]
 
@@ -496,7 +494,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     ee.vunzip.8     q0,q1               # [822]
     l32i.n          a13,a1,28           # gra_spill_temp_6, multiple of 12 index
     ee.vst.l.64.ip  q0,a9,8             # [823]  id:805
-    l32i            a15,a1,156                  # [1], size
+    l32i            a15,a1,116                  # [1], size
     l32i.n          a14,a1,40                   # [20]  gra_spill_temp_9
     l32i.n          a10,a1,36                   # [14]  gra_spill_temp_8
     addi            a13,a13,8
@@ -507,7 +505,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 
  # 114      /* Process left-over data */
  # 115      for (; i < size; i++) {
-    l32i    a10,a1,156                  # [1]
+    l32i    a10,a1,116                  # [1]
     slli    a2,a2,3                     # [2]
     bge     a2,a10,.Lt_0_15106          # [3] // done, exit
 
@@ -517,7 +515,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     l32i.n  a12,a1,52                   # [2]  gra_spill_temp_12
 
     l32i.n  a10,a1,12                   # [3]  gra_spill_temp_2
-    l32i.n  a14,a1,8                # [8]  gra_spill_temp_1
+    l32i.n  a14,a1,32                # [8]  gra_spill_temp_7
     add.n   a10,a2,a10                  # [5]
     add.n   a14,a2,a14                  # [6]
     l8ui    a14,a14,0                   # [7]  id:809, input1
@@ -527,7 +525,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     sext    a10,a10,7                   # [10]
     add.n   a10,a10,a12                 # [11] // add offset2
     add.n   a14,a14,a3                  # [16] // add offset1
-    l32i    a12,a1,128                  # [13]  left_shift
+    l32i    a12,a1,88                  # [13]  left_shift
  # 121
  # 122          tmp1 = esp_nn_sat_round_doubling_high_mul(tmp1, input1_mult);
     movi.n  a3,0                    # [14]
@@ -535,7 +533,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     sll     a10,a10                     # [20]
     sll     a14,a14                     # [17]
 
-    l32r            a12,.LC3_26_189             # [0], nudge
+    l32r            a12,.nudge_val             # [0], nudge
 
 .Lt_0_13058:    # 0xa3d
 #<loop> Part of loop body line 115, head labeled .Lt_0_7202
@@ -562,8 +560,8 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 //divide_by_power_of2_step for input1 (a14), input2 (a10)
 // free registers: a13, a12, a9, a3
 
-    l32i.n          a12,a1,68   // -input1_shift
-    l32i.n          a13,a1,64   // -input2_shift
+    l32i.n          a12,a1,8   // -input1_shift
+    l32i.n          a13,a1,4   // -input2_shift
 
     blti            a12,1,.skip_div_by2_in0_remain
     l32i.n          a3,a1,16    // 1 << (exponent - 1)
@@ -584,8 +582,8 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 .skip_div_by2_in1_remain:
 
 // process output
-    l32r            a12,.LC3_26_189             # [0], nudge
-    l32i            a13,a1,60                   // -out_shift
+    l32r            a12,.nudge_val             # [0], nudge
+    l32i            a13,a1,0                   // -out_shift
     add.n           a10,a10,a14                 # [45]
 
 // multiply and pick high32
@@ -599,7 +597,7 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 
 // div by power of 2 for output
 
-    l32i            a9,a1,136                   # [31]  out_offset
+    l32i            a9,a1,96                   # [31]  out_offset
     blti            a13,1,.skip_div_by2_out_remain
     l32i.n          a3,a1,24    // 1 << (exponent - 1)
     extui           a14,a12,31,1
@@ -613,14 +611,14 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
     add.n   a9,a9,a12                   # [33]
 
 // apply activation
-    l32i    a13,a1,152                  # [34]  activation_max
-    l32i    a12,a1,148                  # [35]  activation_min
+    l32i    a13,a1,112                  # [34]  activation_max
+    l32i    a12,a1,108                  # [35]  activation_min
     min     a13,a13,a9                      # [36]
-    l32i    a9,a1,132                   # [37]  output
+    l32i    a9,a1,92                   # [37]  output
     max     a13,a13,a12                     # [38]
     add.n   a9,a2,a9                    # [39]
     s8i     a13,a9,0                    # [40]  id:1371
-    l32i    a12,a1,156
+    l32i    a12,a1,116
     addi.n  a2,a2,1                 # [41]
     blt     a2,a12,.Lt_0_7202
 

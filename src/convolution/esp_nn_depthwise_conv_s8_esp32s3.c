@@ -357,13 +357,50 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const uint16_t input_wd,
                                                    const uint16_t input_ht,
                                                    const uint16_t channels,
                                                    const uint16_t ch_mult,
+                                                   const uint16_t stride_wd,
+                                                   const uint16_t stride_ht,
+                                                   const uint16_t pad_wd,
+                                                   const uint16_t pad_ht,
                                                    const uint16_t filter_wd,
-                                                   const uint16_t filter_ht)
+                                                   const uint16_t filter_ht,
+                                                   const uint16_t out_wd,
+                                                   const uint16_t out_ht)
 {
     int filter_size = filter_wd * filter_ht * channels * ch_mult;
-    int padding_used = ((filter_wd == 3) && (filter_ht == 3)) * 2;
-    int input_size = (input_wd + padding_used) * (input_ht + padding_used) * channels;
-    return  2 * (filter_size + input_size) + 16; //16 for alignment
+    int pad_width = 0, pad_height = 0;
+
+    if ((ch_mult == 1) && (channels % 8 == 0) && (filter_wd == 3) && (filter_ht == 3)) {
+        if (channels % 16 == 0) {
+            if (pad_wd || pad_ht) {
+                pad_width = pad_wd * 2;
+                pad_height = pad_ht * 2;
+            } else {
+                // check if we need to pad additionally
+                pad_width = (out_wd * stride_wd + filter_wd - 1) - input_wd;
+                pad_height = (out_ht * stride_ht + filter_ht - 1) - input_ht;
+                // printf("in(%d %d %d), out(%d %d), filter (%d %d) stride (%d %d), pad (%d %d)",
+                //         input_wd, input_ht, channels, out_wd, out_ht, filter_wd, filter_ht,
+                //         stride_wd, stride_ht, pad_wd, pad_ht);
+            }
+            if (pad_width || pad_height) {
+                int input_size = (input_wd + pad_width) * (input_ht + pad_height) * channels;
+                // printf("ask1 %d\n", filter_size + input_size + 16);
+                return filter_size + input_size + 16;  // 16 for alignment
+            } else {
+                // printf("ask2 %d\n", filter_size + 16);
+                return filter_size + 16;  // 16 for alignment
+            }
+        } else {
+            int input_size = input_wd * input_ht * channels;
+            // printf("ask3 %d\n", 2 * (filter_size + input_size) + 16);
+            return  2 * (filter_size + input_size) + 16; // 16 for alignment
+        }
+    } else if (ch_mult % 4 == 0) {
+        int input_size = input_wd * input_ht * channels;
+        // printf("ask4 %d\n", 2 * (filter_size + input_size) + 16);
+        return  2 * (filter_size + input_size) + 16; // 16 for alignment
+    }
+    return 32; // just few bytes
 }
 
 void esp_nn_set_depthwise_conv_scratch_buf_esp32s3(void *buf)
@@ -423,18 +460,27 @@ void esp_nn_depthwise_conv_s8_esp32s3(const int8_t *input_data,
                                                                   stride_wd, stride_ht, filter_aligned, bias,
                                                                   out_data, out_wd, out_ht, out_offset, out_shift,
                                                                   out_mult, activation_min, activation_max);
-            } else if ((pad_wd == 0) && (pad_ht == 0) &&
-                    // because this does not handle padding offset cases yet, run just for stride (1, 1).
-                    // end padding of input with `-input_offset` should solve this
-                    (stride_wd == 1) && (stride_ht == 1)) {
+            } else if ((channels % 16 == 0) && (pad_wd == 0) && (pad_ht == 0)) {
                 /* process in 8 bits */
                 int8_t *filter_aligned = (int8_t *) scratch_buffer;
+                int8_t *input_padded = (int8_t *) scratch_buffer + filter_size + align_len;
+
+                // check if we need to pad additionally
+                int pad_right = (out_wd * stride_wd + filter_wd - 1) - input_wd;
+                int pad_bottom = (out_ht * stride_ht + filter_ht - 1) - input_ht;
+                if (pad_right || pad_bottom) { // pad right and bottom
+                    esp_nn_aligned_s8_pad_end_with_value(input_data, input_padded, input_wd, input_ht,
+                                                         channels, -input_offset, pad_right, pad_bottom);
+                } else {
+                    input_padded = (int8_t *) input_data;
+                }
                 memcpy(filter_aligned, filter_data, filter_size);
-                esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(input_data, input_wd, input_ht, channels, input_offset,
-                                                                  stride_wd, stride_ht, filter_aligned,
-                                                                  bias, out_data, out_wd, out_ht, out_offset, out_shift,
+                esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(input_padded, input_wd + pad_right,
+                                                                  input_ht + pad_bottom, channels, input_offset,
+                                                                  stride_wd, stride_ht, filter_aligned, bias,
+                                                                  out_data, out_wd, out_ht, out_offset, out_shift,
                                                                   out_mult, activation_min, activation_max);
-            } else { /* (channels % 8) == 0 && pad_wd == 1 && pad_ht == 1 */
+            } else { /* (channels % 8) == 0 */
                 esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
                 esp_nn_depthwise_conv_s16_mult1_3x3_esp32s3(input_data16, input_wd, input_ht, channels,
