@@ -23,7 +23,9 @@
 #include "test_utils.h"
 
 #if CONFIG_IDF_CMAKE
+#if (CONFIG_SPIRAM_SUPPORT && (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
 #define IDF_HEAP_CAPS 1
+#endif
 
 #if IDF_HEAP_CAPS
 #include "esp_heap_caps.h"
