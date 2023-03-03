@@ -78,14 +78,13 @@ esp_nn_multiply_by_quantized_mult_ver1_esp32s3:    # 0x1ee
     add.n           a4,a4,a14                   # [30]
 
 
-    l32i.n          a14,a3,12               # [31]  id:203 // mult3
+    l32i.n          a14,a3,12               # [31]  id:203 // shift3
     add.n           a9,a13,a9                   # [32] // add nudge low2
     max             a10,a10,a14                 # [33]  // left_shift3
     sub             a14,a10,a14                 # [34]  // right_shift3
     ssl             a10                         # [35]
     ee.movi.32.a    q0,a10,3            # [36]
     sll             a10,a10                     # [37]
-    ee.movi.32.q    q0,a10,3            # [38]
 
 // select high32 from result0 and resul1
     ssai            31                          # [39]
@@ -123,10 +122,11 @@ esp_nn_multiply_by_quantized_mult_ver1_esp32s3:    # 0x1ee
     ee.movi.32.q    q2,a10,2            # [69]
     sll             a9,a12                      # [70]
     addi.n          a9,a9,-1                # [71]
-    ssr             a8                          # [72]
-    sra             a5,a5                       # [73]
     ee.movi.32.q    q2,a9,3             # [74]
     ee.andq         q1,q0,q2                # [75]
+
+    ssr             a8                          # [72]
+    sra             a5,a5                       # [73]
     ssr             a7                          # [76]
     sra             a4,a4                       # [78]
     ssr             a6                          # [79]
