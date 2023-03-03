@@ -46,5 +46,5 @@ idf_component_register(SRCS "${c_srcs}"
 if(CONFIG_IDF_TARGET_ESP32S3)
     target_compile_options(${COMPONENT_LIB} PRIVATE -mlongcalls -fno-unroll-loops -O2 -Wno-unused-function)
 else()
-    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-unused-function)
+    target_compile_options(${COMPONENT_LIB} PRIVATE  -O2 -Wno-unused-function)
 endif()
