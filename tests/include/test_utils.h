@@ -32,8 +32,10 @@ void profile_c_start();
 
 /**
  * @brief callback function to run after C function
+ *
+ * @return uint32_t cycles consumed running C function
  */
-void profile_c_end();
+uint32_t profile_c_end();
 
 /**
  * @brief callback function to run before optimized function
@@ -42,8 +44,10 @@ void profile_opt_start();
 
 /**
  * @brief callback function to run after optimized function
+ *
+ * @return uint32_t cycles consumed running optimized function
  */
-void profile_opt_end();
+uint32_t profile_opt_end();
 
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"

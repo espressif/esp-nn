@@ -12,6 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/**
+ * Optimizations strategies used:
+ * Below optimizations are capable of any size of input/filter:
+ *
+ * 1. For filter wdxht = 1x1 (Refer esp_nn_conv_s8_mult8_1x1_esp32s3 function)
+ *      - For this specific version, the strategy we employ:
+ *          > This particular filter has only the channel
+ *              dimension and we have `out_ch` number of such filters.
+ *          > We take 8 input lines at a time and transpose those.
+ *          > Keep loading and multiplying filter values one by one,
+ *              to produce 8 outputs in parallel
+ *
+ * 2. General version: (Refer esp_nn_conv_s8_filter_aligned_input_padded_esp32s3)
+ *      - For all other cases:
+ *          > Consider `filter_wd * in_ch` as a single row. These many values can
+ *              be continuosly loaded from inputs as well.
+ *          > multiply accumulate into a single filter output.
+ *          > To speed things up further, we pre-calculate
+ *              (filter * in_offset + bias term) earlier and add it at the end of filter
+ *
+ *      About ((filter * in_offset + bias term)) accumulate term:
+ *          > The conv operation before requantization is as follows:
+ *              for i in filter_size:
+ *                  conv_out += (input + input_offset) * filter;
+ *               conv_out += bias
+ *
+ *          > where input_offset is constant term hence, we can see that
+ *              this term can be precalculated as:
+ *                  for i in filter_size:
+ *                      acc_term += input_offset * filter[i];
+ *                  acc_term += bias
+ *              OR
+ *                   for i in filter_size:
+ *                      acc_term += filter[i]; // accumulate filter values
+ *                  acc_term = acc_term * input_offset + bias
+ *
+ *
+ * In both the above versions we align the filter if needed, pad the input with
+ *       -input_offset if needed and extend the channels to make those multiple
+ *       of 8/16 as per function needs
+ */
+
 #include <stdio.h>
 #include <esp_nn_defs.h>
 

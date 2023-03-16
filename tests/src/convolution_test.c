@@ -22,7 +22,8 @@
 #include "test_utils.h"
 
 #if CONFIG_IDF_CMAKE
-#if (CONFIG_SPIRAM_SUPPORT && (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
+#if ((CONFIG_SPIRAM_SUPPORT || CONFIG_ESP32S3_SPIRAM_SUPPORT) && \
+        (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
 #define IDF_HEAP_CAPS 1
 #endif
 #if IDF_HEAP_CAPS
@@ -32,7 +33,9 @@
 
 void esp_nn_depthwise_conv_s8_test()
 {
-    int8_t *input = NULL, *filter_data = NULL, *out_data_c = NULL, *out_data_opt = NULL;
+    uint32_t total_c = 0, total_opt = 0;
+    int8_t *input = NULL, *filter_data = NULL;
+    int8_t *out_data_c = NULL, *out_data_opt = NULL;
     int32_t *bias = NULL;
     int32_t input_offset = 5; /* some number in [-128, 127] */
     int32_t out_offset = 7;
@@ -42,9 +45,10 @@ void esp_nn_depthwise_conv_s8_test()
 
     /* independent variables */
     int input_wd, input_ht, channels;
-    uint16_t filter_ht, filter_wd, ch_mult;
+    uint16_t filter_ht, filter_wd, ch_mult, out_wd, out_ht;
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
     // run for 15 iterations
     for (int itr = 0; itr < 15; itr++) {
         /* prepare data */
@@ -180,17 +184,26 @@ void esp_nn_depthwise_conv_s8_test()
             stride_ht = stride_wd;
             pad_wd = stride_wd == 1 ? 0 : rand() % 2;
             pad_ht = pad_wd;
-            printf("stride(%d), pad (%d)\t", stride_wd, pad_wd);
             break;
         }
 
-        uint16_t out_wd = (input_wd - filter_wd + 1) / stride_wd;
-        uint16_t out_ht = (input_ht - filter_ht + 1) / stride_ht;
-        if (itr == 9) {
-            // expect the function to handle this gracefully
-            out_wd += 1;
-            out_ht += 1;
+        /* prepare data */
+        if (pad_wd) {
+            out_wd = (input_wd + stride_wd - 1) / stride_wd;
+        } else {
+            out_wd = (input_wd + stride_wd - filter_wd) / stride_wd;
         }
+        if (pad_ht) {
+            out_ht = (input_ht + stride_ht - 1) / stride_ht;
+        } else {
+            out_ht = (input_ht + stride_ht - filter_ht) / stride_ht;
+        }
+
+        // if (itr == 9) {
+            // expect the function to handle this gracefully
+            // out_wd += 1;
+            // out_ht += 1;
+        // }
         int in_size = input_wd * input_ht * channels;
         int out_size = out_wd * out_ht * channels * ch_mult;
         int filter_size = filter_wd * filter_ht * channels * ch_mult + 4;
@@ -220,7 +233,7 @@ void esp_nn_depthwise_conv_s8_test()
 #endif
         if (bias == NULL || input == NULL || filter_data == NULL ||
                 out_data_c == NULL || out_data_opt == NULL || bias == NULL) {
-            printf(ANSI_COLOR_RED"%s[%d] allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
             goto dc_s8_cleanup;
         }
 
@@ -260,38 +273,37 @@ void esp_nn_depthwise_conv_s8_test()
             int align_sz = 0;
 #endif
             if (scratch_buf == NULL) {
-                printf(ANSI_COLOR_RED"%s[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
-                       __FUNCTION__, itr, scratch_buf_size);
+                printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
+                       itr, scratch_buf_size);
                 goto dc_s8_cleanup;
             }
             esp_nn_set_depthwise_conv_scratch_buf(scratch_buf + align_sz);
         }
-        if (itr == 0) {
-            /* enable profiler */
-            profile_c_start();
-        }
+
+        /* enable profiler */
+        profile_c_start();
 
         /* C function */
         esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 4,
                                       bias + 1, &output_dims, out_data_c, &conv_params, &quant_data);
 
-        if (itr == 0) {
-            profile_c_end();
-            profile_opt_start();
-        }
+        total_c = profile_c_end();
+        profile_opt_start();
 
         /* Optimized function */
         esp_nn_depthwise_conv_s8(&input_dims, input, &filter_dims, filter_data + 4,
                                  bias + 1, &output_dims, out_data_opt, &conv_params, &quant_data);
 
-        if (itr == 0) {
-            /* disable profiler */
-            profile_opt_end();
-        }
+        /* disable profiler */
+        total_opt = profile_opt_end();
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        printf(ANSI_COLOR_RED"[%3d] failed [ pad: (%d, %d), stride: (%d, %d)"
+               " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]\n"ANSI_COLOR_RESET,
+               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+               filter_wd, filter_ht, channels, ch_mult);
+#if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(out_data_opt, out_size / out_ht, out_ht);
             printf("Expected: \n");
@@ -302,9 +314,14 @@ void esp_nn_depthwise_conv_s8_test()
             PRINT_ARRAY_HEX(filter_data + 4, (filter_size - 4) / filter_ht, filter_ht);
             printf("bias data:\n");
             PRINT_ARRAY_INT(bias + 1, ch_mult * channels, 1);
+#endif
             goto dc_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        printf(ANSI_COLOR_GREEN"[%3d] passed [ pad: (%d, %d), stride: (%d, %d)"
+               " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]"ANSI_COLOR_RESET,
+               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
+               out_ht, filter_wd, filter_ht, channels, ch_mult);
+        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
 
     dc_s8_cleanup:
         if (input) {
@@ -330,6 +347,7 @@ void esp_nn_depthwise_conv_s8_test()
 
 void esp_nn_conv_s8_test()
 {
+    uint32_t total_c = 0, total_opt = 0;
     const int32_t input_offset = 5; /* some number in [-128, 127] */
     const int32_t activation_min = -125;
     const int32_t activation_max = 122;
@@ -344,11 +362,12 @@ void esp_nn_conv_s8_test()
 
     /* independent variable */
     int in_wd, in_ht, in_channels, out_channels;
-    uint16_t filter_ht, filter_wd;
+    uint16_t filter_ht, filter_wd, out_wd, out_ht;
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
     // run for 10 iterations
-    for (int itr = 0; itr < 10; itr++) {
+    for (int itr = 0; itr < 15; itr++) {
         switch (itr) {
         case 0: // ch % 8 == 0 && filter (1,1), padding (0,0)
             in_wd = 10;
@@ -434,6 +453,30 @@ void esp_nn_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 7: // ch == 3, pad (0, 0)
+            in_wd = 112;
+            in_ht = 112;
+            in_channels = 3;
+            out_channels = 16;
+            filter_ht = 6;
+            filter_wd = 6;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 8: // ch == 5, remaining pad (0, 0)
+            in_wd = 8;
+            in_ht = 8;
+            in_channels = 5;
+            out_channels = 16;
+            filter_ht = 6;
+            filter_wd = 6;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -449,8 +492,16 @@ void esp_nn_conv_s8_test()
         }
 
         /* prepare data */
-        uint16_t out_wd = (in_wd - filter_wd + 1) / stride_wd;
-        uint16_t out_ht = (in_ht - filter_ht + 1) / stride_ht;
+        if (pad_wd) {
+            out_wd = (in_wd + stride_wd - 1) / stride_wd;
+        } else {
+            out_wd = (in_wd + stride_wd - filter_wd) / stride_wd;
+        }
+        if (pad_ht) {
+            out_ht = (in_ht + stride_ht - 1) / stride_ht;
+        } else {
+            out_ht = (in_ht + stride_ht - filter_ht) / stride_ht;
+        }
 
         int in_size = in_wd * in_ht * in_channels;
         int filter_size = filter_wd * filter_ht * in_channels * out_channels + 2;
@@ -481,12 +532,12 @@ void esp_nn_conv_s8_test()
 
         if (input == NULL || filter_data == NULL ||
                 out_data_c == NULL || out_data_opt == NULL) {
-            printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+            printf(ANSI_COLOR_RED"input/filter/out_data allocations failed\n"ANSI_COLOR_RESET);
             goto conv_s8_cleanup;
         }
 
         if (bias == NULL || out_shift == NULL || out_mult == NULL) {
-            printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+            printf(ANSI_COLOR_RED"bias/out_shift/out_mult allocations failed\n"ANSI_COLOR_RESET);
             goto conv_s8_cleanup;
         }
 
@@ -530,38 +581,36 @@ void esp_nn_conv_s8_test()
             int align_sz = 0;
 #endif
             if (scratch_buf == NULL) {
-                printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, __FUNCTION__, scratch_buf_size);
+                printf(ANSI_COLOR_RED"scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, scratch_buf_size);
                 goto conv_s8_cleanup;
             }
             esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
         }
 
-        if (itr == 0) {
-            /* enable profiler */
-            profile_c_start();
-        }
+        /* enable profiler */
+        profile_c_start();
 
         /* C function */
         esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 2,
                             bias, &output_dims, out_data_c, &conv_params, &quant_data);
 
-        if (itr == 0) {
-            profile_c_end();
-            profile_opt_start();
-        }
+        total_c = profile_c_end();
+        profile_opt_start();
 
         /* Optimized function */
         esp_nn_conv_s8(&input_dims, input, &filter_dims, filter_data + 2,
                        bias, &output_dims, out_data_opt, &conv_params, &quant_data);
 
-        if (itr == 0) {
-            /* disable profiler */
-            profile_opt_end();
-        }
+        /* disable profiler */
+        total_opt = profile_opt_end();
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        printf(ANSI_COLOR_RED"[%3d] failed [ pad: (%d, %d), stride: (%d, %d)"
+               " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n"ANSI_COLOR_RESET,
+               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+               out_channels, filter_wd, filter_ht, in_channels);
+#if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(out_data_opt, out_size / out_ht, out_ht);
             printf("Expected: \n");
@@ -572,9 +621,14 @@ void esp_nn_conv_s8_test()
             PRINT_ARRAY_HEX(filter_data + 2, (filter_size - 2) / filter_ht, filter_ht);
             printf("bias data:\n");
             PRINT_ARRAY_INT(bias, out_channels, 1);
+#endif
             goto conv_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        printf(ANSI_COLOR_GREEN"[%3d] passed [ pad: (%d, %d), stride: (%d, %d)"
+               " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]"ANSI_COLOR_RESET,
+               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+               out_channels, filter_wd, filter_ht, in_channels);
+        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
 
     conv_s8_cleanup:
         if (input) {

@@ -32,10 +32,11 @@ void profile_c_start()
     start_c = esp_cpu_get_ccount();
 }
 
-void profile_c_end()
+uint32_t profile_c_end()
 {
     /* record profile number */
     total_c = esp_cpu_get_ccount() - start_c;
+    return total_c;
 }
 
 void profile_opt_start()
@@ -44,10 +45,11 @@ void profile_opt_start()
     start_opt = esp_cpu_get_ccount();
 }
 
-void profile_opt_end()
+uint32_t profile_opt_end()
 {
     /* record profile number */
     total_opt = esp_cpu_get_ccount() - start_opt;
+    return total_opt;
 }
 
 void app_main()
@@ -59,9 +61,7 @@ void app_main()
     esp_nn_mul_elementwise_s8_test();
     printf("mul, c %u opt %u\n", total_c, total_opt);
     esp_nn_depthwise_conv_s8_test();
-    printf("depthwise, c %u opt %u\n", total_c, total_opt);
     esp_nn_conv_s8_test();
-    printf("conv2d, c %u opt %u\n", total_c, total_opt);
 
     esp_nn_relu6_s8_test();
     printf("relu, c %u opt %u\n", total_c, total_opt);
@@ -70,7 +70,6 @@ void app_main()
     esp_nn_max_pool_s8_test();
     printf("max_pool, c %u opt %u\n", total_c, total_opt);
     esp_nn_fully_connected_s8_test();
-    printf("fully_connected, c %u opt %u\n", total_c, total_opt);
     esp_nn_softmax_s8_test();
     printf("softmax, c %u opt %u\n", total_c, total_opt);
     ESP_LOGI(TAG, "s8 tests done!\n");
