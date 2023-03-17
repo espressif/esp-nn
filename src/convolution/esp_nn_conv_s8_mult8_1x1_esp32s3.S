@@ -191,39 +191,29 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
  # store qacc registers and re-arrange data for low 16 bits
 
     ee.st.qacc_l.l.128.ip   a3,16       # [5]  id:668
-    ee.st.qacc_l.h.32.ip    a3,0        # [6]  id:669
-    l8ui    a11,a1,5                    # [11]  scratch_buf+5
-    l8ui    a12,a1,6                    # [10]  scratch_buf+6
-    l16ui   a9,a1,10                    # [8]  scratch_buf+10
-    l8ui    a10,a1,15                   # [7]  scratch_buf+15
-    l8ui    a13,a1,16                   # [9]  scratch_buf+16
-    s8i     a11,a1,2                    # [12]  scratch_buf+2
-    s8i     a12,a1,3                    # [13]  scratch_buf+3
-    s16i    a9,a1,4                     # [15]  scratch_buf+4
-    s8i     a10,a1,6                    # [16]  scratch_buf+6
-    s8i     a13,a1,7                    # [14]  scratch_buf+7
-    ee.st.qacc_h.l.128.ip   a3,16       # [19]  id:679
-    ee.st.qacc_h.h.32.ip    a3,-32      # [20]  id:680
-    l8ui    a8,a1,32                    # [21]  scratch_buf+32
-    l8ui    a15,a1,31                   # [22]  scratch_buf+31
-    l16ui   a14,a1,26                   # [23]  scratch_buf+26
-    l8ui    a13,a1,22                   # [24]  scratch_buf+22
-    l8ui    a12,a1,21                   # [25]  scratch_buf+21
-    l16ui   a11,a1,16                   # [26]  scratch_buf+16
-    s16i    a11,a1,8                    # [27]  scratch_buf+8
-    s8i     a12,a1,10                   # [28]  scratch_buf+10
-    s8i     a13,a1,11                   # [29]  scratch_buf+11
-    s16i    a14,a1,12                   # [30]  scratch_buf+12
-    s8i     a15,a1,14                   # [31]  scratch_buf+14
-    s8i     a8,a1,15                    # [32]  scratch_buf+15
+    ee.st.qacc_l.h.32.ip    a3,-16        # [6]  id:669
+    l32i.n     a10, a1, 0
+    l32i.n     a11, a1, 5
+    l32i.n     a12, a1, 10
+    l32i.n     a13, a1, 15
+    ee.movi.32.q    q0, a10, 0
+    ee.movi.32.q    q0, a11, 1
+    ee.movi.32.q    q0, a12, 2
+    ee.movi.32.q    q0, a13, 3
 
- # finally get 32 bit results in q0, q4
-    movi.n              a10,16
-    ee.vld.128.ip       q0,a3,0
-    ee.srcmb.s16.qacc   q4,a10,0        # [34] //high 16 bits
+    ee.st.qacc_h.l.128.ip   a3,16       # [5]  id:668
+    ee.st.qacc_h.h.32.ip    a3,-16        # [6]  id:669
+    l32i.n     a10, a1, 0
+    l32i.n     a11, a1, 5
+    l32i.n     a12, a1, 10
+    l32i.n     a13, a1, 15
+    ee.movi.32.q    q4, a10, 0
+    ee.movi.32.q    q4, a11, 1
+    ee.movi.32.q    q4, a12, 2
+    ee.movi.32.q    q4, a13, 3
+
     l32i                a9,a1,160       # [17]  gra_spill_temp_170, bias
     l32i                a10,a1,72       # [0]  gra_spill_temp_173, bias_ptr
-    ee.vzip.16          q0,q4           # [35], 32 bit result
 
  # add bias
     beqz.n          a9,.no_bias

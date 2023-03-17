@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -23,6 +15,7 @@
 
 void esp_nn_fully_connected_s8_test()
 {
+    uint32_t total_c = 0, total_opt = 0;
     /* prepare data */
     static uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
     static uint16_t out_channels = 3;
@@ -36,6 +29,7 @@ void esp_nn_fully_connected_s8_test()
     int32_t out_shift = -10;
     static int32_t out_offset = 127;
     int32_t out_mult = 0x59e492c4;
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
     for (int itr = 0; itr < 5; itr++) {
         out_mult = INT32_MAX / row_len + rand() % INT16_MAX;
         switch (itr) {
@@ -66,34 +60,29 @@ void esp_nn_fully_connected_s8_test()
             filter_data[i] = rand() % 256 - 128;
         }
 
-        if (itr == 0) {
-            /* enable profiler */
-            profile_c_start();
-        }
+        /* enable profiler */
+        profile_c_start();
 
         /* C function */
         esp_nn_fully_connected_s8_ansi(input, input_offset, row_len, filter_data, filter_offset,
                                     NULL, output_c, out_channels, out_offset, out_shift, out_mult,
                                     activation_min, activation_max);
 
-        if (itr == 0) {
-            profile_c_end();
-            profile_opt_start();
-        }
+        total_c = profile_c_end();
+        profile_opt_start();
 
         /* Optimized function */
         esp_nn_fully_connected_s8(input, input_offset, row_len, filter_data, filter_offset,
                                 NULL, output_opt, out_channels, out_offset, out_shift, out_mult,
                                 activation_min, activation_max);
 
-        if (itr == 0) {
-            /* disable profiler */
-            profile_opt_end();
-        }
+        /* disable profiler */
+        total_opt = profile_opt_end();
 
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            printf(ANSI_COLOR_RED"[%3d] failed\n"ANSI_COLOR_RESET, itr);
+#if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(output_opt, out_channels, 1);
             printf("Expected: \n");
@@ -104,8 +93,11 @@ void esp_nn_fully_connected_s8_test()
             PRINT_ARRAY_HEX(filter_data, row_len, out_channels);
             printf("Out shift: %d\n", out_shift);
             printf("Out mult: %x\n", out_mult);
+#endif
             return;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %d, out_ch %d]"ANSI_COLOR_RESET,
+               itr, row_len, out_channels);
+        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
     }
 }

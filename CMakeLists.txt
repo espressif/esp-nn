@@ -27,6 +27,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/convolution/esp_nn_conv_s16_mult8_esp32s3.S"
         "src/convolution/esp_nn_conv_s8_mult8_1x1_esp32s3.S"
         "src/convolution/esp_nn_conv_s16_mult4_1x1_esp32s3.S"
+        "src/convolution/esp_nn_conv_s8_filter_aligned_input_padded_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult1_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult1_3x3_esp32s3.S"
@@ -46,5 +47,5 @@ idf_component_register(SRCS "${c_srcs}"
 if(CONFIG_IDF_TARGET_ESP32S3)
     target_compile_options(${COMPONENT_LIB} PRIVATE -mlongcalls -fno-unroll-loops -O2 -Wno-unused-function)
 else()
-    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-unused-function)
+    target_compile_options(${COMPONENT_LIB} PRIVATE  -O2 -Wno-unused-function)
 endif()
