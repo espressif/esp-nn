@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -26,9 +18,12 @@ void esp_nn_relu6_s8_test()
     const int size = 1600 + 8 + 7;
     int8_t *input, *inout_ansi, *inout_opt;
 
-    input = memalign(16, size);
-    inout_ansi = memalign(16, size);
-    inout_opt = memalign(16, size);
+    int8_t *input_orig = malloc(size + 32);
+    int8_t *inout_c_orig = malloc(size + 32);
+    int8_t *inout_opt_orig = malloc(size + 32);
+    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
+    inout_ansi = 16 + inout_c_orig - ((uint32_t) inout_c_orig & 0xf);
+    inout_opt = 16 + inout_opt_orig - ((uint32_t) inout_opt_orig & 0xf);
 
     if (input == NULL || inout_ansi == NULL || inout_opt == NULL) {
         printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
@@ -71,13 +66,12 @@ void esp_nn_relu6_s8_test()
 
 relu6_s8_cleanup:
     if (input) {
-        free (input);
+        free (input_orig);
     }
     if (inout_ansi) {
-        free (inout_ansi);
+        free (inout_c_orig);
     }
     if (inout_opt) {
-        free (inout_opt);
+        free (inout_opt_orig);
     }
-
 }

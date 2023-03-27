@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -125,22 +117,17 @@ void esp_nn_add_elementwise_s8_test()
         input2_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         out_c_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         out_opt_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
+#else
+        input1_orig = malloc(size + 32);
+        input2_orig = malloc(size + 32);
+        out_c_orig = malloc(size + 32);
+        out_opt_orig = malloc(size + 32);
+#endif
         input1 = 16 + input1_orig - ((uint32_t) input1_orig & 0xf);
         input2 = 16 + input2_orig - ((uint32_t) input2_orig & 0xf);
         out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
         out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-#else
-        input1 = memalign(16, size);
-        input2 = memalign(16, size);
-        out_data_c = memalign(16, size);
-        out_data_opt = memalign(16, size);
 
-        input1_orig = input1;
-        input2_orig = input2;
-        out_c_orig = out_data_c;
-        out_opt_orig = out_data_opt;
-#endif
         if (input1_orig == NULL || input2_orig == NULL || out_c_orig == NULL ||
                 out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
@@ -275,22 +262,18 @@ void esp_nn_mul_elementwise_s8_test()
         input2_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         out_c_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         out_opt_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        input1_orig = malloc(size + 32);
+        input2_orig = malloc(size + 32);
+        out_c_orig = malloc(size + 32);
+        out_opt_orig = malloc(size + 32);
+#endif
 
         input1 = 16 + input1_orig - ((uint32_t) input1_orig & 0xf);
         input2 = 16 + input2_orig - ((uint32_t) input2_orig & 0xf);
         out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
         out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-#else
-        input1 = memalign(16, size);
-        input2 = memalign(16, size);
-        out_data_c = memalign(16, size);
-        out_data_opt = memalign(16, size);
 
-        input1_orig = input1;
-        input2_orig = input2;
-        out_c_orig = out_data_c;
-        out_opt_orig = out_data_opt;
-#endif
         if (input1_orig == NULL || input2_orig == NULL || out_c_orig == NULL ||
                 out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
