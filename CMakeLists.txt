@@ -1,4 +1,4 @@
-idf_build_get_property(idf_target IDF_TARGET)
+cmake_minimum_required(VERSION 3.5)
 
 set(c_srcs
     "src/activation_functions/esp_nn_relu_ansi.c"

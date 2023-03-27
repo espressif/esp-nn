@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
@@ -313,7 +314,7 @@ void esp_nn_depthwise_conv_s8_test()
                " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
                out_ht, filter_wd, filter_ht, channels, ch_mult);
-        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
+        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
         if (input) {
@@ -620,7 +621,7 @@ void esp_nn_conv_s8_test()
                " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
                out_channels, filter_wd, filter_ht, in_channels);
-        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
+        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
         if (input) {

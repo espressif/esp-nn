@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
@@ -58,7 +59,8 @@ void esp_nn_softmax_s8_test()
     if (scratch_buf_size) {
         scratch_buf = memalign(4, scratch_buf_size);
         if (scratch_buf == NULL) {
-            printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, __FUNCTION__, scratch_buf_size);
+            printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %"PRIi32"\n"ANSI_COLOR_RESET,
+                   __FUNCTION__, scratch_buf_size);
             goto softmax_s8_cleanup;
         }
         esp_nn_set_softmax_scratch_buf(scratch_buf);

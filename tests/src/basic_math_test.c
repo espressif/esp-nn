@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <inttypes.h>
 
 #include <common_functions.h>
 #include <esp_nn.h>
@@ -187,9 +188,10 @@ void esp_nn_add_elementwise_s8_test()
             PRINT_ARRAY_HEX(input1, size, 1);
             printf("Input2:\n");
             PRINT_ARRAY_HEX(input2, size, 1);
-            printf("in1_shift %d, in2_shift %d, left_shift %d, out_shift %d\n",
+            printf("in1_shift %"PRIi32", in2_shift %"PRIi32", left_shift %"PRIi32", out_shift %"PRIi32"\n",
                    input1_shift, input2_shift, left_shift, output_shift);
-            printf("in1_mult %d, in2_mult %d, out_mult %d\n", input1_mult, input2_mult, output_mult);
+            printf("in1_mult %"PRIi32", in2_mult %"PRIi32", out_mult %"PRIi32"\n",
+                   input1_mult, input2_mult, output_mult);
             goto elementwise_add_test_cleanup;
         }
         printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
