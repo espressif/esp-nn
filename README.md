@@ -1,11 +1,11 @@
 # ESP-NN
 
-The library contains optimised NN (Neural Network) functions for various Espressif chipsets.
+The library contains optimised NN (Neural Network) functions for various Espressif chips.
 
 * Supported platforms:
    * TensorFlow Lite Micro (TFLite Micro). Repo can be found [here](https://github.com/espressif/tflite-micro-esp-examples)
 
-* Supported ESP chipsets include:
+* Supported ESP chips include:
    * ESP32-S3 (Assembly versions optimised to benefit from vector instructions of ESP32-S3)
    * ESP32 (Generic optimisations)
    * ESP32-C3 (Generic optimisations)
@@ -40,7 +40,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
      * Optimized versions
      * ANSI C
 
-  * Default selection is for `Optimized versions`. For ESP32-S3, assembly versions are automatically selected, whereas for other chipsets (viz., ESP32, ESP32-C3), generic optimisations are selected.
+  * Default selection is for `Optimized versions`. For ESP32-S3, assembly versions are automatically selected, whereas for other chips (viz., ESP32, ESP32-C3), generic optimisations are selected.
   * For debugging purposes, you may want to select `ANSI C` reference versions.
 
 
@@ -49,6 +49,8 @@ The library contains optimised NN (Neural Network) functions for various Espress
 If you encounter an issue with ESP-NN, or wish to submit a feature request, please use the Issues section on the Github.
 
 For general questions related to this library, please use the esp32.com forum.
+
+Please check [CONTRIBUTING.md](CONTRIBUTING.md) for further information if you'd like to contribute to ESP-NN.
 
 ## Copyrights and License
 
