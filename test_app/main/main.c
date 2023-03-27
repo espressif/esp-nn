@@ -16,6 +16,14 @@
 #include <test_functions.h>
 #include <esp_timer.h>
 
+
+#if __has_include("esp_idf_version.h")
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#define esp_cpu_get_ccount esp_cpu_get_cycle_count
+#endif
+#endif
+
 static const char *TAG = "test_app";
 static uint32_t start_c, start_opt, total_c, total_opt;
 
