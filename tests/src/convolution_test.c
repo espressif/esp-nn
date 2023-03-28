@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
@@ -210,19 +211,17 @@ void esp_nn_depthwise_conv_s8_test()
         filter_data = (int8_t *) heap_caps_malloc(filter_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         bias = (int32_t *) heap_caps_malloc(bias_size * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
+#else
+        int8_t *input_orig = malloc(in_size + 32);
+        int8_t *out_c_orig = malloc(out_size + 32);
+        int8_t *out_opt_orig = malloc(out_size + 32);
+        filter_data = malloc(filter_size);
+        bias = malloc(bias_size * 4);
+#endif
         input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
         out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
         out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-#else
-        input = memalign(16, in_size + 16);
-        filter_data = memalign(16, filter_size);
-        out_data_c = memalign(16, out_size + 16);
-        out_data_opt = memalign(16, out_size + 16);
-        bias = memalign(16, bias_size * 4);
-        int8_t *input_orig = input;
-        int8_t *out_c_orig = out_data_c;
-        int8_t *out_opt_orig = out_data_opt;
-#endif
+
         if (bias == NULL || input == NULL || filter_data == NULL ||
                 out_data_c == NULL || out_data_opt == NULL || bias == NULL) {
             printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
@@ -259,11 +258,11 @@ void esp_nn_depthwise_conv_s8_test()
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
             scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
 #else
-            scratch_buf = memalign(16, scratch_buf_size);
-            int align_sz = 0;
+            scratch_buf = malloc(scratch_buf_size + 32);
 #endif
+            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
+
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
                        itr, scratch_buf_size);
@@ -313,7 +312,7 @@ void esp_nn_depthwise_conv_s8_test()
                " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
                out_ht, filter_wd, filter_ht, channels, ch_mult);
-        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
+        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
         if (input) {
@@ -506,19 +505,17 @@ void esp_nn_conv_s8_test()
         filter_data = (int8_t *) heap_caps_malloc(filter_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         bias = (int32_t *) heap_caps_malloc(128 + sizeof (int32_t) * out_channels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
+#else
+        input_orig = malloc(in_size + 32);
+        out_c_orig = malloc(out_size + 32);
+        out_opt_orig = malloc(out_size + 32);
+        filter_data = malloc(filter_size + 32);
+        bias = malloc(128 + sizeof (int32_t) * out_channels);
+#endif
         int8_t *input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
         int8_t *out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
         int8_t *out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-#else
-        int8_t *input = memalign(16, in_size);
-        int8_t *out_data_c = memalign(16, out_size);
-        int8_t *out_data_opt = memalign(16, out_size);
-        filter_data = memalign(16, filter_size);
-        bias = calloc(1, 128 + sizeof (int32_t) * out_channels);
-        input_orig = input;
-        out_c_orig = out_data_c;
-        out_opt_orig = out_data_opt;
-#endif
+
         int32_t *out_shift = calloc(1, 128 + sizeof (int32_t) * out_channels);
         int32_t *out_mult = calloc(1, 128 + sizeof (int32_t) * out_channels);
 
@@ -567,11 +564,10 @@ void esp_nn_conv_s8_test()
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
             void *scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
 #else
-            void *scratch_buf = memalign(16, scratch_buf_size);
-            int align_sz = 0;
+            void *scratch_buf = malloc(scratch_buf_size + 32);
 #endif
+            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, scratch_buf_size);
                 goto conv_s8_cleanup;
@@ -620,7 +616,7 @@ void esp_nn_conv_s8_test()
                " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
                out_channels, filter_wd, filter_ht, in_channels);
-        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
+        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
         if (input) {

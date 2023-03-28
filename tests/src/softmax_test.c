@@ -1,22 +1,15 @@
-// Copyright 2022 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
@@ -28,13 +21,16 @@ void esp_nn_softmax_s8_test()
     const int32_t diff_min = -128;
     const int32_t mult = INT32_MAX / 2;
     const int32_t shift = 7;
-    void *scratch_buf = NULL;
+    void *scratch_buf = NULL, *scratch_buf_orig = NULL;
     const int size = width * height;
     int8_t *input, *out_ansi, *out_opt;
 
-    input = memalign(16, size);
-    out_ansi = memalign(16, size);
-    out_opt = memalign(16, size);
+    int8_t *input_orig = malloc(size + 32);
+    int8_t *out_c_orig = malloc(size + 32);
+    int8_t *out_opt_orig = malloc(size + 32);
+    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
+    out_ansi = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
+    out_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
 
     if (input == NULL || out_ansi == NULL || out_opt == NULL) {
         printf(ANSI_COLOR_RED"%s buffer allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
@@ -56,9 +52,11 @@ void esp_nn_softmax_s8_test()
 
     int32_t scratch_buf_size = esp_nn_get_softmax_scratch_size(width, height);
     if (scratch_buf_size) {
-        scratch_buf = memalign(4, scratch_buf_size);
+        scratch_buf_orig = malloc(scratch_buf_size * 4 + 32);
+        scratch_buf = 16 + scratch_buf_orig - ((uint32_t) scratch_buf_orig & 0xf);
         if (scratch_buf == NULL) {
-            printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, __FUNCTION__, scratch_buf_size);
+            printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %"PRIi32"\n"ANSI_COLOR_RESET,
+                   __FUNCTION__, scratch_buf_size);
             goto softmax_s8_cleanup;
         }
         esp_nn_set_softmax_scratch_buf(scratch_buf);
@@ -87,15 +85,15 @@ void esp_nn_softmax_s8_test()
 
 softmax_s8_cleanup:
     if (input) {
-        free (input);
+        free (input_orig);
     }
     if (out_ansi) {
-        free (out_ansi);
+        free (out_c_orig);
     }
     if (out_opt) {
-        free (out_opt);
+        free (out_opt_orig);
     }
     if (scratch_buf) {
-        free (scratch_buf);
+        free (scratch_buf_orig);
     }
 }

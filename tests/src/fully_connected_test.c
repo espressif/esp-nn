@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
@@ -96,8 +97,8 @@ void esp_nn_fully_connected_s8_test()
 #endif
             return;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %d, out_ch %d]"ANSI_COLOR_RESET,
+        printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16"]"ANSI_COLOR_RESET,
                itr, row_len, out_channels);
-        printf("\tcycles: c %8u, opt %8u\n", total_c, total_opt);
+        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
     }
 }
