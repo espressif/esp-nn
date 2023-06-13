@@ -290,7 +290,7 @@ void esp_nn_depthwise_conv_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-        printf(ANSI_COLOR_RED"[%3d] failed [ pad: (%d, %d), stride: (%d, %d)"
+        printf(ANSI_COLOR_RED"[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
                " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]\n"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
                filter_wd, filter_ht, channels, ch_mult);
@@ -308,7 +308,7 @@ void esp_nn_depthwise_conv_s8_test()
 #endif
             goto dc_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [ pad: (%d, %d), stride: (%d, %d)"
+        printf(ANSI_COLOR_GREEN"[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
                " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
                out_ht, filter_wd, filter_ht, channels, ch_mult);
@@ -468,6 +468,18 @@ void esp_nn_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
+        case 9: //
+            in_wd = 3;
+            in_ht = 3;
+            in_channels = 32;
+            out_channels = 1;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -504,7 +516,6 @@ void esp_nn_conv_s8_test()
         out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         filter_data = (int8_t *) heap_caps_malloc(filter_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         bias = (int32_t *) heap_caps_malloc(128 + sizeof (int32_t) * out_channels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
 #else
         input_orig = malloc(in_size + 32);
         out_c_orig = malloc(out_size + 32);
@@ -579,14 +590,14 @@ void esp_nn_conv_s8_test()
         profile_c_start();
 
         /* C function */
-        esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data + 2,
+        esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data,
                             bias, &output_dims, out_data_c, &conv_params, &quant_data);
 
         total_c = profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
-        esp_nn_conv_s8(&input_dims, input, &filter_dims, filter_data + 2,
+        esp_nn_conv_s8(&input_dims, input, &filter_dims, filter_data,
                        bias, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
@@ -594,10 +605,10 @@ void esp_nn_conv_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-        printf(ANSI_COLOR_RED"[%3d] failed [ pad: (%d, %d), stride: (%d, %d)"
-               " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n"ANSI_COLOR_RESET,
-               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
-               out_channels, filter_wd, filter_ht, in_channels);
+            printf(ANSI_COLOR_RED"[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
+                   " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n"ANSI_COLOR_RESET,
+                   itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+                   out_channels, filter_wd, filter_ht, in_channels);
 #if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(out_data_opt, out_size / out_ht, out_ht);
@@ -606,13 +617,13 @@ void esp_nn_conv_s8_test()
             printf("Input:\n");
             PRINT_ARRAY_HEX(input, in_size / in_ht, in_ht);
             printf("Filter data:\n");
-            PRINT_ARRAY_HEX(filter_data + 2, (filter_size - 2) / filter_ht, filter_ht);
+            PRINT_ARRAY_HEX(filter_data, (filter_size - 2) / filter_ht, filter_ht);
             printf("bias data:\n");
             PRINT_ARRAY_INT(bias, out_channels, 1);
 #endif
             goto conv_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [ pad: (%d, %d), stride: (%d, %d)"
+        printf(ANSI_COLOR_GREEN"[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
                " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]"ANSI_COLOR_RESET,
                itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
                out_channels, filter_wd, filter_ht, in_channels);
