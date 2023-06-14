@@ -139,23 +139,20 @@ esp_nn_conv_s8_filter_aligned_input_padded_esp32s3:
 
 	ee.zero.accx
 	ee.ld.128.usar.ip 	q0, a13, 16
-	ee.ld.128.usar.ip 	q4, a13, 16
+	ee.vld.128.ip 		q4, a13, 16
 	ee.vld.128.ip 		q1, a5, 16
 
-	movi 	a14, 0x1
-	sub 	a15, a8, a5
-	srai 	a15, a15, 4
-	and    	a14, a15, a14
-	srai 	a15, a15, 1
+	sub             a15, a8, a5         // row_len - 16
+	extui           a14, a15, 4, 1      // if multiple of 16 and not 32
+	srai            a15, a15, 5         // multiples of 32
 	ee.src.q.qup 	q2, q0, q4
 	beqz	a15, .L_vector_32_loop_end
 
-	mov		a7, a13
 	loop	a15, .L_vector_32_loop_end
 
-	ee.vld.128.ip 					q4, a13, 32
+	ee.vld.128.ip 					q4, a13, 16
 	ee.vmulas.s8.accx.ld.ip.qup 	q3, a5, 16, q2, q1, q0, q4
-	ee.vld.128.ip 					q2, a7, 32
+	ee.vld.128.ip 					q2, a13, 16
 	ee.vmulas.s8.accx.ld.ip.qup 	q1, a5, 16, q0, q3, q4, q2
 	ee.orq 							q0, q2, q2
 	ee.orq 							q2, q4, q4
