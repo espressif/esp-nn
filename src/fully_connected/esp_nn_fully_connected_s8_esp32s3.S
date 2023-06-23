@@ -112,10 +112,10 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
 
 .LBB45_esp_nn_fully_connected_s8_esp32s3:   # 0x170
     l32i    a2,a1,68                    # [0]  gra_spill_temp_4
-	movi a9, 0
-	ee.srs.accx  a6, a9, 0
 
 .Lt_0_8706: # 0x173
+	movi a9, 0
+	ee.srs.accx  a6, a9, 0
 
     bge             a2,a12,.Lt_0_9730           # [38]
 
