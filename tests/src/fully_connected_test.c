@@ -28,10 +28,10 @@ void esp_nn_fully_connected_s8_test()
     static int32_t input_offset = 0;
     static int32_t filter_offset = 0;
     int32_t out_shift = -10;
-    static int32_t out_offset = 127;
+    static int32_t out_offset = 5;
     int32_t out_mult = 0x59e492c4;
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 5; itr++) {
+    for (int itr = 0; itr < 15; itr++) {
         out_mult = INT32_MAX / row_len + rand() % INT16_MAX;
         switch (itr) {
         case 0:
@@ -46,7 +46,34 @@ void esp_nn_fully_connected_s8_test()
         case 3:
             out_shift = 0;
             break;
+        case 4:
+            row_len = 1;
+            out_channels = 16;
+            out_shift = -10 + rand() % 5;
+            break;
+        case 5:
+            row_len = 16;
+            out_channels = 8;
+            out_shift = -10 + rand() % 5;
+            break;
+        case 6:
+            row_len = 8;
+            out_channels = 8;
+            out_shift = -10 + rand() % 5;
+            break;
+        case 7:
+            row_len = 8;
+            out_channels = 15;
+            out_shift = -10 + rand() % 5;
+            break;
+        case 8:
+            row_len = 8;
+            out_channels = 1;
+            out_shift = -10 + rand() % 5;
+            break;
         default:
+            row_len = rand() % 7 + 1;
+            out_channels = 8;
             out_shift = -10 + rand() % 5;
             break;
         }
