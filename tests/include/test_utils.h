@@ -81,3 +81,14 @@ uint32_t profile_opt_end();
     }                                                   \
     printf("\n");                                       \
 })
+
+#define PRINT_ARRAY_INT8(ARRAY, width, height) ({        \
+    int8_t *_array = (int8_t *) ARRAY;                \
+    for (int _j = 0; _j < height; _j++) {               \
+        for (int _i = 0; _i < width; _i++) {            \
+            printf("%4d ", _array[width * _j + _i]);  \
+        }                                               \
+        printf("\n");                                   \
+    }                                                   \
+    printf("\n");                                       \
+})
