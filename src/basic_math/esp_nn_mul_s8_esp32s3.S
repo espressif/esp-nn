@@ -1,4 +1,4 @@
-// Copyright 2021-2022 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2021-2023 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,7 +61,7 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     mov.n   a10,a3                      # [6]
     l32i    a3,a1,136                   # [18]  id:361 size+0x0
     mov.n   a9,a6                       # [2] // out_addr
-    blti    a3,1,.Lt_0_11522            # [0] // exit
+    blti    a3,1,.exit            # [0] // exit
 
     s32i.n  a2,a1,16                    # [9]  gra_spill_temp_3, input1
     s32i    a7,a1,40                    # [4]  id:358 out_offset+0x0
@@ -78,7 +78,12 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     sub     a4,a14,a15              # right_shift
     s32i.n  a4,a1,20                # [9]  gra_spill_temp_4
 
-    blti    a3,8,.Lt_0_9474             # [20]
+    blti    a3,8,.process_leftover             # [20]
+
+    // skip to leftover routine if inputs are unaligned
+    or          a6,a12,a10
+    extui       a6,a6,0,4
+    bnez        a6,.process_leftover
 
     // `size > 8`, s3 optimisation path...
     ee.zero.q   q1                      # [0]
@@ -235,9 +240,9 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     bge             a3,a7,.Lt_0_7682
 
     addi            a11,a7,-8
-    bge             a11,a3,.Lt_0_11522  # [3] // exit
+    bge             a11,a3,.exit  # [3] // exit
 
-.Lt_0_9474: # 0x209
+.process_leftover:
     sub     a8,a3,a11                   # [1]
     loopgtz a8,.LBB33_esp_nn_mul_elementwise_s8_esp32s3     # [9]
 
@@ -301,7 +306,7 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     addi.n  a11,a11,1               # [42]  // inc index
 
 .LBB33_esp_nn_mul_elementwise_s8_esp32s3:   # 0x2ed
-.Lt_0_11522:    # 0x2f7
+.exit:
     retw.n                          # [0]
 
     .size   esp_nn_mul_elementwise_s8_esp32s3, . - esp_nn_mul_elementwise_s8_esp32s3
