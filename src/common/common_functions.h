@@ -180,7 +180,7 @@ static void esp_nn_aligned_s8_pad_with_value(const int8_t *src, int8_t *dst,
 {
     /* memset with pad_val */
     memset(dst, pad_val, ((input_wd + 2 * pad_wd) * (input_ht + 2 * pad_ht)) * channels);
-    dst += (pad_wd + input_wd + pad_wd) * channels;
+    dst += (pad_wd + input_wd + pad_wd) * pad_ht * channels;
 
     for (int i = 0; i < input_ht; i++) {
         dst += pad_wd * channels;
