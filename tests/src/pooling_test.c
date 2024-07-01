@@ -21,7 +21,7 @@ void esp_nn_avg_pool_s8_test()
     const uint16_t input_ht = 16;
     const uint16_t channels = 16; /* With TFLite example, I have seen it 256 */
     const int size = input_wd * input_ht * channels;
-    int8_t *input, *output_c, *output_opt;
+    int8_t *input = NULL, *output_c = NULL, *output_opt = NULL;
     const int32_t activation_min = -128;
     const int32_t activation_max = 127;
     const uint16_t pad_wd = 1;
@@ -34,17 +34,18 @@ void esp_nn_avg_pool_s8_test()
     const uint16_t out_ht = input_ht / stride_ht;
     const int out_size = out_wd * out_ht * channels;
 
-    int8_t *input_orig = malloc(size + 32);
-    int8_t *out_c_orig = malloc(out_size + 32);
-    int8_t *out_opt_orig = malloc(out_size + 32);
-    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-    output_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-    output_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-    if (input == NULL || output_c == NULL || output_opt == NULL) {
+    int8_t *input_orig = malloc(size + 16);
+    int8_t *out_c_orig = malloc(out_size + 16);
+    int8_t *out_opt_orig = malloc(out_size + 16);
+    if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
         goto avg_pool_s8_cleanup;
     }
+
+    input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+    output_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+    output_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+
     /**
      * width/height, channels etc look suspicious but it it true.
      * It actually depends upon where in model this is actually placed.
@@ -60,16 +61,16 @@ void esp_nn_avg_pool_s8_test()
 
     /* C function */
     esp_nn_avg_pool_s8_ansi(input, input_wd, input_ht, output_c, out_wd, out_ht,
-                              stride_wd, stride_ht, filter_wd, filter_ht, pad_wd, pad_ht,
-                              activation_min, activation_max, channels);
+                            stride_wd, stride_ht, filter_wd, filter_ht, pad_wd, pad_ht,
+                            activation_min, activation_max, channels);
 
     profile_c_end();
     profile_opt_start();
 
     /* Optimized function */
     esp_nn_avg_pool_s8(input, input_wd, input_ht, output_opt, out_wd, out_ht,
-                         stride_wd, stride_ht, filter_wd, filter_ht, pad_wd, pad_ht,
-                         activation_min, activation_max, channels);
+                       stride_wd, stride_ht, filter_wd, filter_ht, pad_wd, pad_ht,
+                       activation_min, activation_max, channels);
 
     /* disable profiler */
     profile_opt_end();
@@ -89,13 +90,13 @@ void esp_nn_avg_pool_s8_test()
     printf(ANSI_COLOR_GREEN"%s passed\n"ANSI_COLOR_RESET, __FUNCTION__);
 
 avg_pool_s8_cleanup:
-    if (input) {
+    if (input_orig) {
         free(input_orig);
     }
-    if (output_c) {
+    if (out_c_orig) {
         free(out_c_orig);
     }
-    if (output_opt) {
+    if (out_opt_orig) {
         free(out_opt_orig);
     }
 }
@@ -106,7 +107,7 @@ void esp_nn_max_pool_s8_test()
     const uint16_t input_wd = 16;
     const uint16_t input_ht = 16;
     const uint16_t channels = 16; /* With TFLite example, I have seen it 256 */
-    int8_t *input, *output_c, *output_opt;
+    int8_t *input = NULL, *output_c = NULL, *output_opt = NULL;
     const int size = input_wd * input_ht * channels;
     const int32_t activation_min = -128;
     const int32_t activation_max = 127;
@@ -120,17 +121,17 @@ void esp_nn_max_pool_s8_test()
     const uint16_t out_ht = input_ht / stride_ht;
     const int out_size = out_wd * out_ht * channels;
 
-    int8_t *input_orig = malloc(size + 32);
-    int8_t *out_c_orig = malloc(out_size + 32);
-    int8_t *out_opt_orig = malloc(out_size + 32);
-    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-    output_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-    output_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-    if (input == NULL || output_c == NULL || output_opt == NULL) {
+    int8_t *input_orig = malloc(size + 16);
+    int8_t *out_c_orig = malloc(out_size + 16);
+    int8_t *out_opt_orig = malloc(out_size + 16);
+    if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
         goto max_pool_s8_cleanup;
     }
+
+    input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+    output_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+    output_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 256 - 128;
@@ -170,13 +171,13 @@ void esp_nn_max_pool_s8_test()
     printf(ANSI_COLOR_GREEN"%s passed\n"ANSI_COLOR_RESET, __FUNCTION__);
 
 max_pool_s8_cleanup:
-    if (input) {
+    if (input_orig) {
         free(input_orig);
     }
-    if (output_c) {
+    if (out_c_orig) {
         free(out_c_orig);
     }
-    if (output_opt) {
+    if (out_opt_orig) {
         free(out_opt_orig);
     }
 }

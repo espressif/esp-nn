@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -25,17 +25,17 @@ void esp_nn_softmax_s8_test()
     const int size = width * height;
     int8_t *input, *out_ansi, *out_opt;
 
-    int8_t *input_orig = malloc(size + 32);
-    int8_t *out_c_orig = malloc(size + 32);
-    int8_t *out_opt_orig = malloc(size + 32);
-    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-    out_ansi = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-    out_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-    if (input == NULL || out_ansi == NULL || out_opt == NULL) {
+    int8_t *input_orig = malloc(size + 16);
+    int8_t *out_c_orig = malloc(size + 16);
+    int8_t *out_opt_orig = malloc(size + 16);
+    if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         printf(ANSI_COLOR_RED"%s buffer allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
         goto softmax_s8_cleanup;
     }
+
+    input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+    out_ansi = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+    out_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
     /* Generate input data between -128 -> +127 */
     for (int i = 0; i < size; ++i) {
@@ -52,7 +52,7 @@ void esp_nn_softmax_s8_test()
 
     int32_t scratch_buf_size = esp_nn_get_softmax_scratch_size(width, height);
     if (scratch_buf_size) {
-        scratch_buf_orig = malloc(scratch_buf_size * 4 + 32);
+        scratch_buf_orig = malloc(scratch_buf_size * 4 + 16);
         scratch_buf = 16 + scratch_buf_orig - ((uint32_t) scratch_buf_orig & 0xf);
         if (scratch_buf == NULL) {
             printf(ANSI_COLOR_RED"%s scratch_buf alloc failed size %"PRIi32"\n"ANSI_COLOR_RESET,
@@ -84,16 +84,16 @@ void esp_nn_softmax_s8_test()
     printf(ANSI_COLOR_GREEN"%s passed\n"ANSI_COLOR_RESET, __FUNCTION__);
 
 softmax_s8_cleanup:
-    if (input) {
+    if (input_orig) {
         free (input_orig);
     }
-    if (out_ansi) {
+    if (out_c_orig) {
         free (out_c_orig);
     }
-    if (out_opt) {
+    if (out_opt_orig) {
         free (out_opt_orig);
     }
-    if (scratch_buf) {
+    if (scratch_buf_orig) {
         free (scratch_buf_orig);
     }
 }

@@ -205,28 +205,27 @@ void esp_nn_depthwise_conv_s8_test()
         int32_t out_mult[channels * ch_mult];
 
 #if IDF_HEAP_CAPS
-        int8_t *input_orig = (int8_t *) heap_caps_malloc(in_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        int8_t *out_c_orig = (int8_t *) heap_caps_malloc(out_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        int8_t *out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        int8_t *input_orig = (int8_t *) heap_caps_malloc(in_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        int8_t *out_c_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        int8_t *out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         filter_data = (int8_t *) heap_caps_malloc(filter_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         bias = (int32_t *) heap_caps_malloc(bias_size * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
 #else
-        int8_t *input_orig = malloc(in_size + 32);
-        int8_t *out_c_orig = malloc(out_size + 32);
-        int8_t *out_opt_orig = malloc(out_size + 32);
+        int8_t *input_orig = malloc(in_size + 16);
+        int8_t *out_c_orig = malloc(out_size + 16);
+        int8_t *out_opt_orig = malloc(out_size + 16);
         filter_data = malloc(filter_size);
         bias = malloc(bias_size * 4);
 #endif
-        input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-        out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-        out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-        if (bias == NULL || input == NULL || filter_data == NULL ||
-                out_data_c == NULL || out_data_opt == NULL || bias == NULL) {
+        if (bias == NULL || input_orig == NULL || filter_data == NULL ||
+                out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
             goto dc_s8_cleanup;
         }
+
+        input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+        out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+        out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
         /* Generate input data */
         for (int i = 0; i < in_size; ++i) {
@@ -257,17 +256,17 @@ void esp_nn_depthwise_conv_s8_test()
                                                                       &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
-            scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            scratch_buf = heap_caps_malloc(scratch_buf_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-            scratch_buf = malloc(scratch_buf_size + 32);
+            scratch_buf = malloc(scratch_buf_size + 16);
 #endif
-            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
 
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
                        itr, scratch_buf_size);
                 goto dc_s8_cleanup;
             }
+            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             esp_nn_set_depthwise_conv_scratch_buf(scratch_buf + align_sz);
         }
 
@@ -315,16 +314,16 @@ void esp_nn_depthwise_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
-        if (input) {
+        if (input_orig) {
             free(input_orig);
         }
         if (filter_data) {
             free(filter_data);
         }
-        if (out_data_c) {
+        if (out_c_orig) {
             free(out_c_orig);
         }
-        if (out_data_opt) {
+        if (out_opt_orig) {
             free(out_opt_orig);
         }
         if (bias) {
@@ -345,11 +344,11 @@ void esp_nn_conv_s8_test()
     const int32_t out_offset = 3;
 
     void *scratch_buf = NULL;
-    int8_t *input_orig;
-    int8_t *out_c_orig;
-    int8_t *out_opt_orig;
-    int8_t *filter_data;
-    int32_t *bias;
+    int8_t *input_orig = NULL;
+    int8_t *out_c_orig = NULL;
+    int8_t *out_opt_orig = NULL;
+    int8_t *filter_data = NULL;
+    int32_t *bias = NULL;
 
     /* independent variable */
     int in_wd, in_ht, in_channels, out_channels;
@@ -511,28 +510,25 @@ void esp_nn_conv_s8_test()
         int out_size = out_wd * out_ht * out_channels;
 
 #if IDF_HEAP_CAPS
-        input_orig = (int8_t *) heap_caps_malloc(in_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(out_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        filter_data = (int8_t *) heap_caps_malloc(filter_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        input_orig = (int8_t *) heap_caps_malloc(in_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_c_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        filter_data = (int8_t *) heap_caps_malloc(filter_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         bias = (int32_t *) heap_caps_malloc(128 + sizeof (int32_t) * out_channels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-        input_orig = malloc(in_size + 32);
-        out_c_orig = malloc(out_size + 32);
-        out_opt_orig = malloc(out_size + 32);
-        filter_data = malloc(filter_size + 32);
+        input_orig = malloc(in_size + 16);
+        out_c_orig = malloc(out_size + 16);
+        out_opt_orig = malloc(out_size + 16);
+        filter_data = malloc(filter_size + 16);
         bias = malloc(128 + sizeof (int32_t) * out_channels);
 #endif
-        int8_t *input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-        int8_t *out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-        int8_t *out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
 
         int32_t *out_shift = calloc(1, 128 + sizeof (int32_t) * out_channels);
         int32_t *out_mult = calloc(1, 128 + sizeof (int32_t) * out_channels);
 
-        if (input == NULL || filter_data == NULL ||
-                out_data_c == NULL || out_data_opt == NULL) {
-            printf(ANSI_COLOR_RED"input/filter/out_data allocations failed\n"ANSI_COLOR_RESET);
+        if (input_orig == NULL || filter_data == NULL ||
+                out_c_orig == NULL || out_opt_orig == NULL) {
+            printf(ANSI_COLOR_RED"input/filter/out_data/bias allocations failed\n"ANSI_COLOR_RESET);
             goto conv_s8_cleanup;
         }
 
@@ -540,6 +536,10 @@ void esp_nn_conv_s8_test()
             printf(ANSI_COLOR_RED"bias/out_shift/out_mult allocations failed\n"ANSI_COLOR_RESET);
             goto conv_s8_cleanup;
         }
+
+        int8_t *input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+        int8_t *out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+        int8_t *out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
         /* Generate input data between -128 -> +127 */
         for (int i = 0; i < in_size; ++i) {
@@ -574,15 +574,15 @@ void esp_nn_conv_s8_test()
                                                             &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
 #if IDF_HEAP_CAPS
-            void *scratch_buf = heap_caps_malloc(scratch_buf_size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            void *scratch_buf = heap_caps_malloc(scratch_buf_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-            void *scratch_buf = malloc(scratch_buf_size + 32);
+            void *scratch_buf = malloc(scratch_buf_size + 16);
 #endif
-            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET, scratch_buf_size);
                 goto conv_s8_cleanup;
             }
+            int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
         }
 
@@ -630,16 +630,16 @@ void esp_nn_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
-        if (input) {
+        if (input_orig) {
             free(input_orig);
         }
         if (filter_data) {
             free(filter_data);
         }
-        if (out_data_c) {
+        if (out_c_orig) {
             free(out_c_orig);
         }
-        if (out_data_opt) {
+        if (out_opt_orig) {
             free(out_opt_orig);
         }
         if (bias) {

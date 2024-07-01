@@ -18,17 +18,17 @@ void esp_nn_fully_connected_s8_test()
 {
     uint32_t total_c = 0, total_opt = 0;
     /* prepare data */
-    static uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
-    static uint16_t out_channels = 3;
+    uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
+    uint16_t out_channels = 3;
     int8_t input[row_len];
     int8_t filter_data[row_len * out_channels];
     int8_t output_c[out_channels], output_opt[out_channels];
-    static int32_t activation_min = -128;
-    static int32_t activation_max = 127;
-    static int32_t input_offset = 0;
-    static int32_t filter_offset = 0;
+    int32_t activation_min = -128;
+    int32_t activation_max = 127;
+    int32_t input_offset = 0;
+    int32_t filter_offset = 0;
     int32_t out_shift = -10;
-    static int32_t out_offset = 5;
+    int32_t out_offset = 5;
     int32_t out_mult = 0x59e492c4;
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     for (int itr = 0; itr < 15; itr++) {
