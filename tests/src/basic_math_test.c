@@ -160,29 +160,30 @@ void esp_nn_add_elementwise_s8_test()
             left_shift = rand() % 15;
         }
 #if IDF_HEAP_CAPS
-        input1_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        input2_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        input1_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        input2_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_c_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_opt_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-        input1_orig = malloc(size + 32);
-        input2_orig = malloc(size + 32);
-        out_c_orig = malloc(size + 32);
-        out_opt_orig = malloc(size + 32);
+        input1_orig = malloc(size + 16);
+        input2_orig = malloc(size + 16);
+        out_c_orig = malloc(size + 16);
+        out_opt_orig = malloc(size + 16);
 #endif
-        input1 = 16 + input1_orig - ((uint32_t) input1_orig & 0xf);
-        input2 = 16 + input2_orig - ((uint32_t) input2_orig & 0xf);
-        if (itr == 4) {
-            input2 = input2_orig; // unaligned input
-        }
-        out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-        out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-        if (input1_orig == NULL || input2_orig == NULL || out_c_orig == NULL ||
-                out_opt_orig == NULL) {
+        if (input1_orig == NULL || input2_orig == NULL ||
+                out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
             goto elementwise_add_test_cleanup;
         }
+
+        input1 = (int8_t *) (((uint32_t) input1_orig + 15) & ~15);
+        input2 = (int8_t *) (((uint32_t) input2_orig + 15) & ~15);
+        if (itr == 4) {
+            input2 = input2_orig; // unaligned input
+        }
+        out_data_c = (int8_t *) (((uint32_t)out_c_orig + 15) & ~15);
+        out_data_opt = (int8_t *) (((uint32_t)out_opt_orig + 15) & ~15);
+
 
         if (itr == 4) {
             memcpy(input1, test_add_in1, size);
@@ -314,30 +315,30 @@ void esp_nn_mul_elementwise_s8_test()
         }
 
 #if IDF_HEAP_CAPS
-        input1_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        input2_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(size + 32, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        input1_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        input2_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_c_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        out_opt_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
-        input1_orig = malloc(size + 32);
-        input2_orig = malloc(size + 32);
-        out_c_orig = malloc(size + 32);
-        out_opt_orig = malloc(size + 32);
+        input1_orig = malloc(size + 16);
+        input2_orig = malloc(size + 16);
+        out_c_orig = malloc(size + 16);
+        out_opt_orig = malloc(size + 16);
 #endif
-
-        input1 = 16 + input1_orig - ((uint32_t) input1_orig & 0xf);
-        input2 = 16 + input2_orig - ((uint32_t) input2_orig & 0xf);
-        if (itr == 4 || itr == 5) {
-            input2 = input2_orig; // unaligned input
-        }
-        out_data_c = 16 + out_c_orig - ((uint32_t) out_c_orig & 0xf);
-        out_data_opt = 16 + out_opt_orig - ((uint32_t) out_opt_orig & 0xf);
-
-        if (input1_orig == NULL || input2_orig == NULL || out_c_orig == NULL ||
-                out_opt_orig == NULL) {
+        if (input1_orig == NULL || input2_orig == NULL ||
+                out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
             goto elementwise_mult_test_cleanup;
         }
+
+        input1 = (int8_t *) (((uint32_t) input1_orig + 15) & ~15);
+        input2 = (int8_t *) (((uint32_t) input2_orig + 15) & ~15);
+        if (itr == 4 || itr == 5) {
+            input2 = input2_orig; // unaligned input
+        }
+
+        out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+        out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
         for (int i = 0; i < size; ++i) {
             input1[i] = rand() % 256 - 128;

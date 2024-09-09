@@ -16,19 +16,20 @@
 void esp_nn_relu6_s8_test()
 {
     const int size = 1600 + 8 + 7;
-    int8_t *input, *inout_ansi, *inout_opt;
+    int8_t *input = NULL, *inout_ansi = NULL, *inout_opt = NULL;
 
-    int8_t *input_orig = malloc(size + 32);
-    int8_t *inout_c_orig = malloc(size + 32);
-    int8_t *inout_opt_orig = malloc(size + 32);
-    input = 16 + input_orig - ((uint32_t) input_orig & 0xf);
-    inout_ansi = 16 + inout_c_orig - ((uint32_t) inout_c_orig & 0xf);
-    inout_opt = 16 + inout_opt_orig - ((uint32_t) inout_opt_orig & 0xf);
+    int8_t *input_orig = malloc(size + 16);
+    int8_t *inout_c_orig = malloc(size + 16);
+    int8_t *inout_opt_orig = malloc(size + 16);
 
-    if (input == NULL || inout_ansi == NULL || inout_opt == NULL) {
+    if (input_orig == NULL || inout_c_orig == NULL || inout_opt_orig == NULL) {
         printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
         goto relu6_s8_cleanup;
     }
+    input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+    inout_ansi = (int8_t *) (((uint32_t) inout_c_orig + 15) & ~15);
+    inout_opt = (int8_t *) (((uint32_t) inout_opt_orig + 15) & ~15);
+
     /* Generate filter data between -128 -> +127 */
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 255 - 128;
@@ -65,13 +66,13 @@ void esp_nn_relu6_s8_test()
     printf(ANSI_COLOR_GREEN"%s passed\n"ANSI_COLOR_RESET, __FUNCTION__);
 
 relu6_s8_cleanup:
-    if (input) {
+    if (input_orig) {
         free (input_orig);
     }
-    if (inout_ansi) {
+    if (inout_c_orig) {
         free (inout_c_orig);
     }
-    if (inout_opt) {
+    if (inout_opt_orig) {
         free (inout_opt_orig);
     }
 }
