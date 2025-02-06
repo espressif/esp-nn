@@ -41,6 +41,7 @@
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_ansi
 
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_ansi
+#define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_ansi
 
 #define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_ansi
 #define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_ansi

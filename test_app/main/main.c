@@ -71,6 +71,7 @@ void app_main()
     esp_nn_max_pool_s8_test();
     printf("max_pool, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
     esp_nn_fully_connected_s8_test();
+    esp_nn_fully_connected_per_ch_s8_test();
     esp_nn_softmax_s8_test();
     printf("softmax, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
     ESP_LOGI(TAG, "s8 tests done!\n");

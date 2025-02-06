@@ -198,6 +198,30 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                                        const int32_t activation_max);
 
 /**
+ * @brief       fully connected - per channel
+ *
+ * @note        inputs type: int8_t, output: int8_t
+ *              input offsets: although int32_t, they are contained in 8 bits [-128, 127]
+ *              out_mult, out_shift: int32_t* containing per-channel data
+ *
+ *              Current version works only on aligned input.
+ *              row_len and channels should both be multiple of 8.
+ */
+void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
+                                       const int32_t input_offset,
+                                       const uint16_t row_len,
+                                       const int8_t *filter_data,
+                                       const int32_t filter_offset,
+                                       const int32_t *bias,
+                                       int8_t *out_data,
+                                       const uint16_t out_channels,
+                                       const int32_t out_offset,
+                                       const int32_t* out_shift,
+                                       const int32_t* out_mult,
+                                       const int32_t activation_min,
+                                       const int32_t activation_max);
+
+/**
  * @brief       relu6
  *
  * @note        inout: int8_t
@@ -225,6 +249,7 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32s3
 
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_esp32s3
+#define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_esp32s3
 
 #define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_opt
 #define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_opt
