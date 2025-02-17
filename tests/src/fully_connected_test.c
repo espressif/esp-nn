@@ -145,105 +145,69 @@ void esp_nn_fully_connected_per_ch_s8_test()
     int32_t input_offset = 0;
     int32_t filter_offset = 0;
     int32_t out_offset = 7;
-    int32_t* out_mult;
-    int32_t* out_shift;
+
+    int32_t* out_mult = NULL;
+    int32_t* out_shift = NULL;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     for (int itr = 0;  itr < 15; itr++) {
+        int32_t out_shift_val = 0;
         switch (itr) {
         case 0:
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10;
-            }
+            out_shift_val = -10;
             break;
         case 1:
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = SHIFT_MIN;
-            }
+            out_shift_val = SHIFT_MIN;
             break;
         case 2:
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = SHIFT_MAX;
-            }
+            out_shift_val = SHIFT_MAX;
             break;
         case 3:
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = 0;
-            }
+            out_shift_val = 0;
             break;
         case 4:
             row_len = 1;
             out_channels = 16;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         case 5:
             row_len = 16;
             out_channels = 8;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         case 6:
             row_len = 8;
             out_channels = 8;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         case 7:
             row_len = 8;
             out_channels = 15;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         case 8:
             row_len = 8;
             out_channels = 1;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         default:
             row_len = rand() % 7 + 1;
             out_channels = 8;
-            out_mult = malloc(out_channels * sizeof(int32_t));
-            out_shift = malloc(out_channels * sizeof(int32_t));
-            for (int i = 0; i < out_channels; i++) {
-                out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
-                out_shift[i] = -10 + rand() % 5;
-            }
             break;
         }
+
+        out_mult = ESP_NN_TEST_ALLOC(out_channels * sizeof(int32_t));
+        out_shift = ESP_NN_TEST_ALLOC(out_channels * sizeof(int32_t));
+
+        if (out_shift == NULL || out_mult == NULL) {
+            printf(ANSI_COLOR_RED"out_shift/out_mult allocations failed\n"ANSI_COLOR_RESET);
+            goto fully_connected_per_ch_cleanup;
+        }
+
+        for (int i = 0; i < out_channels; i++) {
+            out_mult[i] = INT32_MAX / row_len + rand() % INT16_MAX;
+            if (i < 4) {
+                out_shift[i] = out_shift_val;
+            } else {
+                out_shift[i] = -10 + rand() % 5;
+            }
+        }
+
         /* Generate input and filter data */
         for (int i = 0; i < row_len; ++i) {
             input[i] = rand() % 256 - 128;
@@ -251,10 +215,7 @@ void esp_nn_fully_connected_per_ch_s8_test()
         for (int i = 0; i < row_len * out_channels; ++i) {
             filter_data[i] = rand() % 256 - 128;
         }
-
-        printf("%d, %ld\n", input[0], input_offset);
-        printf("%d, %ld\n", filter_data[0], filter_offset);
-
+        
         /* enable profiler */
         profile_c_start();
 
@@ -298,13 +259,18 @@ void esp_nn_fully_connected_per_ch_s8_test()
             }
             printf("\n");
 #endif
-
-            free(out_shift);
-            free(out_mult);
-            return;
+            goto fully_connected_per_ch_cleanup;
         }
         printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16"]"ANSI_COLOR_RESET,
                itr, row_len, out_channels);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
+    
+    fully_connected_per_ch_cleanup:
+        if (out_shift) {
+            free(out_shift);
+        }
+        if (out_mult) {
+            free(out_mult);
+        }
     }
 }

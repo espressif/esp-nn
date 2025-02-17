@@ -14,16 +14,6 @@
 #include <esp_nn.h>
 #include "test_utils.h"
 
-#if CONFIG_IDF_CMAKE
-#if ((CONFIG_SPIRAM || CONFIG_SPIRAM_SUPPORT || CONFIG_ESP32S3_SPIRAM_SUPPORT) && \
-        (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
-#define IDF_HEAP_CAPS 1
-#endif
-#if IDF_HEAP_CAPS
-#include "esp_heap_caps.h"
-#endif
-#endif
-
 void esp_nn_depthwise_conv_s8_test()
 {
     uint32_t total_c = 0, total_opt = 0;
@@ -204,19 +194,12 @@ void esp_nn_depthwise_conv_s8_test()
         int32_t out_shift[channels * ch_mult];
         int32_t out_mult[channels * ch_mult];
 
-#if IDF_HEAP_CAPS
-        int8_t *input_orig = (int8_t *) heap_caps_malloc(in_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        int8_t *out_c_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        int8_t *out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        filter_data = (int8_t *) heap_caps_malloc(filter_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        bias = (int32_t *) heap_caps_malloc(bias_size * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-#else
-        int8_t *input_orig = malloc(in_size + 16);
-        int8_t *out_c_orig = malloc(out_size + 16);
-        int8_t *out_opt_orig = malloc(out_size + 16);
-        filter_data = malloc(filter_size);
-        bias = malloc(bias_size * 4);
-#endif
+        int8_t *input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
+        int8_t *out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
+        int8_t *out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
+        filter_data = ESP_NN_TEST_ALLOC(filter_size);
+        bias = ESP_NN_TEST_ALLOC(bias_size * 4);
+
         if (bias == NULL || input_orig == NULL || filter_data == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
@@ -255,12 +238,7 @@ void esp_nn_depthwise_conv_s8_test()
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
-#if IDF_HEAP_CAPS
-            scratch_buf = heap_caps_malloc(scratch_buf_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-#else
-            scratch_buf = malloc(scratch_buf_size + 16);
-#endif
-
+            scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16);
             if (scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
                        itr, scratch_buf_size);
@@ -509,22 +487,14 @@ void esp_nn_conv_s8_test()
         int filter_size = filter_wd * filter_ht * in_channels * out_channels + 2;
         int out_size = out_wd * out_ht * out_channels;
 
-#if IDF_HEAP_CAPS
-        input_orig = (int8_t *) heap_caps_malloc(in_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(out_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        filter_data = (int8_t *) heap_caps_malloc(filter_size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        bias = (int32_t *) heap_caps_malloc(128 + sizeof (int32_t) * out_channels, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-#else
-        input_orig = malloc(in_size + 16);
-        out_c_orig = malloc(out_size + 16);
-        out_opt_orig = malloc(out_size + 16);
-        filter_data = malloc(filter_size + 16);
-        bias = malloc(128 + sizeof (int32_t) * out_channels);
-#endif
+        input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
+        out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
+        out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
+        filter_data = ESP_NN_TEST_ALLOC(filter_size + 16);
+        bias = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
 
-        int32_t *out_shift = calloc(1, 128 + sizeof (int32_t) * out_channels);
-        int32_t *out_mult = calloc(1, 128 + sizeof (int32_t) * out_channels);
+        int32_t *out_shift = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
+        int32_t *out_mult = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
 
         if (input_orig == NULL || filter_data == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {

@@ -92,3 +92,18 @@ uint32_t profile_opt_end();
     }                                                   \
     printf("\n");                                       \
 })
+
+#if CONFIG_IDF_CMAKE
+#if ((CONFIG_SPIRAM || CONFIG_SPIRAM_SUPPORT || CONFIG_ESP32S3_SPIRAM_SUPPORT) && \
+        (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
+#define IDF_HEAP_CAPS 1
+#endif
+#endif
+
+#if IDF_HEAP_CAPS
+#include "esp_heap_caps.h"
+#define ESP_NN_TEST_ALLOC(SIZE) heap_caps_malloc(SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#else
+#include <malloc.h>
+#define ESP_NN_TEST_ALLOC(SIZE) malloc(SIZE)
+#endif

@@ -15,16 +15,6 @@
 #include <esp_nn.h>
 #include "test_utils.h"
 
-#if CONFIG_IDF_CMAKE
-#if (CONFIG_SPIRAM_SUPPORT && (CONFIG_SPIRAM_USE_CAPS_ALLOC || CONFIG_SPIRAM_USE_MALLOC))
-#define IDF_HEAP_CAPS 1
-#endif
-
-#if IDF_HEAP_CAPS
-#include "esp_heap_caps.h"
-#endif
-#endif
-
 const int8_t test_add_in1[] = {
        13,   26,  -26,   26,  -13,   13,  -13,   13,  -13,   13,  -13,   13,  -26,  -51,  -26,  -51,
       -26,  -39,  -26,  -39,  -39,  -39,  -26,  -51,  -13,  -13,  -13,  -13,  -26,  -13,  -13,  -13,
@@ -159,17 +149,12 @@ void esp_nn_add_elementwise_s8_test()
             output_shift = -8 + rand() % 4;
             left_shift = rand() % 15;
         }
-#if IDF_HEAP_CAPS
-        input1_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        input2_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-#else
-        input1_orig = malloc(size + 16);
-        input2_orig = malloc(size + 16);
-        out_c_orig = malloc(size + 16);
-        out_opt_orig = malloc(size + 16);
-#endif
+
+        input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        input2_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        out_c_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        out_opt_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
@@ -314,17 +299,11 @@ void esp_nn_mul_elementwise_s8_test()
             size = 4 + rand() % 64;
         }
 
-#if IDF_HEAP_CAPS
-        input1_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        input2_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_c_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        out_opt_orig = (int8_t *) heap_caps_malloc(size + 16, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-#else
-        input1_orig = malloc(size + 16);
-        input2_orig = malloc(size + 16);
-        out_c_orig = malloc(size + 16);
-        out_opt_orig = malloc(size + 16);
-#endif
+        input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        input2_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        out_c_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        out_opt_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
             printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
