@@ -457,6 +457,30 @@ void esp_nn_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 10: // needs right and bottom padding
+            in_wd = 4;
+            in_ht = 8;
+            in_channels = 1;
+            out_channels = 3;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 11: // needs right and bottom padding
+            in_wd = 4;
+            in_ht = 8;
+            in_channels = 3;
+            out_channels = 4;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -581,13 +605,13 @@ void esp_nn_conv_s8_test()
                    out_channels, filter_wd, filter_ht, in_channels);
 #if 0
             printf("Output: \n");
-            PRINT_ARRAY_HEX(out_data_opt, out_size / out_ht, out_ht);
+            PRINT_ARRAY_INT8(out_data_opt, out_size / out_ht, out_ht);
             printf("Expected: \n");
-            PRINT_ARRAY_HEX(out_data_c, out_size / out_ht, out_ht);
+            PRINT_ARRAY_INT8(out_data_c, out_size / out_ht, out_ht);
             printf("Input:\n");
-            PRINT_ARRAY_HEX(input, in_size / in_ht, in_ht);
+            PRINT_ARRAY_INT8(input, in_size / in_ht, in_ht);
             printf("Filter data:\n");
-            PRINT_ARRAY_HEX(filter_data, (filter_size - 2) / filter_ht, filter_ht);
+            PRINT_ARRAY_INT8(filter_data, (filter_size - 2) / filter_ht, filter_ht);
             printf("bias data:\n");
             PRINT_ARRAY_INT(bias, out_channels, 1);
 #endif

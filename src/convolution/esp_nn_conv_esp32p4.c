@@ -181,7 +181,7 @@ static void esp_nn_conv_s8_padded(
         void *scratch)
 {
     const uint16_t input_wd = input_dims->width;
-    // const uint16_t input_ht = input_dims->height;
+    const uint16_t input_ht = input_dims->height;
     const uint16_t in_channels = input_dims->channels;
     const int32_t input_offset = conv_params->in_offset;
     const int32_t out_offset = conv_params->out_offset;
@@ -219,8 +219,11 @@ static void esp_nn_conv_s8_padded(
 
     const int32_t row_size = filter_wd * in_channels;
 
-    for (int32_t out_y = 0; out_y < out_ht; out_y++) {
-        for (int32_t out_x = 0; out_x < out_wd; out_x++) {
+    bool right_pad = max(0, ((out_wd - 1) * stride_wd + filter_wd - input_wd));
+    bool bottom_pad = max(0, ((out_ht - 1) * stride_ht + filter_ht - input_ht));
+
+    for (int32_t out_y = 0; out_y < out_ht - bottom_pad; out_y++) {
+        for (int32_t out_x = 0; out_x < out_wd - right_pad; out_x++) {
             const int32_t base_y = stride_ht * out_y;
             const int32_t base_x = stride_wd * out_x;
             const int32_t *out_mult_ptr = out_mult;
@@ -285,12 +288,13 @@ skip_asm_pad0:
                     }
                 }
                 if (row_size >= 16) {
-                    int32_t conv_out_asm = 0;
                     asm volatile (
-                        "esp.movx.r.xacc.l  %0          \n\t"
-                        : "=r" (conv_out_asm)
+                        "esp.movx.r.xacc.l  x30   \n\t"
+                        "add %0, %0, x30          \n\t"
+                        : "+r" (conv_out)
+                        :
+                        : "x30"
                     );
-                    conv_out += conv_out_asm;
                 }
                 /* add input_offset term */
                 conv_out += filter_sum[out_ch_idx];
@@ -305,6 +309,58 @@ skip_asm_pad0:
                 *out_data++ = (int8_t) conv_out;
             }
         }
+
+        for (int32_t out_x = out_wd - right_pad; out_x < out_wd; out_x++) {
+            const int32_t base_y = stride_ht * out_y;
+            const int32_t base_x = stride_wd * out_x;
+            const int32_t *out_mult_ptr = out_mult;
+            const int32_t *out_shift_ptr = out_shift;
+            const int32_t *bias_ptr = bias;
+            for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
+                int32_t conv_out = 0, filter_y_idx;
+                for (filter_y_idx = 0; filter_y_idx < filter_ht; filter_y_idx++) {
+                    for (int32_t filter_x_idx = 0; filter_x_idx < filter_wd - right_pad; filter_x_idx++) {
+                        const int32_t in_row = base_y + filter_y_idx;
+                        const int32_t in_col = base_x + filter_x_idx;
+
+                        const int8_t *input_ptr = input_data +
+                                        (in_row * input_wd + in_col) * in_channels;
+                        const int8_t *filter_ptr = filter_data +
+                                        out_ch_idx * in_channels * filter_ht * filter_wd +
+                                        (filter_y_idx * filter_wd + filter_x_idx) * in_channels;
+                        int32_t in_ch_idx = 0;
+                        for (; in_ch_idx < in_channels - 3; in_ch_idx += 4) {
+                            conv_out += (*input_ptr++ + input_offset) * *filter_ptr++;
+                            conv_out += (*input_ptr++ + input_offset) * *filter_ptr++;
+                            conv_out += (*input_ptr++ + input_offset) * *filter_ptr++;
+                            conv_out += (*input_ptr++ + input_offset) * *filter_ptr++;
+                        }
+                        for (; in_ch_idx < in_channels; in_ch_idx ++) {
+                            conv_out += (*input_ptr++ + input_offset) * *filter_ptr++;
+                        }
+                    }
+                }
+
+                if (bias) {
+                    conv_out += *bias_ptr++;
+                }
+                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult_ptr++, *out_shift_ptr++);
+                conv_out += out_offset;
+                conv_out = max(conv_out, activation_min);
+                conv_out = min(conv_out, activation_max);
+                *out_data++ = (int8_t) conv_out;
+            }
+        }
+    }
+
+    // Calculate the last row if needed
+    if (bottom_pad) {
+        int in_row = input_dims->height - filter_dims->height + 1;
+        esp_nn_conv_s8_opt(&(data_dims_t){input_dims->width, 2, input_dims->channels, 0},
+                            input_data + in_row * input_dims->width * input_dims->channels,
+                            filter_dims, filter_data, bias,
+                            &(data_dims_t){output_dims->width, 1, output_dims->channels, 0},
+                            out_data, conv_params, quant_data);
     }
 }
 
