@@ -65,7 +65,22 @@ void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size);
 
 #define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 
-#define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_ansi
+void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
+                                 const uint16_t input_wd,
+                                 const uint16_t input_ht,
+                                 int8_t *output,
+                                 const uint16_t output_wd,
+                                 const uint16_t output_ht,
+                                 const uint16_t stride_wd,
+                                 const uint16_t stride_ht,
+                                 const uint16_t filter_wd,
+                                 const uint16_t filter_ht,
+                                 const uint16_t pad_wd,
+                                 const uint16_t pad_ht,
+                                 const int32_t activation_min,
+                                 const int32_t activation_max,
+                                 const uint16_t channels);
+#define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_esp32p4
 void esp_nn_max_pool_s8_esp32p4(const int8_t *input,
                                  const uint16_t input_wd,
                                  const uint16_t input_ht,
