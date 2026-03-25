@@ -130,6 +130,15 @@ void esp_nn_max_pool_s8_esp32p4(const int8_t *input,
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_ansi
 #define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_ansi
 
-#define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_opt
-#define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_opt
-#define esp_nn_softmax_s8 esp_nn_softmax_s8_opt
+int32_t esp_nn_get_softmax_scratch_size_esp32p4(const int32_t width, const int32_t height);
+void esp_nn_set_softmax_scratch_buf_esp32p4(void *buffer);
+void esp_nn_softmax_s8_esp32p4(const int8_t *input_data,
+                                const int32_t height,
+                                const int32_t width,
+                                const int32_t mult,
+                                const int32_t shift,
+                                const int32_t diff_min,
+                                int8_t *output_data);
+#define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_esp32p4
+#define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_esp32p4
+#define esp_nn_softmax_s8 esp_nn_softmax_s8_esp32p4
