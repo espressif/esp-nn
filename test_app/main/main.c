@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -53,27 +53,37 @@ uint32_t profile_opt_end()
     return total_opt;
 }
 
+static void print_profile(const char *kernel)
+{
+    float speedup = (total_c > 0 && total_opt > 0) ? (float)total_c / (float)total_opt : 0.0f;
+    printf("PROFILE: %s, ansi=%"PRIu32", opt=%"PRIu32", speedup=%.2fx\n",
+           kernel, total_c, total_opt, speedup);
+}
+
 void app_main()
 {
     /* s8 tests */
     ESP_LOGI(TAG, "Running s8 tests...");
     esp_nn_add_elementwise_s8_test();
-    printf("add, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("add_s8");
     esp_nn_mul_elementwise_s8_test();
-    printf("mul, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("mul_s8");
     esp_nn_depthwise_conv_s8_test();
+    print_profile("depthwise_conv_s8");
     esp_nn_conv_s8_test();
-
+    print_profile("conv_s8");
     esp_nn_relu6_s8_test();
-    printf("relu, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("relu6_s8");
     esp_nn_avg_pool_s8_test();
-    printf("avg_pool, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("avg_pool_s8");
     esp_nn_max_pool_s8_test();
-    printf("max_pool, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("max_pool_s8");
     esp_nn_fully_connected_s8_test();
+    print_profile("fc_s8");
     esp_nn_fully_connected_per_ch_s8_test();
+    print_profile("fc_per_ch_s8");
     esp_nn_softmax_s8_test();
-    printf("softmax, c %"PRIu32" opt %"PRIu32"\n", total_c, total_opt);
+    print_profile("softmax_s8");
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */

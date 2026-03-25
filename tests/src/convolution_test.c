@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -132,13 +132,13 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
-        case 8: // same as case 7, with large parameters
-            input_wd = 58;
-            input_ht = 58;
+        case 8: // same as case 7, with large parameters (reduced for non-PSRAM boards)
+            input_wd = 28;
+            input_ht = 28;
             filter_ht = 3;
             filter_wd = 3;
             ch_mult = 1;
-            channels = 128;
+            channels = 64;
             pad_wd = 0;
             pad_ht = 0;
             stride_wd = 2;

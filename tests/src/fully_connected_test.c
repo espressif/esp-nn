@@ -238,27 +238,6 @@ void esp_nn_fully_connected_per_ch_s8_test()
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
             printf(ANSI_COLOR_RED"[%3d] failed\n"ANSI_COLOR_RESET, itr);
-#if 0
-            printf("Output: \n");
-            PRINT_ARRAY_HEX(output_opt, out_channels, 1);
-            printf("Expected: \n");
-            PRINT_ARRAY_HEX(output_c, out_channels, 1);
-            printf("Input:\n");
-            PRINT_ARRAY_HEX(input, row_len, 1);
-            printf("Filter data:\n");
-            PRINT_ARRAY_HEX(filter_data, row_len, out_channels);
-
-            printf("Out shift: ");
-            for (int i = 0; i < out_channels; i++) {
-                printf("%d, ", out_shift[i]);
-            }
-
-            printf("\nOut mult: ");
-            for (int i = 0; i < out_channels; i++) {
-                printf("%d, ", out_mult[i]);
-            }
-            printf("\n");
-#endif
             goto fully_connected_per_ch_cleanup;
         }
         printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16"]"ANSI_COLOR_RESET,
