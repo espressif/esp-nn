@@ -127,8 +127,34 @@ void esp_nn_max_pool_s8_esp32p4(const int8_t *input,
                                  const uint16_t channels);
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32p4
 
-#define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_ansi
-#define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_ansi
+void esp_nn_fully_connected_s8_esp32p4(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t out_shift,
+                                        const int32_t out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max);
+void esp_nn_fully_connected_per_ch_s8_esp32p4(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t *out_shift,
+                                        const int32_t *out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max);
+#define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_esp32p4
+#define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_esp32p4
 
 int32_t esp_nn_get_softmax_scratch_size_esp32p4(const int32_t width, const int32_t height);
 void esp_nn_set_softmax_scratch_buf_esp32p4(void *buffer);
