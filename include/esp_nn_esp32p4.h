@@ -42,9 +42,38 @@ void esp_nn_set_conv_scratch_buf_esp32p4(const void *buf);
 
 
 
-#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_ansi
-#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_ansi
 #define esp_nn_mul_broadcast_channel_s8 esp_nn_mul_broadcast_channel_s8_ansi
+
+void esp_nn_add_elementwise_s8_esp32p4(const int8_t *input1_data,
+                                        const int8_t *input2_data,
+                                        const int32_t input1_offset,
+                                        const int32_t input2_offset,
+                                        const int32_t input1_mult,
+                                        const int32_t input2_mult,
+                                        const int32_t input1_shift,
+                                        const int32_t input2_shift,
+                                        const int32_t left_shift,
+                                        int8_t *output,
+                                        const int32_t out_offset,
+                                        const int32_t out_mult,
+                                        const int32_t out_shift,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max,
+                                        const int32_t size);
+#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_esp32p4
+
+void esp_nn_mul_elementwise_s8_esp32p4(const int8_t *input1_data,
+                                        const int8_t *input2_data,
+                                        const int32_t input1_offset,
+                                        const int32_t input2_offset,
+                                        int8_t *output,
+                                        const int32_t out_offset,
+                                        const int32_t out_mult,
+                                        const int32_t out_shift,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max,
+                                        const int32_t size);
+#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_esp32p4
 
 #define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_opt
 

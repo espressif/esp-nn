@@ -54,6 +54,8 @@ endif()
 if(CONFIG_IDF_TARGET_ESP32P4)
     set(p4_srcs
         "src/activation_functions/esp_nn_relu_s8_esp32p4.c"
+        "src/basic_math/esp_nn_add_s8_esp32p4.c"
+        "src/basic_math/esp_nn_mul_s8_esp32p4.c"
         "src/convolution/esp_nn_conv_esp32p4.c"
         "src/pooling/esp_nn_avg_pool_s8_esp32p4.c"
         "src/pooling/esp_nn_max_pool_s8_esp32p4.c")
