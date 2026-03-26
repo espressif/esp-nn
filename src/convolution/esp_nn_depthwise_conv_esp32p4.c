@@ -73,6 +73,20 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
 
     const int32_t ch_16 = channels >> 4;
 
+    /* Set up activation min/max vectors for PIE clamp */
+    {
+        int8_t act_min_val = (int8_t) activation_min;
+        int8_t act_max_val = (int8_t) activation_max;
+        asm volatile (
+            "mv     x30, %0             \n\t"
+            "esp.vldbc.8.ip q4, x30, 0  \n\t"
+            "mv     x30, %1             \n\t"
+            "esp.vldbc.8.ip q5, x30, 0  \n\t"
+            :: "r"(&act_min_val), "r"(&act_max_val)
+            : "x30"
+        );
+    }
+
     /* Pre-compute full filter sums per channel on stack.
      * filter_sum[ch] = sum(filter[fy][fx][ch]) * input_offset for all fy,fx.
      * This is constant for the entire layer - computed once. */
@@ -176,6 +190,7 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     }
                 }
 
+                /* Per-channel requantize using inline fast path */
                 for (int k = 0; k < 16; k++) {
                     int32_t r = result[k];
                     if (bias) r += bias[ch_idx + k];
