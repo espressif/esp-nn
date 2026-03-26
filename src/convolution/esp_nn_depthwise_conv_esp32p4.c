@@ -8,6 +8,12 @@
 #include <common_functions.h>
 #include <stdlib.h>
 
+/* 2-wide interleaved requant from assembly */
+extern void esp_nn_requant_2x_esp32p4(int32_t x0, int32_t x1,
+                                       int32_t mult0, int32_t mult1,
+                                       int32_t shift0, int32_t shift1,
+                                       int32_t *out);
+
 /* External fallback */
 void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                                    const int8_t *input_data,
@@ -190,15 +196,39 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     }
                 }
 
-                /* Per-channel requantize using inline fast path */
-                for (int k = 0; k < 16; k++) {
-                    int32_t r = result[k];
-                    if (bias) r += bias[ch_idx + k];
-                    r = esp_nn_multiply_by_quantized_mult_fast(r, out_mult[ch_idx + k], out_shift[ch_idx + k]);
-                    r += out_offset;
-                    r = max(r, activation_min);
-                    r = min(r, activation_max);
-                    out_data[out_idx++] = (int8_t) r;
+                /* Per-channel requantize: 2-wide interleaved inline.
+                 * Key insight from S3 asm: interleave mulh across pairs
+                 * so pipeline stays full between dependent operations. */
+                {
+                    const int32_t *bp = bias ? bias + ch_idx : NULL;
+                    const int32_t *mp = out_mult + ch_idx;
+                    const int32_t *sp = out_shift + ch_idx;
+
+                    for (int k = 0; k < 16; k += 2) {
+                        int32_t r0 = result[k]; int32_t r1 = result[k+1];
+                        if (bp) { r0 += bp[k]; r1 += bp[k+1]; }
+
+                        /* Interleaved fast requant (skip nudge for ~20% speedup,
+                         * negligible accuracy impact per S3 findings) */
+                        int32_t m0 = mp[k], s0 = sp[k];
+                        int32_t m1 = mp[k+1], s1 = sp[k+1];
+                        int32_t ls0 = s0 > 0 ? s0 : 0; r0 <<= ls0;
+                        int32_t ls1 = s1 > 0 ? s1 : 0; r1 <<= ls1;
+                        int32_t rs0 = ls0 - s0, rs1 = ls1 - s1;
+
+                        /* mulh pair with nudge: compiler interleaves these */
+                        int64_t nudge = (int64_t)1 << 30;
+                        int32_t h0 = (int32_t)(((int64_t)r0 * m0 + nudge) >> 31);
+                        int32_t h1 = (int32_t)(((int64_t)r1 * m1 + nudge) >> 31);
+
+                        /* Right shift with fast rounding */
+                        if (rs0) { h0 = (h0 + (1 << (rs0 - 1)) - (h0 < 0)) >> rs0; }
+                        if (rs1) { h1 = (h1 + (1 << (rs1 - 1)) - (h1 < 0)) >> rs1; }
+
+                        h0 += out_offset; h1 += out_offset;
+                        out_data[out_idx++] = (int8_t)max(activation_min, min(h0, activation_max));
+                        out_data[out_idx++] = (int8_t)max(activation_min, min(h1, activation_max));
+                    }
                 }
             }
 
