@@ -237,6 +237,8 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_esp32s3
 
+int32_t esp_nn_get_hard_swish_scratch_size_esp32s3(void);
+void esp_nn_set_hard_swish_scratch_buf_esp32s3(void *buf);
 void esp_nn_hard_swish_s8_esp32s3(const int8_t *input, int8_t *output,
                                    const int32_t size,
                                    const int16_t input_zero_point,
@@ -245,6 +247,8 @@ void esp_nn_hard_swish_s8_esp32s3(const int8_t *input, int8_t *output,
                                    const int32_t reluish_mult_exp,
                                    const int32_t output_mult_exp,
                                    const int16_t output_zero_point);
+#define esp_nn_get_hard_swish_scratch_size esp_nn_get_hard_swish_scratch_size_esp32s3
+#define esp_nn_set_hard_swish_scratch_buf esp_nn_set_hard_swish_scratch_buf_esp32s3
 #define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_esp32s3
 
 void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input, int8_t *output,

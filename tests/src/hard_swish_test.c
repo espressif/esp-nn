@@ -31,6 +31,16 @@ void esp_nn_hard_swish_s8_test()
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
 
+    /* Set up scratch buffer for LUT-based optimization */
+    int32_t scratch_size = esp_nn_get_hard_swish_scratch_size();
+    void *scratch_buf = NULL;
+    if (scratch_size > 0) {
+        scratch_buf = malloc(scratch_size);
+        if (scratch_buf) {
+            esp_nn_set_hard_swish_scratch_buf(scratch_buf);
+        }
+    }
+
     for (int t = 0; t < num_tests; t++) {
         int size = test_sizes[t];
         int8_t *input_orig = malloc(size + 16);
@@ -79,4 +89,5 @@ void esp_nn_hard_swish_s8_test()
         if (out_c_orig) free(out_c_orig);
         if (out_opt_orig) free(out_opt_orig);
     }
+    if (scratch_buf) free(scratch_buf);
 }
