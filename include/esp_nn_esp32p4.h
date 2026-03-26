@@ -100,15 +100,19 @@ void esp_nn_set_depthwise_conv_scratch_buf_esp32p4(const void *buf);
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_esp32p4
 
 /* Functions not yet optimized for P4 - use ANSI fallback */
-#define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_ansi
+void esp_nn_hard_swish_s8_esp32p4(const int8_t *input, int8_t *output,
+                                   const int32_t size,
+                                   const int16_t input_zero_point,
+                                   const int16_t output_mult_fxp,
+                                   const int16_t reluish_mult_fxp,
+                                   const int32_t reluish_mult_exp,
+                                   const int32_t output_mult_exp,
+                                   const int16_t output_zero_point);
+#define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_esp32p4
 #define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 
 void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size);
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_esp32p4
-
-#define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_ansi
-#define esp_nn_get_hard_swish_scratch_size() 0
-#define esp_nn_set_hard_swish_scratch_buf(buf)
 
 #define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 

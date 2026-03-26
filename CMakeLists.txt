@@ -54,6 +54,7 @@ endif()
 if(CONFIG_IDF_TARGET_ESP32P4)
     set(p4_srcs
         "src/common/esp_nn_multiply_by_quantized_mult_esp32p4.S"
+        "src/activation_functions/esp_nn_hard_swish_s8_esp32p4.c"
         "src/activation_functions/esp_nn_relu_s8_esp32p4.c"
         "src/basic_math/esp_nn_add_s8_esp32p4.c"
         "src/basic_math/esp_nn_mul_s8_esp32p4.c"
