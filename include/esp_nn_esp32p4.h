@@ -75,15 +75,29 @@ void esp_nn_mul_elementwise_s8_esp32p4(const int8_t *input1_data,
                                         const int32_t size);
 #define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_esp32p4
 
-#define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_opt
+void esp_nn_depthwise_conv_s8_esp32p4(const data_dims_t *input_dims,
+                                       const int8_t *input_data,
+                                       const data_dims_t *filter_dims,
+                                       const int8_t *filter_data,
+                                       const int32_t *bias,
+                                       const data_dims_t *output_dims,
+                                       int8_t *out_data,
+                                       const dw_conv_params_t *conv_params,
+                                       const quant_data_t *quant_data);
+int esp_nn_get_depthwise_conv_scratch_size_esp32p4(const data_dims_t *input_dims,
+                                                    const data_dims_t *filter_dims,
+                                                    const data_dims_t *output_dims,
+                                                    const dw_conv_params_t *conv_params);
+void esp_nn_set_depthwise_conv_scratch_buf_esp32p4(const void *buf);
+#define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_esp32p4
 
 #define esp_nn_conv_s8 esp_nn_conv_s8_esp32p4
 
 #define esp_nn_get_conv_scratch_size esp_nn_get_conv_scratch_size_esp32p4
 #define esp_nn_set_conv_scratch_buf esp_nn_set_conv_scratch_buf_esp32p4
 
-#define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_opt
-#define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_opt
+#define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_esp32p4
+#define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_esp32p4
 
 void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size);
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_esp32p4

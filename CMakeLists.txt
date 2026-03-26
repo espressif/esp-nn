@@ -57,6 +57,7 @@ if(CONFIG_IDF_TARGET_ESP32P4)
         "src/basic_math/esp_nn_add_s8_esp32p4.c"
         "src/basic_math/esp_nn_mul_s8_esp32p4.c"
         "src/convolution/esp_nn_conv_esp32p4.c"
+        "src/convolution/esp_nn_depthwise_conv_esp32p4.c"
         "src/fully_connected/esp_nn_fully_connected_s8_esp32p4.c"
         "src/pooling/esp_nn_avg_pool_s8_esp32p4.c"
         "src/pooling/esp_nn_max_pool_s8_esp32p4.c"
