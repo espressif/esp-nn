@@ -75,20 +75,15 @@ void esp_nn_softmax_s8_esp32p4(const int8_t *input_data,
                 );
             }
 
-            /* Reduce q0 to scalar max */
-            /* Extract all 16 bytes and find max scalar */
-            int8_t tmp[16] __attribute__((aligned(16)));
+            /* Horizontal reduce q0 to scalar max using esp.max.s8.a */
+            int32_t max_scalar;
             asm volatile (
-                "mv   x30, %0             \n\t"
-                "esp.vst.128.ip q0, x30, 0 \n\t"
-                :: "r"(tmp) : "x30", "memory"
+                "esp.max.s8.a  q0, %0      \n\t"  /* max_scalar = horizontal max of q0 */
+                : "=r"(max_scalar)
             );
+            max_in_row = (int8_t) max_scalar;
 
-            max_in_row = tmp[0];
-            for (int j = 1; j < 16; j++) {
-                if (tmp[j] > max_in_row) max_in_row = tmp[j];
-            }
-            /* Check remaining elements */
+            /* Check remaining elements (< 16) */
             for (; i < width; i++) {
                 if (in_ptr[i] > max_in_row) max_in_row = in_ptr[i];
             }
