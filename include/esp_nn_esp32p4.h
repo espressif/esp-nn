@@ -109,12 +109,17 @@ void esp_nn_hard_swish_s8_esp32p4(const int8_t *input, int8_t *output,
                                    const int32_t output_mult_exp,
                                    const int16_t output_zero_point);
 #define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_esp32p4
-#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
+void esp_nn_mean_nhwc_s8_esp32p4(const int8_t *input, int8_t *output,
+                                  const int32_t height, const int32_t width,
+                                  const int32_t channels,
+                                  const int32_t input_zero_point,
+                                  const int32_t output_zero_point,
+                                  const int32_t multiplier,
+                                  const int32_t shift);
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_esp32p4
 
 void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size);
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_esp32p4
-
-#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 
 void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
                                  const uint16_t input_wd,
