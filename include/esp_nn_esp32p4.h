@@ -99,6 +99,10 @@ void esp_nn_set_depthwise_conv_scratch_buf_esp32p4(const void *buf);
 #define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_esp32p4
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_esp32p4
 
+/* Functions not yet optimized for P4 - use ANSI fallback */
+#define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_ansi
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
+
 void esp_nn_relu6_s8_esp32p4(int8_t *data, uint16_t size);
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_esp32p4
 
