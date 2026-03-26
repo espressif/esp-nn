@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 /* int8_t ops tests */
@@ -29,6 +21,9 @@ void esp_nn_fully_connected_per_ch_s8_test();
 void esp_nn_relu6_s8_test();
 
 void esp_nn_softmax_s8_test();
+
+void esp_nn_hard_swish_s8_test();
+void esp_nn_mean_nhwc_s8_test();
 
 /* uint8_t ops tests */
 void esp_nn_add_elementwise_u8_test();

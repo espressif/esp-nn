@@ -84,6 +84,10 @@ void app_main()
     print_profile("fc_per_ch_s8");
     esp_nn_softmax_s8_test();
     print_profile("softmax_s8");
+    esp_nn_hard_swish_s8_test();
+    print_profile("hard_swish_s8");
+    esp_nn_mean_nhwc_s8_test();
+    print_profile("mean_nhwc_s8");
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */
