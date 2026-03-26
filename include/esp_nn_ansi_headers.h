@@ -135,6 +135,20 @@ void esp_nn_hard_swish_s8_ansi(const int8_t *input, int8_t *output,
                                 const int32_t output_mult_exp,
                                 const int16_t output_zero_point);
 
+/**
+ * @brief       mean reduction over spatial dims (H,W) for NHWC int8 tensor
+ *
+ * @note        Specialized for 4D [N,H,W,C] → [N,1,1,C] reduction.
+ *              Used by Squeeze-and-Excite in MobileNetV3.
+ */
+void esp_nn_mean_nhwc_s8_ansi(const int8_t *input, int8_t *output,
+                               const int32_t height, const int32_t width,
+                               const int32_t channels,
+                               const int32_t input_zero_point,
+                               const int32_t output_zero_point,
+                               const int32_t multiplier,
+                               const int32_t shift);
+
 /************************** Pooling functions *****************************/
 
 

@@ -247,6 +247,15 @@ void esp_nn_hard_swish_s8_esp32s3(const int8_t *input, int8_t *output,
                                    const int16_t output_zero_point);
 #define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_esp32s3
 
+void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input, int8_t *output,
+                                  const int32_t height, const int32_t width,
+                                  const int32_t channels,
+                                  const int32_t input_zero_point,
+                                  const int32_t output_zero_point,
+                                  const int32_t multiplier,
+                                  const int32_t shift);
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_esp32s3
+
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_esp32s3
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32s3
 

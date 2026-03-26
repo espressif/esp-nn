@@ -29,6 +29,7 @@
 
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_ansi
 #define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_ansi
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_ansi
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_ansi
