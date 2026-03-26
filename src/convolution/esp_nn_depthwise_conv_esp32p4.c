@@ -6,16 +6,7 @@
 
 #include <esp_nn_defs.h>
 #include <common_functions.h>
-
-/**
- * Depthwise convolution for s8 using ESP32-P4 PIE SIMD.
- *
- * For ch_mult=1 and channels >= 16: uses QACC per-lane accumulation.
- *   esp.vmulas.s8.qacc accumulates input[i]*filter[i] per-lane across
- *   the spatial filter window. After the window, extract and requantize.
- *
- * Falls back to generic opt for ch_mult > 1 or channels < 16.
- */
+#include <stdlib.h>
 
 /* External fallback */
 void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
@@ -41,7 +32,10 @@ void esp_nn_set_depthwise_conv_scratch_buf_esp32p4(const void *buf)
     (void) buf;
 }
 
-/* PIE-optimized ch_mult=1, channels>=16 path */
+/* PIE-optimized ch_mult=1, channels>=16 path using QACC per-lane MAC.
+ * Pre-computes filter_sum[ch] = sum of filter[ch] across all filter positions.
+ * For non-edge output positions: result[ch] = QACC_MAC + filter_sum[ch] * input_offset
+ * For edge positions: falls back to scalar with input_offset applied directly. */
 __attribute__ ((noinline))
 static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                                        const int8_t *input_data,
@@ -79,6 +73,24 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
 
     const int32_t ch_16 = channels >> 4;
 
+    /* Pre-compute full filter sums per channel on stack.
+     * filter_sum[ch] = sum(filter[fy][fx][ch]) * input_offset for all fy,fx.
+     * This is constant for the entire layer - computed once. */
+    int32_t filter_sum_buf[256]; /* support up to 256 channels on stack */
+    int32_t *filter_sum = NULL;
+    if (input_offset != 0 && channels <= 256) {
+        filter_sum = filter_sum_buf;
+        for (int ch = 0; ch < channels; ch++) {
+            int32_t s = 0;
+            for (int fy = 0; fy < filter_ht; fy++) {
+                for (int fx = 0; fx < filter_wd; fx++) {
+                    s += filter_data[(fy * filter_wd + fx) * channels + ch];
+                }
+            }
+            filter_sum[ch] = s * input_offset;
+        }
+    }
+
     int out_idx = 0;
     for (int out_y = 0; out_y < out_ht; out_y++) {
         const int16_t base_y = (out_y * stride_ht) - pad_ht;
@@ -93,11 +105,13 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
             int filter_y_end = min(filter_ht, input_ht - base_y);
             int filter_x_end = min(filter_wd, input_wd - base_x);
 
-            /* Process 16 channels at a time using QACC per-lane accumulation */
+            /* Check if this is a non-edge position (full filter window) */
+            int is_full_window = (filter_y_start == 0 && filter_x_start == 0 &&
+                                  filter_y_end == filter_ht && filter_x_end == filter_wd);
+
+            /* Process 16 channels at a time using QACC */
             int ch_idx = 0;
             for (int ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_idx += 16) {
-
-                /* Clear QACC per-lane accumulators */
                 asm volatile ("esp.zero.qacc \n\t");
 
                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
@@ -107,7 +121,6 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                         const int8_t *ip = input_data + (idx_y * input_wd + idx_x) * channels + ch_idx;
                         const int8_t *fp = filter_data + (fy * filter_wd + fx) * channels + ch_idx;
 
-                        /* Per-lane MAC: qacc[i] += input[i] * filter[i] */
                         asm volatile (
                             "mv              x30, %0      \n\t"
                             "mv              x31, %1      \n\t"
@@ -120,7 +133,7 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     }
                 }
 
-                /* Extract 16 per-lane int32 results from QACC */
+                /* Extract 16 per-lane results */
                 int32_t result[16] __attribute__((aligned(16)));
                 asm volatile (
                     "mv                      x30, %0     \n\t"
@@ -132,20 +145,25 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     : "x30", "memory"
                 );
 
-                /* Requantize per channel.
-                 * If input_offset != 0: need to add offset * filter_sum.
-                 * This is pre-computed per output position (same filter window
-                 * for all channels in this block). */
-                if (input_offset != 0) {
-                    /* Pre-compute filter sums for this block's 16 channels */
-                    int32_t fsum[16] = {0};
-                    for (int fy = filter_y_start; fy < filter_y_end; fy++) {
-                        for (int fx = filter_x_start; fx < filter_x_end; fx++) {
-                            const int8_t *fp = filter_data + (fy * filter_wd + fx) * channels + ch_idx;
-                            for (int k = 0; k < 16; k++) fsum[k] += fp[k];
+                /* Add pre-computed offset term + bias + requantize */
+                if (input_offset != 0 && filter_sum) {
+                    if (is_full_window) {
+                        /* Fast: use pre-computed full filter sums */
+                        for (int k = 0; k < 16; k++) {
+                            result[k] += filter_sum[ch_idx + k];
+                        }
+                    } else {
+                        /* Edge: compute partial filter sum for clipped window */
+                        for (int k = 0; k < 16; k++) {
+                            int32_t fsum = 0;
+                            for (int fy = filter_y_start; fy < filter_y_end; fy++) {
+                                for (int fx = filter_x_start; fx < filter_x_end; fx++) {
+                                    fsum += filter_data[(fy * filter_wd + fx) * channels + ch_idx + k];
+                                }
+                            }
+                            result[k] += fsum * input_offset;
                         }
                     }
-                    for (int k = 0; k < 16; k++) result[k] += fsum[k] * input_offset;
                 }
 
                 for (int k = 0; k < 16; k++) {
@@ -159,16 +177,15 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                 }
             }
 
-            /* Remaining channels (< 16) - scalar */
+            /* Remaining channels < 16 */
             for (; ch_idx < channels; ch_idx++) {
                 int32_t result = 0;
                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
                     const int32_t idx_y = base_y + fy;
                     for (int fx = filter_x_start; fx < filter_x_end; fx++) {
                         const int32_t idx_x = base_x + fx;
-                        int32_t input_index = (idx_y * input_wd + idx_x) * channels + ch_idx;
-                        int32_t filter_index = (fy * filter_wd + fx) * channels + ch_idx;
-                        result += (input_data[input_index] + input_offset) * filter_data[filter_index];
+                        result += (input_data[(idx_y * input_wd + idx_x) * channels + ch_idx] + input_offset)
+                                  * filter_data[(fy * filter_wd + fx) * channels + ch_idx];
                     }
                 }
                 if (bias) result += bias[ch_idx];
@@ -195,15 +212,13 @@ void esp_nn_depthwise_conv_s8_esp32p4(const data_dims_t *input_dims,
     const uint16_t ch_mult = conv_params->ch_mult;
     const uint16_t channels = input_dims->channels;
 
-    /* QACC per-lane path ready but input_offset handling overhead makes it
-     * slower than generic opt for typical cases. Enable when input_offset == 0
-     * (common in post-training quantized models) or when we pre-compute
-     * filter sums once per layer instead of per output position. */
-    if (ch_mult == 1 && channels >= 16 && conv_params->in_offset == 0) {
+    if (ch_mult == 1 && channels >= 16) {
         depthwise_conv_s8_ch1_pie(input_dims, input_data, filter_dims, filter_data,
                                    bias, output_dims, out_data, conv_params, quant_data);
         return;
     }
+
+    /* Fall back to generic optimized */
     esp_nn_depthwise_conv_s8_opt(input_dims, input_data, filter_dims, filter_data,
                                   bias, output_dims, out_data, conv_params, quant_data);
 }
