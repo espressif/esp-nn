@@ -93,43 +93,61 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
             int filter_y_end = min(filter_ht, input_ht - base_y);
             int filter_x_end = min(filter_wd, input_wd - base_x);
 
-            /* Process 16 channels at a time using per-lane QACC */
+            /* Process 16 channels at a time using QACC per-lane accumulation */
             int ch_idx = 0;
             for (int ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_idx += 16) {
-                /* Accumulate: for each filter position, load 16 input + 16 filter
-                 * channels and MAC per-lane into scalar accumulators */
-                int32_t result[16] = {0};
+
+                /* Clear QACC per-lane accumulators */
+                asm volatile ("esp.zero.qacc \n\t");
 
                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
                     const int32_t idx_y = base_y + fy;
                     for (int fx = filter_x_start; fx < filter_x_end; fx++) {
                         const int32_t idx_x = base_x + fx;
-                        int32_t in_base = (idx_y * input_wd + idx_x) * channels + ch_idx;
-                        int32_t flt_base = (fy * filter_wd + fx) * channels + ch_idx;
-                        const int8_t *ip = input_data + in_base;
-                        const int8_t *fp = filter_data + flt_base;
+                        const int8_t *ip = input_data + (idx_y * input_wd + idx_x) * channels + ch_idx;
+                        const int8_t *fp = filter_data + (fy * filter_wd + fx) * channels + ch_idx;
 
-                        /* Unrolled 16-channel accumulation with input_offset */
-                        result[0]  += (ip[0]  + input_offset) * fp[0];
-                        result[1]  += (ip[1]  + input_offset) * fp[1];
-                        result[2]  += (ip[2]  + input_offset) * fp[2];
-                        result[3]  += (ip[3]  + input_offset) * fp[3];
-                        result[4]  += (ip[4]  + input_offset) * fp[4];
-                        result[5]  += (ip[5]  + input_offset) * fp[5];
-                        result[6]  += (ip[6]  + input_offset) * fp[6];
-                        result[7]  += (ip[7]  + input_offset) * fp[7];
-                        result[8]  += (ip[8]  + input_offset) * fp[8];
-                        result[9]  += (ip[9]  + input_offset) * fp[9];
-                        result[10] += (ip[10] + input_offset) * fp[10];
-                        result[11] += (ip[11] + input_offset) * fp[11];
-                        result[12] += (ip[12] + input_offset) * fp[12];
-                        result[13] += (ip[13] + input_offset) * fp[13];
-                        result[14] += (ip[14] + input_offset) * fp[14];
-                        result[15] += (ip[15] + input_offset) * fp[15];
+                        /* Per-lane MAC: qacc[i] += input[i] * filter[i] */
+                        asm volatile (
+                            "mv              x30, %0      \n\t"
+                            "mv              x31, %1      \n\t"
+                            "esp.vld.128.ip  q0, x30, 0   \n\t"
+                            "esp.vld.128.ip  q1, x31, 0   \n\t"
+                            "esp.vmulas.s8.qacc q0, q1    \n\t"
+                            :: "r"(ip), "r"(fp)
+                            : "x30", "x31"
+                        );
                     }
                 }
 
-                /* Per-channel requantization */
+                /* Extract 16 per-lane int32 results from QACC */
+                int32_t result[16] __attribute__((aligned(16)));
+                asm volatile (
+                    "mv                      x30, %0     \n\t"
+                    "esp.st.qacc.l.l.128.ip  x30, 16     \n\t"
+                    "esp.st.qacc.l.h.128.ip  x30, 16     \n\t"
+                    "esp.st.qacc.h.l.128.ip  x30, 16     \n\t"
+                    "esp.st.qacc.h.h.128.ip  x30, 0      \n\t"
+                    :: "r"(result)
+                    : "x30", "memory"
+                );
+
+                /* Requantize per channel.
+                 * If input_offset != 0: need to add offset * filter_sum.
+                 * This is pre-computed per output position (same filter window
+                 * for all channels in this block). */
+                if (input_offset != 0) {
+                    /* Pre-compute filter sums for this block's 16 channels */
+                    int32_t fsum[16] = {0};
+                    for (int fy = filter_y_start; fy < filter_y_end; fy++) {
+                        for (int fx = filter_x_start; fx < filter_x_end; fx++) {
+                            const int8_t *fp = filter_data + (fy * filter_wd + fx) * channels + ch_idx;
+                            for (int k = 0; k < 16; k++) fsum[k] += fp[k];
+                        }
+                    }
+                    for (int k = 0; k < 16; k++) result[k] += fsum[k] * input_offset;
+                }
+
                 for (int k = 0; k < 16; k++) {
                     int32_t r = result[k];
                     if (bias) r += bias[ch_idx + k];
@@ -177,10 +195,15 @@ void esp_nn_depthwise_conv_s8_esp32p4(const data_dims_t *input_dims,
     const uint16_t ch_mult = conv_params->ch_mult;
     const uint16_t channels = input_dims->channels;
 
-    /* TODO: Use QACC per-lane MAC when srcmb extraction is understood.
-     * For now, fall back to generic optimized which does 4x unrolling. */
-    (void) ch_mult;
-    (void) channels;
+    /* QACC per-lane path ready but input_offset handling overhead makes it
+     * slower than generic opt for typical cases. Enable when input_offset == 0
+     * (common in post-training quantized models) or when we pre-compute
+     * filter sums once per layer instead of per output position. */
+    if (ch_mult == 1 && channels >= 16 && conv_params->in_offset == 0) {
+        depthwise_conv_s8_ch1_pie(input_dims, input_data, filter_dims, filter_data,
+                                   bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
     esp_nn_depthwise_conv_s8_opt(input_dims, input_data, filter_dims, filter_data,
                                   bias, output_dims, out_data, conv_params, quant_data);
 }
