@@ -69,20 +69,26 @@ void esp_nn_avg_pool_s8_esp32p4(const int8_t *input,
                 /* Clear per-lane accumulators */
                 asm volatile ("esp.zero.qacc \n\t");
 
+                /* Accumulate via QACC with stride-based fx loop */
                 for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
                     int32_t in_y = base_y + fy;
-                    for (int32_t fx = filter_x_start; fx < filter_x_end; fx++) {
-                        int32_t in_x = base_x + fx;
-                        const int8_t *in_ptr = input + (in_y * input_wd + in_x) * channels + ch_offset;
+                    const int8_t *row_ptr = input + (in_y * input_wd + base_x + filter_x_start) * channels + ch_offset;
+                    int32_t fx_count = filter_x_end - filter_x_start;
 
-                        /* qacc[i] += input[i] * 1 for i in 0..15 */
-                        asm volatile (
-                            "mv              x30, %0      \n\t"
-                            "esp.vld.128.ip  q0, x30, 0   \n\t"
-                            "esp.vmulas.s8.qacc q0, q7    \n\t"
-                            :: "r"(in_ptr) : "x30"
-                        );
-                    }
+                    asm volatile (
+                        "mv     x30, %[ptr]              \n\t"
+                        "mv     s7,  %[cnt]              \n\t"
+                        "1:                              \n\t"
+                        "esp.vld.128.ip  q0, x30, 0      \n\t"
+                        "esp.vmulas.s8.qacc q0, q7       \n\t"
+                        "add    x30, x30, %[stride]      \n\t"
+                        "addi   s7, s7, -1               \n\t"
+                        "bnez   s7, 1b                   \n\t"
+                        :
+                        : [ptr] "r"(row_ptr), [cnt] "r"(fx_count),
+                          [stride] "r"((int32_t)channels)
+                        : "x30", "s7"
+                    );
                 }
 
                 /* Extract 16 per-lane int32 sums from QACC:

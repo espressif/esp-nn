@@ -114,23 +114,33 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
             for (int ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_idx += 16) {
                 asm volatile ("esp.zero.qacc \n\t");
 
+                /* Accumulate across filter window using QACC per-lane MAC.
+                 * Minimize overhead: pre-compute row pointers, use stride for fx. */
+                const int32_t ch_stride = channels;
                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
                     const int32_t idx_y = base_y + fy;
-                    for (int fx = filter_x_start; fx < filter_x_end; fx++) {
-                        const int32_t idx_x = base_x + fx;
-                        const int8_t *ip = input_data + (idx_y * input_wd + idx_x) * channels + ch_idx;
-                        const int8_t *fp = filter_data + (fy * filter_wd + fx) * channels + ch_idx;
+                    const int8_t *ip_row = input_data + (idx_y * input_wd + base_x + filter_x_start) * channels + ch_idx;
+                    const int8_t *fp_row = filter_data + (fy * filter_wd + filter_x_start) * channels + ch_idx;
+                    int fx_count = filter_x_end - filter_x_start;
 
-                        asm volatile (
-                            "mv              x30, %0      \n\t"
-                            "mv              x31, %1      \n\t"
-                            "esp.vld.128.ip  q0, x30, 0   \n\t"
-                            "esp.vld.128.ip  q1, x31, 0   \n\t"
-                            "esp.vmulas.s8.qacc q0, q1    \n\t"
-                            :: "r"(ip), "r"(fp)
-                            : "x30", "x31"
-                        );
-                    }
+                    /* Use register-based pointer advance for inner fx loop */
+                    asm volatile (
+                        "mv     x30, %[ip]               \n\t"
+                        "mv     x31, %[fp]               \n\t"
+                        "mv     s7,  %[cnt]              \n\t"
+                        "1:                              \n\t"
+                        "esp.vld.128.ip  q0, x30, 0      \n\t"
+                        "esp.vld.128.ip  q1, x31, 0      \n\t"
+                        "esp.vmulas.s8.qacc q0, q1       \n\t"
+                        "add    x30, x30, %[stride]      \n\t"
+                        "add    x31, x31, %[stride]      \n\t"
+                        "addi   s7, s7, -1               \n\t"
+                        "bnez   s7, 1b                   \n\t"
+                        :
+                        : [ip] "r"(ip_row), [fp] "r"(fp_row),
+                          [cnt] "r"(fx_count), [stride] "r"(ch_stride)
+                        : "x30", "x31", "s7"
+                    );
                 }
 
                 /* Extract 16 per-lane results */

@@ -72,21 +72,27 @@ void esp_nn_max_pool_s8_esp32p4(const int8_t *input,
                 /* Initialize running max to INT8_MIN (copy q6 -> q0) */
                 asm volatile ("esp.vmax.s8 q0, q6, q6 \n\t");
 
+                /* Accumulate max across filter window.
+                 * For fx loop: input channels are at stride=channels apart. */
                 for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
-                    for (int32_t fx = filter_x_start; fx < filter_x_end; fx++) {
-                        int32_t in_y = base_y + fy;
-                        int32_t in_x = base_x + fx;
-                        const int8_t *in_ptr = input + (in_y * input_wd + in_x) * channels + ch_offset;
+                    int32_t in_y = base_y + fy;
+                    const int8_t *row_ptr = input + (in_y * input_wd + base_x + filter_x_start) * channels + ch_offset;
+                    int32_t fx_count = filter_x_end - filter_x_start;
 
-                        asm volatile (
-                            "mv              x30, %0     \n\t"
-                            "esp.vld.128.ip  q1, x30, 0  \n\t"  /* load 16 channels */
-                            "esp.vmax.s8     q0, q0, q1  \n\t"  /* running max */
-                            :
-                            : "r"(in_ptr)
-                            : "x30"
-                        );
-                    }
+                    asm volatile (
+                        "mv     x30, %[ptr]              \n\t"
+                        "mv     s7,  %[cnt]              \n\t"
+                        "1:                              \n\t"
+                        "esp.vld.128.ip  q1, x30, 0      \n\t"
+                        "esp.vmax.s8     q0, q0, q1      \n\t"
+                        "add    x30, x30, %[stride]      \n\t"
+                        "addi   s7, s7, -1               \n\t"
+                        "bnez   s7, 1b                   \n\t"
+                        :
+                        : [ptr] "r"(row_ptr), [cnt] "r"(fx_count),
+                          [stride] "r"((int32_t)channels)
+                        : "x30", "s7"
+                    );
                 }
 
                 /* Apply activation: max(act_min, min(act_max, result)) and store */

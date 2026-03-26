@@ -55,36 +55,34 @@ void esp_nn_softmax_s8_esp32p4(const int8_t *input_data,
     int8_t *out_ptr = output_data;
 
     for (int row_idx = 0; row_idx < height; row_idx++) {
-        /* Phase 1: Find max in row using PIE vectorization */
+        /* Phase 1: Find max in row using PIE vectorization.
+         * Use auto-incrementing loads to avoid redundant mv per iteration. */
         int8_t max_in_row;
         if (width >= 16) {
-            /* Load first 16 elements as running max */
-            asm volatile (
-                "mv   x30, %0           \n\t"
-                "esp.vld.128.ip q0, x30, 0 \n\t"
-                :: "r"(in_ptr) : "x30"
-            );
+            int32_t vec_count = (width >> 4);  /* number of 16-element groups */
+            int32_t vec_processed = vec_count << 4;
 
-            int32_t i = 16;
-            for (; i <= width - 16; i += 16) {
-                asm volatile (
-                    "mv   x30, %0            \n\t"
-                    "esp.vld.128.ip q1, x30, 0 \n\t"
-                    "esp.vmax.s8    q0, q0, q1 \n\t"
-                    :: "r"(in_ptr + i) : "x30"
-                );
-            }
-
-            /* Horizontal reduce q0 to scalar max using esp.max.s8.a */
             int32_t max_scalar;
             asm volatile (
-                "esp.max.s8.a  q0, %0      \n\t"  /* max_scalar = horizontal max of q0 */
-                : "=r"(max_scalar)
+                "mv     x30, %[ptr]              \n\t"
+                "esp.vld.128.ip q0, x30, 16      \n\t"  /* load first 16, advance */
+                "addi   %[cnt], %[cnt], -1       \n\t"  /* one group already loaded */
+                "beqz   %[cnt], 2f               \n\t"
+                "1:                              \n\t"
+                "esp.vld.128.ip q1, x30, 16      \n\t"  /* load next 16, advance */
+                "esp.vmax.s8    q0, q0, q1       \n\t"  /* running max */
+                "addi   %[cnt], %[cnt], -1       \n\t"
+                "bnez   %[cnt], 1b               \n\t"
+                "2:                              \n\t"
+                "esp.max.s8.a   q0, %[max]       \n\t"  /* horizontal reduce */
+                : [cnt] "+r"(vec_count), [max] "=r"(max_scalar)
+                : [ptr] "r"(in_ptr)
+                : "x30"
             );
             max_in_row = (int8_t) max_scalar;
 
             /* Check remaining elements (< 16) */
-            for (; i < width; i++) {
+            for (int32_t i = vec_processed; i < width; i++) {
                 if (in_ptr[i] > max_in_row) max_in_row = in_ptr[i];
             }
         } else {
