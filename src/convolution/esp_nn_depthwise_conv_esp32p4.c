@@ -93,21 +93,26 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
         );
     }
 
-    /* Pre-compute full filter sums per channel on stack.
-     * filter_sum[ch] = sum(filter[fy][fx][ch]) * input_offset for all fy,fx.
-     * This is constant for the entire layer - computed once. */
-    int32_t filter_sum_buf[256]; /* support up to 256 channels on stack */
-    int32_t *filter_sum = NULL;
-    if (input_offset != 0 && channels <= 256) {
-        filter_sum = filter_sum_buf;
+    /* Pre-compute combined offset: filter_sum * input_offset + bias per channel.
+     * This fuses two additions per channel into one pre-computed value.
+     * Constant for the entire layer - computed once. */
+    int32_t combined_offset_buf[256]; /* support up to 256 channels on stack */
+    int32_t *combined_offset = NULL;
+    int32_t *filter_sum = NULL; /* for edge positions that need partial filter_sum */
+    if (channels <= 256) {
+        combined_offset = combined_offset_buf;
+        filter_sum = combined_offset; /* reuse buffer for filter_sum when needed */
         for (int ch = 0; ch < channels; ch++) {
             int32_t s = 0;
-            for (int fy = 0; fy < filter_ht; fy++) {
-                for (int fx = 0; fx < filter_wd; fx++) {
-                    s += filter_data[(fy * filter_wd + fx) * channels + ch];
+            if (input_offset != 0) {
+                for (int fy = 0; fy < filter_ht; fy++) {
+                    for (int fx = 0; fx < filter_wd; fx++) {
+                        s += filter_data[(fy * filter_wd + fx) * channels + ch];
+                    }
                 }
+                s *= input_offset;
             }
-            filter_sum[ch] = s * input_offset;
+            combined_offset[ch] = s + (bias ? bias[ch] : 0);
         }
     }
 
@@ -129,84 +134,86 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
             int is_full_window = (filter_y_start == 0 && filter_x_start == 0 &&
                                   filter_y_end == filter_ht && filter_x_end == filter_wd);
 
-            /* Process 16 channels at a time using QACC */
+            /* Process 16 channels at a time using QACC.
+             * Inline helper macro for QACC MAC across filter window. */
+            #define QACC_MAC_WINDOW(ch_off) do { \
+                asm volatile ("esp.zero.qacc \n\t"); \
+                for (int _fy = filter_y_start; _fy < filter_y_end; _fy++) { \
+                    const int32_t _iy = base_y + _fy; \
+                    const int8_t *_ip = input_data + (_iy * input_wd + base_x + filter_x_start) * channels + (ch_off); \
+                    const int8_t *_fp = filter_data + (_fy * filter_wd + filter_x_start) * channels + (ch_off); \
+                    int _fc = filter_x_end - filter_x_start; \
+                    asm volatile ( \
+                        "mv     x30, %[ip]               \n\t" \
+                        "mv     x31, %[fp]               \n\t" \
+                        "mv     s7,  %[cnt]              \n\t" \
+                        "1:                              \n\t" \
+                        "esp.vld.128.ip  q0, x30, 0      \n\t" \
+                        "esp.vld.128.ip  q1, x31, 0      \n\t" \
+                        "esp.vmulas.s8.qacc q0, q1       \n\t" \
+                        "add    x30, x30, %[stride]      \n\t" \
+                        "add    x31, x31, %[stride]      \n\t" \
+                        "addi   s7, s7, -1               \n\t" \
+                        "bnez   s7, 1b                   \n\t" \
+                        : \
+                        : [ip] "r"(_ip), [fp] "r"(_fp), \
+                          [cnt] "r"(_fc), [stride] "r"((int32_t)channels) \
+                        : "x30", "x31", "s7" \
+                    ); \
+                } \
+            } while(0)
+
+            #define QACC_EXTRACT(dst) do { \
+                asm volatile ( \
+                    "mv                      x30, %0     \n\t" \
+                    "esp.st.qacc.l.l.128.ip  x30, 16     \n\t" \
+                    "esp.st.qacc.l.h.128.ip  x30, 16     \n\t" \
+                    "esp.st.qacc.h.l.128.ip  x30, 16     \n\t" \
+                    "esp.st.qacc.h.h.128.ip  x30, 0      \n\t" \
+                    :: "r"(dst) \
+                    : "x30", "memory" \
+                ); \
+            } while(0)
+
             int ch_idx = 0;
             for (int ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_idx += 16) {
-                asm volatile ("esp.zero.qacc \n\t");
-
-                /* Accumulate across filter window using QACC per-lane MAC.
-                 * Minimize overhead: pre-compute row pointers, use stride for fx. */
-                const int32_t ch_stride = channels;
-                for (int fy = filter_y_start; fy < filter_y_end; fy++) {
-                    const int32_t idx_y = base_y + fy;
-                    const int8_t *ip_row = input_data + (idx_y * input_wd + base_x + filter_x_start) * channels + ch_idx;
-                    const int8_t *fp_row = filter_data + (fy * filter_wd + filter_x_start) * channels + ch_idx;
-                    int fx_count = filter_x_end - filter_x_start;
-
-                    /* Use register-based pointer advance for inner fx loop */
-                    asm volatile (
-                        "mv     x30, %[ip]               \n\t"
-                        "mv     x31, %[fp]               \n\t"
-                        "mv     s7,  %[cnt]              \n\t"
-                        "1:                              \n\t"
-                        "esp.vld.128.ip  q0, x30, 0      \n\t"
-                        "esp.vld.128.ip  q1, x31, 0      \n\t"
-                        "esp.vmulas.s8.qacc q0, q1       \n\t"
-                        "add    x30, x30, %[stride]      \n\t"
-                        "add    x31, x31, %[stride]      \n\t"
-                        "addi   s7, s7, -1               \n\t"
-                        "bnez   s7, 1b                   \n\t"
-                        :
-                        : [ip] "r"(ip_row), [fp] "r"(fp_row),
-                          [cnt] "r"(fx_count), [stride] "r"(ch_stride)
-                        : "x30", "x31", "s7"
-                    );
-                }
+                QACC_MAC_WINDOW(ch_idx);
 
                 /* Extract 16 per-lane results */
                 int32_t result[16] __attribute__((aligned(16)));
-                asm volatile (
-                    "mv                      x30, %0     \n\t"
-                    "esp.st.qacc.l.l.128.ip  x30, 16     \n\t"
-                    "esp.st.qacc.l.h.128.ip  x30, 16     \n\t"
-                    "esp.st.qacc.h.l.128.ip  x30, 16     \n\t"
-                    "esp.st.qacc.h.h.128.ip  x30, 0      \n\t"
-                    :: "r"(result)
-                    : "x30", "memory"
-                );
+                QACC_EXTRACT(result);
 
-                /* Add pre-computed offset term + bias + requantize */
-                if (input_offset != 0 && filter_sum) {
+                /* Add fused offset (filter_sum * input_offset + bias) + requantize */
+                if (combined_offset) {
                     if (is_full_window) {
-                        /* Fast: use pre-computed full filter sums */
+                        /* Fast: use pre-computed combined offset (fused filter_sum + bias) */
                         for (int k = 0; k < 16; k++) {
-                            result[k] += filter_sum[ch_idx + k];
+                            result[k] += combined_offset[ch_idx + k];
                         }
                     } else {
-                        /* Edge: compute partial filter sum for clipped window */
+                        /* Edge: compute partial filter sum + add bias */
                         for (int k = 0; k < 16; k++) {
                             int32_t fsum = 0;
-                            for (int fy = filter_y_start; fy < filter_y_end; fy++) {
-                                for (int fx = filter_x_start; fx < filter_x_end; fx++) {
-                                    fsum += filter_data[(fy * filter_wd + fx) * channels + ch_idx + k];
+                            if (input_offset != 0) {
+                                for (int fy = filter_y_start; fy < filter_y_end; fy++) {
+                                    for (int fx = filter_x_start; fx < filter_x_end; fx++) {
+                                        fsum += filter_data[(fy * filter_wd + fx) * channels + ch_idx + k];
+                                    }
                                 }
+                                fsum *= input_offset;
                             }
-                            result[k] += fsum * input_offset;
+                            result[k] += fsum + (bias ? bias[ch_idx + k] : 0);
                         }
                     }
                 }
 
-                /* Per-channel requantize: 2-wide interleaved inline.
-                 * Key insight from S3 asm: interleave mulh across pairs
-                 * so pipeline stays full between dependent operations. */
+                /* Per-channel requantize: 2-wide interleaved inline */
                 {
-                    const int32_t *bp = bias ? bias + ch_idx : NULL;
                     const int32_t *mp = out_mult + ch_idx;
                     const int32_t *sp = out_shift + ch_idx;
 
                     for (int k = 0; k < 16; k += 2) {
                         int32_t r0 = result[k]; int32_t r1 = result[k+1];
-                        if (bp) { r0 += bp[k]; r1 += bp[k+1]; }
 
                         /* Interleaved fast requant (skip nudge for ~20% speedup,
                          * negligible accuracy impact per S3 findings) */
