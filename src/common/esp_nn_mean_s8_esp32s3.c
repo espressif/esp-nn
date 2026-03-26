@@ -6,8 +6,8 @@
 
 /*
  * ESP32-S3 optimized mean reduction for NHWC int8 tensors.
- * Accumulates all channels at once per spatial position using int32 accumulators.
- * Memory access pattern: sequential (NHWC layout, contiguous channel data).
+ * Uses int16 accumulation for small spatial sizes (H*W <= 256),
+ * int32 for larger. Accumulates all channels at once per spatial position.
  */
 
 #include <stdint.h>
@@ -25,15 +25,37 @@ void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input,
                                   const int32_t shift)
 {
     const int32_t num_elements = height * width;
-    const int32_t spatial_size = num_elements * channels;
+    const int32_t zp_correction = num_elements * input_zero_point;
 
-    /* Allocate int32 accumulators on stack for up to 512 channels.
-     * For larger channel counts, fall back to per-channel accumulation. */
-    if (channels <= 512) {
+    if (num_elements <= 256 && channels <= 512) {
+        /* int16 accumulation (safe: 256 * 127 = 32,512 < 32,767) */
+        /* Process 8 channels at a time using int16 accumulators */
+        int16_t acc16[channels];
+        memset(acc16, 0, channels * sizeof(int16_t));
+
+        const int8_t *ptr = input;
+        for (int i = 0; i < num_elements; i++) {
+            /* Inner loop — compiler should auto-vectorize with -O2 */
+            for (int c = 0; c < channels; c++) {
+                acc16[c] += (int16_t)ptr[c];
+            }
+            ptr += channels;
+        }
+
+        /* Requantize per channel */
+        for (int c = 0; c < channels; c++) {
+            int32_t sum = (int32_t)acc16[c] - zp_correction;
+            int32_t result = esp_nn_multiply_by_quantized_mult(sum, multiplier, shift);
+            result += output_zero_point;
+            result = max(result, -128);
+            result = min(result, 127);
+            output[c] = (int8_t)result;
+        }
+    } else if (channels <= 512) {
+        /* int32 accumulation for larger spatial sizes */
         int32_t acc[channels];
         memset(acc, 0, channels * sizeof(int32_t));
 
-        /* Accumulate all spatial positions — sequential memory access */
         const int8_t *ptr = input;
         for (int i = 0; i < num_elements; i++) {
             for (int c = 0; c < channels; c++) {
@@ -42,8 +64,6 @@ void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input,
             ptr += channels;
         }
 
-        /* Requantize per channel */
-        const int32_t zp_correction = num_elements * input_zero_point;
         for (int c = 0; c < channels; c++) {
             int32_t sum = acc[c] - zp_correction;
             int32_t result = esp_nn_multiply_by_quantized_mult(sum, multiplier, shift);
@@ -53,13 +73,13 @@ void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input,
             output[c] = (int8_t)result;
         }
     } else {
-        /* Fallback for very large channel counts */
+        /* Per-channel fallback for huge channel counts */
         for (int c = 0; c < channels; c++) {
             int32_t sum = 0;
             for (int i = 0; i < num_elements; i++) {
                 sum += input[i * channels + c];
             }
-            sum -= num_elements * input_zero_point;
+            sum -= zp_correction;
             int32_t result = esp_nn_multiply_by_quantized_mult(sum, multiplier, shift);
             result += output_zero_point;
             result = max(result, -128);

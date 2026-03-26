@@ -61,6 +61,8 @@ void esp_nn_set_conv_scratch_buf_esp32p4(const void *buf);
 #define esp_nn_get_hard_swish_scratch_size() 0
 #define esp_nn_set_hard_swish_scratch_buf(buf)
 
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
+
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_ansi
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_ansi
 
