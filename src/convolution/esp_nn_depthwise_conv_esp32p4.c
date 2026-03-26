@@ -216,14 +216,9 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                         int32_t ls1 = s1 > 0 ? s1 : 0; r1 <<= ls1;
                         int32_t rs0 = ls0 - s0, rs1 = ls1 - s1;
 
-                        /* mulh pair with nudge: compiler interleaves these */
-                        int64_t nudge = (int64_t)1 << 30;
-                        int32_t h0 = (int32_t)(((int64_t)r0 * m0 + nudge) >> 31);
-                        int32_t h1 = (int32_t)(((int64_t)r1 * m1 + nudge) >> 31);
-
-                        /* Right shift with fast rounding */
-                        if (rs0) { h0 = (h0 + (1 << (rs0 - 1)) - (h0 < 0)) >> rs0; }
-                        if (rs1) { h1 = (h1 + (1 << (rs1 - 1)) - (h1 < 0)) >> rs1; }
+                        /* 2-wide interleaved requant via inline asm macro */
+                        int32_t h0, h1;
+                        ESP_NN_REQUANT_2X(r0, r1, m0, m1, s0, s1, h0, h1);
 
                         h0 += out_offset; h1 += out_offset;
                         out_data[out_idx++] = (int8_t)max(activation_min, min(h0, activation_max));
