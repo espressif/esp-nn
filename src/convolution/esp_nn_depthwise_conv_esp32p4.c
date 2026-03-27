@@ -8,11 +8,8 @@
 #include <common_functions.h>
 #include <stdlib.h>
 
-/* 2-wide interleaved requant from assembly */
-extern void esp_nn_requant_2x_esp32p4(int32_t x0, int32_t x1,
-                                       int32_t mult0, int32_t mult1,
-                                       int32_t shift0, int32_t shift1,
-                                       int32_t *out);
+/* Note: esp_nn_requant_2x_esp32p4.S exists but inline ESP_NN_REQUANT_2X macro
+ * from common_functions.h is used instead (avoids function call overhead). */
 
 /* External fallback */
 void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
@@ -98,10 +95,8 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
      * Constant for the entire layer - computed once. */
     int32_t combined_offset_buf[256]; /* support up to 256 channels on stack */
     int32_t *combined_offset = NULL;
-    int32_t *filter_sum = NULL; /* for edge positions that need partial filter_sum */
     if (channels <= 256) {
         combined_offset = combined_offset_buf;
-        filter_sum = combined_offset; /* reuse buffer for filter_sum when needed */
         for (int ch = 0; ch < channels; ch++) {
             int32_t s = 0;
             if (input_offset != 0) {
@@ -215,15 +210,11 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     for (int k = 0; k < 16; k += 2) {
                         int32_t r0 = result[k]; int32_t r1 = result[k+1];
 
-                        /* Interleaved fast requant (skip nudge for ~20% speedup,
-                         * negligible accuracy impact per S3 findings) */
                         int32_t m0 = mp[k], s0 = sp[k];
                         int32_t m1 = mp[k+1], s1 = sp[k+1];
-                        int32_t ls0 = s0 > 0 ? s0 : 0; r0 <<= ls0;
-                        int32_t ls1 = s1 > 0 ? s1 : 0; r1 <<= ls1;
-                        int32_t rs0 = ls0 - s0, rs1 = ls1 - s1;
 
-                        /* 2-wide interleaved requant via inline asm macro */
+                        /* 2-wide interleaved requant via inline asm macro.
+                         * Macro handles left_shift internally - do NOT pre-shift. */
                         int32_t h0, h1;
                         ESP_NN_REQUANT_2X(r0, r1, m0, m1, s0, s1, h0, h1);
 

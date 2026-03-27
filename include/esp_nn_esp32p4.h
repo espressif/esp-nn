@@ -109,6 +109,9 @@ void esp_nn_hard_swish_s8_esp32p4(const int8_t *input, int8_t *output,
                                    const int32_t output_mult_exp,
                                    const int16_t output_zero_point);
 #define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_esp32p4
+#define esp_nn_get_hard_swish_scratch_size() 0
+#define esp_nn_set_hard_swish_scratch_buf(buf)
+
 void esp_nn_mean_nhwc_s8_esp32p4(const int8_t *input, int8_t *output,
                                   const int32_t height, const int32_t width,
                                   const int32_t channels,

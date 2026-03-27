@@ -145,6 +145,31 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
     return esp_nn_div_by_power_of_two(result, right_shift);
 }
 
+#if CONFIG_IDF_TARGET_ESP32P4
+/** PIE enable macro - call once before using any esp.* instructions */
+#define ESP_NN_PIE_ENABLE() do { \
+    asm volatile ( \
+        "csrsi  0x7f2, 0b01        \n\t" \
+        "li     x29, 0b10          \n\t" \
+        "esp.movx.w.cfg x29        \n\t" \
+        ::: "x29" \
+    ); \
+} while(0)
+
+/** Extract 16 int32 per-lane results from QACC into array */
+#define ESP_NN_QACC_EXTRACT_S32(dst) do { \
+    asm volatile ( \
+        "mv                      x30, %0     \n\t" \
+        "esp.st.qacc.l.l.128.ip  x30, 16     \n\t" \
+        "esp.st.qacc.l.h.128.ip  x30, 16     \n\t" \
+        "esp.st.qacc.h.l.128.ip  x30, 16     \n\t" \
+        "esp.st.qacc.h.h.128.ip  x30, 0      \n\t" \
+        :: "r"(dst) \
+        : "x30", "memory" \
+    ); \
+} while(0)
+#endif /* CONFIG_IDF_TARGET_ESP32P4 - PIE_ENABLE and QACC_EXTRACT */
+
 /**
  * 2-wide interleaved requant macro for ESP32-P4 RISC-V.
  * Interleaves mulh across two independent elements for pipeline fill.
