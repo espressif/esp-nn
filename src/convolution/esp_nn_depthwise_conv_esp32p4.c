@@ -74,8 +74,6 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
         ::: "x29"
     );
 
-    const int32_t ch_16 = channels >> 4;
-
     /* Set up activation min/max vectors for PIE clamp */
     {
         int8_t act_min_val = (int8_t) activation_min;
@@ -171,23 +169,27 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
             } while(0)
 
             int ch_idx = 0;
-            for (int ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_idx += 16) {
+
+            /* Process 16-channel blocks, then partial block if remainder >= 8 */
+            while (ch_idx < channels) {
+                int block_ch = (ch_idx + 16 <= channels) ? 16 :
+                               (channels - ch_idx >= 8) ? (channels - ch_idx) : 0;
+                if (block_ch == 0) break;  /* remaining < 8, handle scalar below */
+
                 QACC_MAC_WINDOW(ch_idx);
 
-                /* Extract 16 per-lane results */
+                /* Extract per-lane results (only first block_ch are valid) */
                 int32_t result[16] __attribute__((aligned(16)));
                 QACC_EXTRACT(result);
 
                 /* Add fused offset (filter_sum * input_offset + bias) + requantize */
                 if (combined_offset) {
                     if (is_full_window) {
-                        /* Fast: use pre-computed combined offset (fused filter_sum + bias) */
-                        for (int k = 0; k < 16; k++) {
+                        for (int k = 0; k < block_ch; k++) {
                             result[k] += combined_offset[ch_idx + k];
                         }
                     } else {
-                        /* Edge: compute partial filter sum + add bias */
-                        for (int k = 0; k < 16; k++) {
+                        for (int k = 0; k < block_ch; k++) {
                             int32_t fsum = 0;
                             if (input_offset != 0) {
                                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
@@ -202,12 +204,13 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                     }
                 }
 
-                /* Per-channel requantize: 2-wide interleaved inline */
+                /* Per-channel requantize */
                 {
                     const int32_t *mp = out_mult + ch_idx;
                     const int32_t *sp = out_shift + ch_idx;
+                    int rq_count = block_ch & ~1;  /* round down to even for 2-wide */
 
-                    for (int k = 0; k < 16; k += 2) {
+                    for (int k = 0; k < rq_count; k += 2) {
                         int32_t r0 = result[k]; int32_t r1 = result[k+1];
 
                         int32_t m0 = mp[k], s0 = sp[k];
@@ -222,10 +225,19 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                         out_data[out_idx++] = (int8_t)max(activation_min, min(h0, activation_max));
                         out_data[out_idx++] = (int8_t)max(activation_min, min(h1, activation_max));
                     }
+                    /* Handle odd remaining channel in block */
+                    if (block_ch & 1) {
+                        int k = rq_count;
+                        int32_t r = result[k];
+                        r = esp_nn_requantize(r, mp[k], sp[k]);
+                        r += out_offset;
+                        out_data[out_idx++] = (int8_t)max(activation_min, min(r, activation_max));
+                    }
                 }
+                ch_idx += block_ch;
             }
 
-            /* Remaining channels < 16 */
+            /* Remaining channels < 8: scalar */
             for (; ch_idx < channels; ch_idx++) {
                 int32_t result = 0;
                 for (int fy = filter_y_start; fy < filter_y_end; fy++) {
@@ -260,7 +272,7 @@ void esp_nn_depthwise_conv_s8_esp32p4(const data_dims_t *input_dims,
     const uint16_t ch_mult = conv_params->ch_mult;
     const uint16_t channels = input_dims->channels;
 
-    if (ch_mult == 1 && channels >= 16) {
+    if (ch_mult == 1 && channels >= 8) {
         depthwise_conv_s8_ch1_pie(input_dims, input_data, filter_dims, filter_data,
                                    bias, output_dims, out_data, conv_params, quant_data);
         return;
