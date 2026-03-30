@@ -17,6 +17,7 @@ set(c_srcs
 if(CONFIG_IDF_TARGET_ESP32S3)
     set(s3_srcs
         "src/common/esp_nn_common_functions_esp32s3.S"
+        "src/common/esp_nn_dot_s8_esp32s3.S"
         "src/common/esp_nn_multiply_by_quantized_mult_esp32s3.S"
         "src/common/esp_nn_multiply_by_quantized_mult_ver1_esp32s3.S"
         "src/activation_functions/esp_nn_relu_s8_esp32s3.S"

@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #pragma once
 
@@ -253,3 +245,27 @@ __NN_FORCE_INLINE__ void esp_nn_s8_to_s16(const int8_t *src, int16_t *dst, const
         dst[i] = src[i];
     }
 }
+
+#if CONFIG_IDF_TARGET_ESP32S3
+/**
+ * @brief       s8 dot product — both pointers 16-byte aligned.
+ *              Uses ACCX accumulator with fused MAC+load.
+ *
+ * @param       a       input data (16-byte aligned)
+ * @param       b       filter data (16-byte aligned)
+ * @param       len     number of elements (must be multiple of 16, >= 16)
+ * @return      int32_t dot product result
+ */
+extern int32_t esp_nn_dot_s8_aligned_esp32s3(const int8_t *a, const int8_t *b, int32_t len);
+
+/**
+ * @brief       s8 dot product — input aligned, filter may be unaligned.
+ *              Uses USAR+QUP pattern for filter data.
+ *
+ * @param       a       input data (16-byte aligned)
+ * @param       b       filter data (may be unaligned)
+ * @param       len_div16  number of 16-element chunks (>= 1)
+ * @return      int32_t dot product result
+ */
+extern int32_t esp_nn_dot_s8_unaligned_esp32s3(const int8_t *a, const int8_t *b, int32_t len_div16);
+#endif
