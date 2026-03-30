@@ -397,13 +397,11 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
             }
         } else {
             int input_size = input_wd * input_ht * channels;
-            // printf("ask3 %d\n", 2 * (filter_size + input_size) + 16);
-            return  2 * (filter_size + input_size) + 16; // 16 for alignment
+            return  2 * (filter_size + input_size) + 32; // 32 for s16 alignment gap
         }
     } else if (ch_mult % 4 == 0) {
         int input_size = input_wd * input_ht * channels;
-        // printf("ask4 %d\n", 2 * (filter_size + input_size) + 16);
-        return  2 * (filter_size + input_size) + 16; // 16 for alignment
+        return  2 * (filter_size + input_size) + 32; // 32 for s16 alignment gap
     }
     return 32; // just few bytes
 }
