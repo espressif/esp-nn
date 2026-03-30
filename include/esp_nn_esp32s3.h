@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @file        Header definitions to include for esp_nn optimized functions for
@@ -251,6 +243,13 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_esp32s3
 #define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_esp32s3
 
-#define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_opt
-#define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_opt
-#define esp_nn_softmax_s8 esp_nn_softmax_s8_opt
+int32_t esp_nn_get_softmax_scratch_size_esp32s3(const int32_t width, const int32_t height);
+void esp_nn_set_softmax_scratch_buf_esp32s3(void *buffer);
+void esp_nn_softmax_s8_esp32s3(const int8_t *input_data, const int32_t height,
+                                const int32_t width, const int32_t mult,
+                                const int32_t shift, const int32_t diff_min,
+                                int8_t *output_data);
+
+#define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_esp32s3
+#define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_esp32s3
+#define esp_nn_softmax_s8 esp_nn_softmax_s8_esp32s3
