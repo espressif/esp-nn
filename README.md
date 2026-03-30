@@ -7,6 +7,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
 
 * Supported ESP chips include:
    * ESP32-S3 (Assembly versions optimised to benefit from vector instructions of ESP32-S3)
+   * ESP32-P4 (Optimised using PIE/QACC SIMD instructions)
    * ESP32 (Generic optimisations)
    * ESP32-C3 (Generic optimisations)
 
