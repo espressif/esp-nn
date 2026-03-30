@@ -1,4 +1,4 @@
-version: "1.2.2"
+version: "1.2.3"
 description: Optimized NN (Neural Network) functions for Espressif chips
 url: https://github.com/espressif/esp-nn
 repository: https://github.com/espressif/esp-nn.git
