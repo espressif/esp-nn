@@ -35,6 +35,8 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/convolution/esp_nn_depthwise_conv_s16_mult8_3x3_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult4_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult8_esp32s3.S"
+        "src/fully_connected/esp_nn_fully_connected_esp32s3.c"
+        "src/fully_connected/esp_nn_fc_s8_mac16_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_s8_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_per_ch_s8_esp32s3.S"
         "src/pooling/esp_nn_max_pool_s8_esp32s3.S"
