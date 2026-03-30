@@ -1,25 +1,17 @@
-// Copyright 2021-2022 Espressif Systems (Shanghai) PTE LTD
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// SPDX-License-Identifier: Apache-2.0
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
     .text
     .align  4
     .literal_position
 
-    # Program Unit: esp_nn_avg_pool_s8_esp32s3
-    .type   esp_nn_avg_pool_s8_esp32s3, @function
+    # Program Unit: esp_nn_avg_pool_s8_esp32s3_asm
+    .type   esp_nn_avg_pool_s8_esp32s3_asm, @function
     .align   4
-    .global esp_nn_avg_pool_s8_esp32s3
+    .global esp_nn_avg_pool_s8_esp32s3_asm
 
 // no of channels must be multiple of 4.
 
@@ -39,7 +31,7 @@
 // on stack: activation_max
 // on stack: channels
 
-esp_nn_avg_pool_s8_esp32s3: # 0x4
+esp_nn_avg_pool_s8_esp32s3_asm: # 0x4
     # activation_min = 0
     # activation_max = 4
     # gra_spill_temp_0 = 8
@@ -105,16 +97,16 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     ee.zero.q   q4                      # [0]
 
     extui   a10,a5,0,3                  # [7]
-    beqz.n  a10,.LBB3_esp_nn_avg_pool_s8_esp32s3    # [8], if (channels % 8 == 0)
+    beqz.n  a10,.LBB3_esp_nn_avg_pool_s8_esp32s3_asm    # [8], if (channels % 8 == 0)
 
     extui   a13,a5,0,2                  # [0]
-    beqz.n  a13,.LBB52_esp_nn_avg_pool_s8_esp32s3   # [1], if (channels % 4 == 0)
+    beqz.n  a13,.LBB52_esp_nn_avg_pool_s8_esp32s3_asm   # [1], if (channels % 4 == 0)
 
 // exit
 .Lt_0_44546:    # 0x1e9
     retw.n                          # [0]
 
-.LBB3_esp_nn_avg_pool_s8_esp32s3:   # 0x1eb // if (channels % 8 == 0)
+.LBB3_esp_nn_avg_pool_s8_esp32s3_asm:   # 0x1eb // if (channels % 8 == 0)
 
     l16ui   a7,a1,256                   # [1]  id:671 pad_wd+0x0
     l16ui   a10,a1,260                  # [5]  id:670 pad_ht+0x0
@@ -161,7 +153,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     l32i    a10,a1,128                  # [0]  gra_spill_temp_32
     beqz.n  a10,.Lt_0_28418         # [2]
 
-.LBB7_esp_nn_avg_pool_s8_esp32s3:   # 0x286
+.LBB7_esp_nn_avg_pool_s8_esp32s3_asm:   # 0x286
 #<loop> Part of loop body line 44, head labeled .Lt_0_28162
     s32i    a7,a1,112                   # [0]  gra_spill_temp_26
     movi.n  a10,0                   # [1]
@@ -181,7 +173,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     s32i    a9,a1,160                   # [15]  gra_spill_temp_38
     s32i    a13,a1,92                   # [16]  gra_spill_temp_21
     min     a6,a6,a8                    # [17]
-    bnez.n  a5,.LBB10_esp_nn_avg_pool_s8_esp32s3    # [18]
+    bnez.n  a5,.LBB10_esp_nn_avg_pool_s8_esp32s3_asm    # [18]
 
 .Lt_0_29186:    # 0x2ba
     l32i    a8,a1,116                   # [0]  gra_spill_temp_27
@@ -210,7 +202,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
 #<loop> Part of loop body line 46, head labeled .Lt_0_29186
     beqz.n  a5,.Lt_0_29186          # [0]
 
-.LBB10_esp_nn_avg_pool_s8_esp32s3:  # 0x2f7
+.LBB10_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x2f7
 #<loop> Part of loop body line 44, head labeled .Lt_0_28162
     l32i    a14,a1,120                  # [0]  gra_spill_temp_28
     l32i    a13,a1,248                  # [1]  filter_wd
@@ -238,7 +230,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     s32i    a13,a1,280                  # [23]  gra_spill_temp_58
     j   .Lt_0_29698                     # [24]
 
-.LBB13_esp_nn_avg_pool_s8_esp32s3:  # 0x33b
+.LBB13_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x33b
 #<loop> Part of loop body line 16, head labeled .Lt_0_29698
     l32i    a10,a1,56                   # [0]  gra_spill_temp_12
     l32i    a14,a1,204                  # [1]  gra_spill_temp_39
@@ -254,7 +246,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     add.n   a14,a14,a11                 # [2]
     bge     a8,a9,.Lt_0_30722           # [3]
 
-.LBB16_esp_nn_avg_pool_s8_esp32s3:  # 0x355
+.LBB16_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x355
 #<loop> Part of loop body line 61, head labeled .Lt_0_30466
     l32i    a3,a1,36                    # [0]  gra_spill_temp_7
     l32i    a2,a1,24                    # [1]  gra_spill_temp_4
@@ -264,7 +256,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     add.n   a2,a2,a3                    # [5]
     l32i    a3,a1,280                   # [6]  gra_spill_temp_58
     add.n   a2,a12,a2                   # [7]
-    loopgtz a3,.LBB140_esp_nn_avg_pool_s8_esp32s3   # [8]
+    loopgtz a3,.LBB140_esp_nn_avg_pool_s8_esp32s3_asm   # [8]
 
     ee.vld.l.64.xp  q0,a2,a5            # [0*II+1]  id:677
     ee.vcmp.lt.s8   q1,q0,q4            # [0*II+3]
@@ -275,7 +267,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     ee.vadds.s32    q3,q3,q0            # [0*II+8]
 
 
-.LBB140_esp_nn_avg_pool_s8_esp32s3: # 0x385
+.LBB140_esp_nn_avg_pool_s8_esp32s3_asm: # 0x385
 #<loop> Part of loop body line 61, head labeled .Lt_0_30466
     l32i    a2,a1,48                    # [0]  gra_spill_temp_10
     sub     a9,a7,a2                    # [2]
@@ -409,7 +401,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     l32i    a15,a1,160                  # [1]  gra_spill_temp_38
     mv.qr   q2,q4                       # [2]
     mov.n   a13,a15                     # [3]
-    blt a15,a6,.LBB13_esp_nn_avg_pool_s8_esp32s3    # [4]
+    blt a15,a6,.LBB13_esp_nn_avg_pool_s8_esp32s3_asm    # [4]
 
 .Lt_0_51458:    # 0x459
 #<loop> Part of loop body line 16, head labeled .Lt_0_29698
@@ -417,7 +409,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     j   .Lt_0_29954                     # [1]
 
 
-.LBB52_esp_nn_avg_pool_s8_esp32s3:  # 0x4a6 // if (channels % 4 == 0)
+.LBB52_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x4a6 // if (channels % 4 == 0)
 
     l16ui   a7,a1,256                   # [1]  id:671 pad_wd+0x0
     l16ui   a13,a1,260                  # [5]  id:670 pad_ht+0x0
@@ -485,7 +477,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     s32i    a9,a1,168                   # [15]  gra_spill_temp_40
     s32i    a13,a1,88                   # [16]  gra_spill_temp_20
     min     a6,a6,a8                    # [17]
-    bnez.n  a5,.LBB59_esp_nn_avg_pool_s8_esp32s3    # [18]
+    bnez.n  a5,.LBB59_esp_nn_avg_pool_s8_esp32s3_asm    # [18]
 
 .Lt_0_38914:    # 0x57a
 #<loop> Loop body line 163
@@ -513,7 +505,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
 
     beqz.n  a5,.Lt_0_38914          # [0]
 
-.LBB59_esp_nn_avg_pool_s8_esp32s3:  # 0x5b7
+.LBB59_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x5b7
 #<loop> Part of loop body line 161, head labeled .Lt_0_37890
     l32i    a14,a1,144                  # [0]  gra_spill_temp_24
     l32i    a13,a1,248                  # [1]  filter_wd
@@ -540,7 +532,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     s32i    a13,a1,52                   # [23]  gra_spill_temp_11
     j       .Lt_0_39426                     # [24]
 
-.LBB62_esp_nn_avg_pool_s8_esp32s3:  # 0x5fb
+.LBB62_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x5fb
 #<loop> Part of loop body line 173, head labeled .Lt_0_39426
     l32i    a10,a1,192                  # [0]  gra_spill_temp_36
     l32i    a14,a1,196                  # [1]  gra_spill_temp_37
@@ -556,7 +548,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     add.n   a14,a14,a11                 # [2]
     bge a8,a9,.Lt_0_40450           # [3]
 
-.LBB65_esp_nn_avg_pool_s8_esp32s3:  # 0x615
+.LBB65_esp_nn_avg_pool_s8_esp32s3_asm:  # 0x615
 #<loop> Part of loop body line 178, head labeled .Lt_0_40194
     l32i    a3,a1,60                    # [0]  gra_spill_temp_13
     l32i    a2,a1,216                   # [1]  gra_spill_temp_52
@@ -565,7 +557,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     l32i    a4,a1,52                    # [4]  gra_spill_temp_11
     add.n   a2,a2,a3                    # [5]
     add.n   a2,a12,a2                   # [6]
-    loopgtz a4,.LBB155_esp_nn_avg_pool_s8_esp32s3   # [7]
+    loopgtz a4,.LBB155_esp_nn_avg_pool_s8_esp32s3_asm   # [7]
 
     ee.vldbc.32.xp  q0,a2,a5                # [0*II+0]  id:684
     ee.vcmp.lt.s8   q1,q0,q4            # [0*II+2]
@@ -574,7 +566,7 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     ee.vzip.16      q0,q1               # [0*II+5]
     ee.vadds.s32    q2,q2,q0            # [0*II+6]
 
-.LBB155_esp_nn_avg_pool_s8_esp32s3: # 0x63e
+.LBB155_esp_nn_avg_pool_s8_esp32s3_asm: # 0x63e
 #<loop> Part of loop body line 178, head labeled .Lt_0_40194
     l32i    a2,a1,148                   # [0]  gra_spill_temp_35
     movi.n  a8,0                    # [1]
@@ -666,10 +658,10 @@ esp_nn_avg_pool_s8_esp32s3: # 0x4
     l32i    a15,a1,168                  # [0]  gra_spill_temp_40
     mv.qr   q2,q4                       # [1]
     mov.n   a13,a15                     # [2]
-    blt     a15,a6,.LBB62_esp_nn_avg_pool_s8_esp32s3    # [3]
+    blt     a15,a6,.LBB62_esp_nn_avg_pool_s8_esp32s3_asm    # [3]
 
 .Lt_0_52738:    # 0x6d6
     movi.n  a15,0                   # [0]
     j       .Lt_0_39682                     # [1]
 
-    .size   esp_nn_avg_pool_s8_esp32s3, . - esp_nn_avg_pool_s8_esp32s3
+    .size   esp_nn_avg_pool_s8_esp32s3_asm, . - esp_nn_avg_pool_s8_esp32s3_asm
