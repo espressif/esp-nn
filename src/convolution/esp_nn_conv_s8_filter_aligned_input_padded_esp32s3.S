@@ -1,5 +1,5 @@
 //
-// SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+// SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -89,6 +89,9 @@ esp_nn_conv_s8_filter_aligned_input_padded_esp32s3:
 	srai	a4, a4, 1
 	addx4	a10, a10, a13   # scratch_buf + 4 * out_ch
 	l32i	a3, sp, 96
+	// Skip filter sum accumulation if input_offset is 0 (common in TFLite)
+	// In that case, correction = just bias (pre-filled by C wrapper)
+	beqz	a11, .L_skip_acc_loop
 	// accumulate filter values per channel into scratch buffer
 .L_acc_out_channel_loop:
 	movi.n	a9, 0	// acc
@@ -113,6 +116,29 @@ esp_nn_conv_s8_filter_aligned_input_padded_esp32s3:
 	addi.n 	a13, a13, 4
 	blt    	a13, a10, .L_acc_out_channel_loop
 
+	j		.L_acc_done
+
+.L_skip_acc_loop:
+	// input_offset == 0: correction = bias only
+	// Fill scratch_buf with bias values
+	beqz.n	a3, .L_skip_acc_zero_bias
+.L_copy_bias_loop:
+	l32i	a8, a3, 0
+	s32i	a8, a13, 0
+	addi	a3, a3, 4
+	addi.n	a13, a13, 4
+	blt		a13, a10, .L_copy_bias_loop
+	j		.L_acc_done
+
+.L_skip_acc_zero_bias:
+	// No bias either: zero the scratch buffer
+.L_zero_scratch_loop:
+	movi.n	a8, 0
+	s32i	a8, a13, 0
+	addi.n	a13, a13, 4
+	blt		a13, a10, .L_zero_scratch_loop
+
+.L_acc_done:
 	movi.n	a4, 0			# 0
 
 .L_height_loop:
