@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,10 +19,12 @@ void esp_nn_fully_connected_s8_test()
     uint32_t total_c = 0, total_opt = 0;
     /* prepare data */
     uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
+    const int32_t max_out_ch = 16;
+    const int32_t max_row_len = 271;
     uint16_t out_channels = 3;
-    int8_t input[row_len];
-    int8_t filter_data[row_len * out_channels];
-    int8_t output_c[out_channels], output_opt[out_channels];
+    int8_t input[max_row_len];
+    int8_t filter_data[max_row_len * max_out_ch];
+    int8_t output_c[max_out_ch], output_opt[max_out_ch];
     int32_t activation_min = -128;
     int32_t activation_max = 127;
     int32_t input_offset = 0;
@@ -238,27 +240,6 @@ void esp_nn_fully_connected_per_ch_s8_test()
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
             printf(ANSI_COLOR_RED"[%3d] failed\n"ANSI_COLOR_RESET, itr);
-#if 0
-            printf("Output: \n");
-            PRINT_ARRAY_HEX(output_opt, out_channels, 1);
-            printf("Expected: \n");
-            PRINT_ARRAY_HEX(output_c, out_channels, 1);
-            printf("Input:\n");
-            PRINT_ARRAY_HEX(input, row_len, 1);
-            printf("Filter data:\n");
-            PRINT_ARRAY_HEX(filter_data, row_len, out_channels);
-
-            printf("Out shift: ");
-            for (int i = 0; i < out_channels; i++) {
-                printf("%d, ", out_shift[i]);
-            }
-
-            printf("\nOut mult: ");
-            for (int i = 0; i < out_channels; i++) {
-                printf("%d, ", out_mult[i]);
-            }
-            printf("\n");
-#endif
             goto fully_connected_per_ch_cleanup;
         }
         printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16"]"ANSI_COLOR_RESET,

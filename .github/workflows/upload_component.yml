@@ -2,19 +2,18 @@ name: Push esp-nn to IDF Component Registry
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
 
 jobs:
   upload_components:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Upload esp-nn to IDF Component Registry
         uses: espressif/upload-components-ci-action@v1
         with:
-          name: esp-nn
-          namespace: espressif
-          version: ${{ github.ref_name }}
+          directories: "."
+          namespace: "espressif"
           api_token: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
