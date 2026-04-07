@@ -55,10 +55,52 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <esp_nn_defs.h>
 
 #include <common_functions.h>
+
+/* ANSI C reference conv for comparison */
+extern void esp_nn_conv_s8_ansi(const data_dims_t *input_dims,
+                                const int8_t *input_data,
+                                const data_dims_t *filter_dims,
+                                const int8_t *filter_data,
+                                const int32_t *bias,
+                                const data_dims_t *output_dims,
+                                int8_t *out_data,
+                                const conv_params_t *conv_params,
+                                const quant_data_t *quant_data);
+
+/* 1x1 conv — correct SIMD implementation */
+extern int esp_nn_conv_s8_1x1_scratch_size(int out_channels);
+extern void esp_nn_conv_s8_1x1(const int8_t *input,
+                                const uint16_t input_wd,
+                                const uint16_t input_ht,
+                                const uint16_t in_channels,
+                                const int32_t input_offset,
+                                const int8_t *filter_data,
+                                const int32_t *bias,
+                                int8_t *out_data,
+                                const uint16_t out_channels,
+                                const int32_t out_offset,
+                                const int32_t *out_shift,
+                                const int32_t *out_mult,
+                                const int32_t activation_min,
+                                const int32_t activation_max,
+                                void *scratch);
+
+/* Debug heap checks — enable to find buffer overruns */
+#if CONFIG_IDF_CMAKE
+#include "esp_heap_caps.h"
+#define CONV_HEAP_CHECK(tag) do { \
+    if (!heap_caps_check_integrity_all(false)) { \
+        printf("CONV HEAP CORRUPT: %s\n", tag); \
+    } \
+} while(0)
+#else
+#define CONV_HEAP_CHECK(tag)
+#endif
 
 static int16_t *scratch_buffer = NULL;
 
@@ -278,12 +320,12 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
     int input_scratch = input_wd * input_ht * in_ch;
     int filter_scratch = filter_wd * filter_ht * in_ch * out_ch;
 
-    int align_buf_size = 32; /* extra buffer for alignment */
+    int align_buf_size = 64; /* alignment (16) + assembly pre/post access margin (48) */
     if ((filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0) &&
             (stride_wd == 1 && stride_ht == 1)) {
-        int transpose_buf_size = 2 * (8 * new_channels); /* to store intermediate data */
+        int transpose_buf_size = 2 * (8 * new_channels);
         if (input_wd * input_ht < 8) {
-            transpose_buf_size = 0; // not using this for leftover
+            transpose_buf_size = 0;
         }
         if (in_ch % 8) {
             input_scratch = input_wd * input_ht * new_channels;
@@ -345,10 +387,6 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                             const conv_params_t *conv_params,
                             const quant_data_t *quant_data)
 {
-    if (scratch_buffer == NULL) {
-        printf("esp_nn_conv error! scratch_buffer not set!\n");
-        return;
-    }
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
     const uint16_t channels = input_dims->channels;
@@ -370,47 +408,32 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
 
     int filter_size = filter_wd * filter_ht * channels * out_channels;
 
+    /* 1x1 stride-1 conv */
     if (filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0 &&
             stride_wd == 1 && stride_ht == 1) {
-
-        int8_t *input_aligned = (int8_t *) input;
-        int8_t *scratch_buf = (int8_t *) scratch_buffer;
-        int8_t *filter_aligned = (int8_t *) scratch_buffer;
-        int new_channels = channels;
         if (channels % 8 == 0) {
-            if ((int) filter_data & 7) { // if the filter_data is not aligned to 8 bytes
-                int scratch_offset = (int) (filter_aligned + filter_size);
-                scratch_buf = (int8_t *) (scratch_offset + 16 - (scratch_offset & 15));
-                memcpy(filter_aligned, filter_data, filter_size); // copy to aligned address
-            } else {
-                filter_aligned = (int8_t *) filter_data;
-            }
+            /* Full asm path — requires mult8 channels + 8-byte aligned filter */
+            esp_nn_conv_s8_mult8_1x1_esp32s3(input, input_wd, input_ht, channels,
+                               input_offset, filter_data, bias, out_data,
+                               out_wd, out_ht, out_channels, out_offset,
+                               out_shift, out_mult, activation_min, activation_max,
+                               scratch_buffer);
         } else {
-            // pad extra channel to make it multiple of 8. Both input and filter
-            new_channels = (channels + 7) & ~7;
-            for (int out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-                memcpy(filter_aligned, filter_data, channels);
-                memset(filter_aligned + channels, 0, new_channels - channels);
-                filter_aligned += new_channels;
-                filter_data += channels;
-            }
-            filter_aligned = (int8_t *) scratch_buffer;
-            int filter_data_size = new_channels * out_channels;
-            input_aligned = filter_aligned + filter_data_size;
-            for (int input_idx = 0; input_idx < input_ht * input_wd; input_idx++) {
-                memcpy(input_aligned, input, channels);
-                memset(input_aligned + channels, 0, new_channels - channels);
-                input_aligned += new_channels;
-                input += channels;
-            }
-            input_aligned = filter_aligned + filter_data_size;
-            scratch_buf = input_aligned +  input_ht * input_wd * new_channels;
+            /* Fallback: handles any alignment + any channel count */
+            esp_nn_conv_s8_1x1(input, input_wd, input_ht, channels, input_offset,
+                               filter_data, bias, out_data, out_channels, out_offset,
+                               out_shift, out_mult, activation_min, activation_max,
+                               scratch_buffer);
         }
-        esp_nn_conv_s8_mult8_1x1_esp32s3(
-            input_aligned, input_wd, input_ht, new_channels, input_offset,
-            filter_aligned, bias, out_data, out_wd, out_ht, out_channels, out_offset,
-            out_shift, out_mult, activation_min, activation_max, scratch_buf);
-    } else {
+        return;
+    }
+
+    if (scratch_buffer == NULL) {
+        printf("esp_nn_conv error! scratch_buffer not set!\n");
+        return;
+    }
+
+    {
         int32_t filter_row_size = filter_wd * channels;
         int32_t window_len = filter_wd * filter_ht * channels;
 
@@ -476,9 +499,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
             scratch_data += new_input_wd * new_input_ht * channels;
         }
 
-        // Pre-compute per-channel offset corrections in C wrapper for large filters.
-        // This avoids the assembly scanning all filter data (DCache pollution).
-        // Only do this for large filters where the benefit outweighs overhead.
+
         int filter_total = filter_wd * filter_ht * channels * out_channels;
         if (input_offset != 0 && filter_total > 16384) {
             int32_t *corrections = (int32_t *)scratch_data;
@@ -504,12 +525,14 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 (const int32_t *)scratch_data, out_data, out_wd, out_ht, out_channels,
                 out_offset, out_shift, out_mult, activation_min, activation_max,
                 scratch_data);
+            CONV_HEAP_CHECK("general: after asm (precomp)");
         } else {
             esp_nn_conv_s8_filter_aligned_input_padded_esp32s3(
                 input_padded, new_input_wd, new_input_ht, channels, input_offset,
                 stride_wd, stride_ht, filter_data_aligned, filter_wd, filter_ht,
                 bias, out_data, out_wd, out_ht, out_channels, out_offset,
                 out_shift, out_mult, activation_min, activation_max, scratch_data);
+            CONV_HEAP_CHECK("general: after asm (normal)");
         }
     }
 }

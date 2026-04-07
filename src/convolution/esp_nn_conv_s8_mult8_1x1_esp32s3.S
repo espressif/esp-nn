@@ -17,6 +17,15 @@
     .literal  .nudge_val, 1073741824
 
     # Program Unit: esp_nn_conv_s8_mult8_1x1_esp32s3
+    #
+    # Requirements:
+    #   - in_channels must be a multiple of 8
+    #   - filter_data must be 8-byte aligned (ee.vld.l.64.ip ignores lower 3 address bits)
+    #   - input_data must be 8-byte aligned (ee.vld.l/h.64.xp same alignment requirement)
+    #   - buffer (scratch) must be 16-byte aligned
+    #
+    # If filter is not aligned, use esp_nn_conv_s8_1x1() (C+inline asm) as fallback.
+    #
     .type   esp_nn_conv_s8_mult8_1x1_esp32s3, @function
     .align   4
     .global esp_nn_conv_s8_mult8_1x1_esp32s3
@@ -154,7 +163,11 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     ee.zero.q                       q5  #
     l32i    a10,a1,52                   # [1]  gra_spill_temp_168, in_channels-7
     l32i    a9,a1,48                    # [1]  gra_spill_temp_167, in_channels/8 - 1
-    ee.vld.l.64.ip                  q7,a5,8     # load filter 8 values
+    # USAR-based filter load for unaligned access
+    ee.ld.128.usar.ip               q7,a5,16
+    ee.ld.128.usar.ip               q6,a5,0
+    addi                            a5,a5,-8     # net advance = 8
+    ee.src.q                        q7,q7,q6
     ee.vld.128.ip                   q0,a8,16
     ee.vld.128.ip                   q1,a8,16
     ee.vcmp.lt.s8                   q6,q7,q5
@@ -172,7 +185,11 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
 
     ee.vsmulas.s16.qacc.ld.incp q0,a8,q2,q7,6   # [0*II+0]  id:657
     ee.vsmulas.s16.qacc.ld.incp q1,a8,q3,q7,7   # [0*II+1]  id:658
-    ee.vld.l.64.ip              q7,a5,8        # [0*II+2]  id:659, filter
+    # USAR-based filter load for unaligned access
+    ee.ld.128.usar.ip           q7,a5,16
+    ee.ld.128.usar.ip           q6,a5,0
+    addi                        a5,a5,-8
+    ee.src.q                    q7,q7,q6
     ee.vcmp.lt.s8               q6,q7,q5
     ee.vzip.8                   q7,q6
     ee.vsmulas.s16.qacc.ld.incp q2,a8,q0,q7,0   # [0*II+4]  id:660
@@ -340,7 +357,11 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     l32i.n          a9,a1,68                # [4]  gra_spill_temp_172, input_ptr
     l32i            a10,a1,36               # [1]  gra_spill_temp_164, iterations, (in_channels - 1) >> 3
     ee.vld.l.64.ip          q0,a9,8         # [7]  id:717, input
-    ee.vld.l.64.ip          q1,a8,8         # [7]  filter
+    # USAR-based filter load for unaligned access
+    ee.ld.128.usar.ip       q1,a8,16
+    ee.ld.128.usar.ip       q7,a8,0
+    addi                    a8,a8,-8
+    ee.src.q                q1,q1,q7
     ee.vcmp.lt.s8           q6,q0,q3
     ee.vcmp.lt.s8           q7,q1,q3
     ee.vzip.8               q0,q6
@@ -351,7 +372,11 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
 
     ee.vmulas.s16.qacc          q0,q1  # mula(q0,q1)
     ee.vld.l.64.ip              q0,a9,8         # load 8 input values
-    ee.vld.l.64.ip              q1,a8,8         # [7]  load filter
+    # USAR-based filter load for unaligned access
+    ee.ld.128.usar.ip           q1,a8,16
+    ee.ld.128.usar.ip           q7,a8,0
+    addi                        a8,a8,-8
+    ee.src.q                    q1,q1,q7
     ee.vcmp.lt.s8               q2,q0,q3        # sign
     ee.vcmp.lt.s8               q7,q1,q3
     ee.vzip.8                   q0,q2           # 16 bit input
