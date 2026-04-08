@@ -389,11 +389,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
 {
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
-    /* NOTE: esp_nn conv assumes input_channels == filter_input_channels.
-     * Grouped conv (filter_ch < input_ch) is not supported — caller must
-     * check and fall back to reference before calling this function. */
     const uint16_t channels = input_dims->channels;
-
     const int32_t input_offset = conv_params->in_offset;
     const int32_t out_offset = conv_params->out_offset;
     const uint16_t pad_wd = conv_params->padding.width;
@@ -409,6 +405,13 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t *out_mult = quant_data->mult;
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
+
+    /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
+    if (channels != filter_dims->channels) {
+        esp_nn_conv_s8_ansi(input_dims, input, filter_dims, filter_data,
+                            bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
 
     int filter_size = filter_wd * filter_ht * channels * out_channels;
 

@@ -48,6 +48,7 @@
 
 #include <stdio.h>
 #include <esp_nn_defs.h>
+#include <esp_nn_ansi_headers.h>
 #include "esp_nn_generic_opt.h"
 
 #include <common_functions.h>
@@ -409,6 +410,13 @@ static void esp_nn_conv_s8_padded(
     const int32_t *out_mult = quant_data->mult;
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
+
+    /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
+    if (in_channels != filter_dims->channels) {
+        esp_nn_conv_s8_ansi(input_dims, input_data, filter_dims, filter_data,
+                            bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
 
     int32_t *filter_sum = (int32_t *) scratch; // alignment of 4 bytes assumed
 

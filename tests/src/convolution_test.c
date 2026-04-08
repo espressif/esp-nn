@@ -724,7 +724,7 @@ void esp_nn_conv_s8_test()
 
         data_dims_t input_dims = {.width = in_wd, .height = in_ht, .channels = in_channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = out_channels, 1};
-        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
+        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, .channels = in_channels, 1};
         conv_params_t conv_params = {.in_offset = input_offset, .out_offset = out_offset,
                                     .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
                                     .dilation = {0, 0}, .activation = {activation_min, activation_max}};

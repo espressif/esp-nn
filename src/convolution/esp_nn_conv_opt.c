@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <esp_nn_defs.h>
+#include <esp_nn_ansi_headers.h>
 
 #include <common_functions.h>
 
@@ -124,6 +125,13 @@ void esp_nn_conv_s8_opt(const data_dims_t *input_dims,
     const uint16_t out_channels = output_dims->channels;
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
+
+    /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
+    if (in_channels != filter_dims->channels) {
+        esp_nn_conv_s8_ansi(input_dims, input_data, filter_dims, filter_data,
+                            bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
 
     int32_t out_ch_idx, out_y, out_x, filter_y_idx, filter_x_idx;
 
