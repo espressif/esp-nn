@@ -1,5 +1,5 @@
 //
-// SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+// SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -8,10 +8,10 @@
     .literal_position
     .literal    .LC3_26_101, 1073741824 // nudge (1 << 30)
 
-    # Program Unit: esp_nn_fully_connected_s8_esp32s3
-    .type   esp_nn_fully_connected_s8_esp32s3, @function
+    # Program Unit: esp_nn_fc_s16_esp32s3
+    .type   esp_nn_fc_s16_esp32s3, @function
     .align   4
-    .global esp_nn_fully_connected_s8_esp32s3
+    .global esp_nn_fc_s16_esp32s3
 
 // a2: input_data
 // a3: input_offset
@@ -27,7 +27,7 @@
 // on stack: activation_min
 // on stack: activation_max
 
-esp_nn_fully_connected_s8_esp32s3:  # 0x4
+esp_nn_fc_s16_esp32s3:  # 0x4
     # qacc_scratch = 0
     // 40, filter_offset
     // 44, input_offset
@@ -83,13 +83,13 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     extui           a5,a11,0,3                  # [34]
     ee.zero.accx
     slli            a5,a5,1                     # [3]
-    bgei            a9,0,.LBB6_esp_nn_fully_connected_s8_esp32s3            # [9]
+    bgei            a9,0,.LBB6_esp_nn_fc_s16_esp32s3            # [9]
 
     mov.n           a5,a10                      # [6]
     movi.n  a2,0                    # [0]
     j       .Lt_0_8706                      # [1]
 
-.LBB6_esp_nn_fully_connected_s8_esp32s3:    # 0x147
+.LBB6_esp_nn_fc_s16_esp32s3:    # 0x147
     wur.sar_byte    a5                  # [5]
     ee.vld.l.64.ip  q4,a2,8         # [4]  id:267
     l32i            a4,a1,64                    # [0]  gra_spill_temp_3
@@ -97,7 +97,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     addx8           a5,a4,a10                   # [2]
     ee.vcmp.lt.s8   q2,q4,q7            # [7]
     ee.vzip.8       q4,q2                   # [8]
-    loopgtz a4,.LBB45_esp_nn_fully_connected_s8_esp32s3     # [3]
+    loopgtz a4,.LBB45_esp_nn_fc_s16_esp32s3     # [3]
 
     ee.vld.l.64.ip      q0,a2,8         # [0*II+0]  id:268
     ee.vld.l.64.ip      q1,a3,8         # [0*II+1]  id:270
@@ -110,7 +110,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     ee.vadds.s16        q2,q2,q6            # [0*II+8]
     ee.vmulas.s16.accx  q1,q2       # [0*II+9]
 
-.LBB45_esp_nn_fully_connected_s8_esp32s3:   # 0x170
+.LBB45_esp_nn_fc_s16_esp32s3:   # 0x170
     l32i    a2,a1,68                    # [0]  gra_spill_temp_4
 
 .Lt_0_8706: # 0x173
@@ -126,7 +126,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     l32i.n  a4,a1,60                # [3]  gra_spill_temp_2
     add.n   a2,a2,a13                   # [4]
     add.n   a4,a4,a5                    # [5]
-    loopgtz a3,.LBB60_esp_nn_fully_connected_s8_esp32s3     # [6]
+    loopgtz a3,.LBB60_esp_nn_fc_s16_esp32s3     # [6]
 
 // remaining c loop
     l8ui    a3,a2,0                     # [0*II+0]  id:299
@@ -140,7 +140,7 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
     addi.n  a4,a4,1                 # [0*II+4]
     add.n   a6,a6,a3                    # [0*II+9]
 
-.LBB60_esp_nn_fully_connected_s8_esp32s3:   # 0x20f
+.LBB60_esp_nn_fc_s16_esp32s3:   # 0x20f
 
 // add bias
 .Lt_0_9730: # 0x20f
@@ -206,4 +206,4 @@ esp_nn_fully_connected_s8_esp32s3:  # 0x4
 .Lt_0_7938: # 0x25c
     retw.n                          # [0]
 
-    .size   esp_nn_fully_connected_s8_esp32s3, . - esp_nn_fully_connected_s8_esp32s3
+    .size   esp_nn_fc_s16_esp32s3, . - esp_nn_fc_s16_esp32s3

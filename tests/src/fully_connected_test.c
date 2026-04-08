@@ -22,9 +22,20 @@ void esp_nn_fully_connected_s8_test()
     const int32_t max_out_ch = 16;
     const int32_t max_row_len = 271;
     uint16_t out_channels = 3;
-    int8_t input[max_row_len];
-    int8_t filter_data[max_row_len * max_out_ch];
-    int8_t output_c[max_out_ch], output_opt[max_out_ch];
+
+    /* Use heap-allocated aligned buffers (matches TFLite real-world usage) */
+    int8_t *input_orig = malloc(max_row_len + 16);
+    int8_t *filter_orig = malloc(max_row_len * max_out_ch + 16);
+    int8_t *out_c_orig = malloc(max_out_ch + 16);
+    int8_t *out_opt_orig = malloc(max_out_ch + 16);
+    if (!input_orig || !filter_orig || !out_c_orig || !out_opt_orig) {
+        printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+        goto fc_s8_cleanup;
+    }
+    int8_t *input = (int8_t *)(((uint32_t)input_orig + 15) & ~15);
+    int8_t *filter_data = (int8_t *)(((uint32_t)filter_orig + 15) & ~15);
+    int8_t *output_c = (int8_t *)(((uint32_t)out_c_orig + 15) & ~15);
+    int8_t *output_opt = (int8_t *)(((uint32_t)out_opt_orig + 15) & ~15);
     int32_t activation_min = -128;
     int32_t activation_max = 127;
     int32_t input_offset = 0;
@@ -124,12 +135,18 @@ void esp_nn_fully_connected_s8_test()
             printf("Out shift: %d\n", out_shift);
             printf("Out mult: %x\n", out_mult);
 #endif
-            return;
+            goto fc_s8_cleanup;
         }
         printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16"]"ANSI_COLOR_RESET,
                itr, row_len, out_channels);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
     }
+
+fc_s8_cleanup:
+    if (input_orig) free(input_orig);
+    if (filter_orig) free(filter_orig);
+    if (out_c_orig) free(out_c_orig);
+    if (out_opt_orig) free(out_opt_orig);
 }
 
 void esp_nn_fully_connected_per_ch_s8_test()

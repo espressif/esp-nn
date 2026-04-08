@@ -32,8 +32,8 @@ void esp_nn_depthwise_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    // run for 15 iterations
-    for (int itr = 0; itr < 15; itr++) {
+    // run for 17 iterations
+    for (int itr = 0; itr < 17; itr++) {
         /* prepare data */
         switch (itr) {
         case 0: // (ch_mult 1, (channels % 16) = 0), filter (3,3), pad (0,0)
@@ -151,6 +151,30 @@ void esp_nn_depthwise_conv_s8_test()
             filter_wd = 3;
             ch_mult = 1;
             channels = 16;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 15: // ch=8, 3x3, pad=1 (person_detection model layer, ch<12 path)
+            input_wd = 48;
+            input_ht = 48;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 8;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 16: // ch=8, 3x3, pad=0, stride=2 (another ch<12 variant)
+            input_wd = 12;
+            input_ht = 12;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 8;
             pad_wd = 0;
             pad_ht = 0;
             stride_wd = 2;

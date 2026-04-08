@@ -17,6 +17,7 @@ set(c_srcs
 if(CONFIG_IDF_TARGET_ESP32S3)
     set(s3_srcs
         "src/common/esp_nn_common_functions_esp32s3.S"
+        "src/common/esp_nn_dot_s8_esp32s3.S"
         "src/common/esp_nn_multiply_by_quantized_mult_esp32s3.S"
         "src/common/esp_nn_multiply_by_quantized_mult_ver1_esp32s3.S"
         "src/activation_functions/esp_nn_relu_s8_esp32s3.S"
@@ -35,10 +36,14 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/convolution/esp_nn_depthwise_conv_s16_mult8_3x3_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult4_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s16_mult8_esp32s3.S"
+        "src/fully_connected/esp_nn_fully_connected_esp32s3.c"
+        "src/fully_connected/esp_nn_fc_s8_mac16_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_s8_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_per_ch_s8_esp32s3.S"
         "src/pooling/esp_nn_max_pool_s8_esp32s3.S"
-        "src/pooling/esp_nn_avg_pool_s8_esp32s3.S")
+        "src/pooling/esp_nn_avg_pool_s8_esp32s3.c"
+        "src/pooling/esp_nn_avg_pool_s8_esp32s3.S"
+        "src/softmax/esp_nn_softmax_s8_esp32s3.c")
 endif()
 
 if(CONFIG_IDF_TARGET_ESP32P4)
