@@ -13,6 +13,7 @@ set(c_srcs
     "src/fully_connected/esp_nn_fully_connected_ansi.c"
     "src/softmax/esp_nn_softmax_ansi.c"
     "src/softmax/esp_nn_softmax_opt.c"
+    "src/logistic/esp_nn_logistic_ansi.c"
     "src/pooling/esp_nn_avg_pool_ansi.c"
     "src/pooling/esp_nn_max_pool_ansi.c")
 
