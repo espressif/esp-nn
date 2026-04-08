@@ -71,7 +71,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
     | Chip     | CPU Freq | without ESP-NN | with ESP-NN |
     | -------- | -------- | -------------- | ----------- |
     | ESP32-S3 | 240MHz   | 26000ms        | 1434ms      |
-    | ESP32-P4 | 360MHz   | 11600ms        | 1305ms      |
+    | ESP32-P4 | 360MHz   | 11600ms        | 1050ms      |
 
 > **Note**:
   - The above is time taken for execution of the `invoke()` call
