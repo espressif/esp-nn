@@ -102,7 +102,15 @@ uint32_t profile_opt_end();
 
 #if IDF_HEAP_CAPS
 #include "esp_heap_caps.h"
-#define ESP_NN_TEST_ALLOC(SIZE) heap_caps_malloc(SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+/* Try SPIRAM first, fall back to internal RAM */
+static inline void *esp_nn_test_alloc(size_t size) {
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ptr) {
+        ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
+#define ESP_NN_TEST_ALLOC(SIZE) esp_nn_test_alloc(SIZE)
 #else
 #include <malloc.h>
 #define ESP_NN_TEST_ALLOC(SIZE) malloc(SIZE)

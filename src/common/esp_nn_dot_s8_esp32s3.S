@@ -57,10 +57,10 @@ esp_nn_dot_s8_aligned_esp32s3:
     ee.vmulas.s8.accx  q0, q1
 
 .Lalign_done:
-    // 2-cycle gap before ACCX read
-    movi.n  a3, 0
+    // Read lower 32 bits of ACCX (sufficient for int8 dot products)
     nop
-    ee.srs.accx a2, a3, 0
+    nop
+    rur.accx_0 a2
 
     retw.n
 
@@ -111,21 +111,24 @@ esp_nn_dot_s8_unaligned_esp32s3:
 
 .Lunalign_loop2_end:
 
-    // Check if there's a remaining single iteration
-    bbci    a4, 0, .Lunalign_last_qup
+    // Check if there's a remaining single iteration (odd len_div16)
+    bbci    a4, 0, .Lunalign_done_mac
 
-.Lunalign_single:
-    // Single iteration
-    ee.vld.128.ip       q1, a2, 16
-    ee.ld.128.usar.ip   q2, a3, 16
+    // Odd remainder: the 2x loop already loaded q0/q2 for the next chunk.
+    // Just qup the filter and MAC with the primed input (q1).
+    // But q1 was loaded as input[i+2] in the last loop iteration — we need
+    // to re-read the correct input. Actually, q1 is already the right input.
+    // q0 and q2 are the filter chunks ready for qup.
     ee.src.q.qup        q4, q0, q2
     ee.vmulas.s8.accx   q4, q1
     j                   .Lunalign_done_mac
 
-.Lunalign_last_qup:
-    // After 2x loop: back up pointers (loaded one extra pair)
-    addi    a2, a2, -16
-    addi    a3, a3, -16
+.Lunalign_single:
+    // Called when len_div16 < 2 (single chunk only)
+    ee.vld.128.ip       q1, a2, 16
+    ee.ld.128.usar.ip   q2, a3, 16
+    ee.src.q.qup        q4, q0, q2
+    ee.vmulas.s8.accx   q4, q1
 
 .Lunalign_done_mac:
 .Lunalign_done:
