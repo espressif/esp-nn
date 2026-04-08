@@ -61,6 +61,19 @@
 
 #include <common_functions.h>
 
+/* 3x3 optimized path — im2col per pixel, iterate OC with input in cache */
+extern int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht, int in_channels);
+extern void esp_nn_conv_s8_3x3_opt(const int8_t *input,
+    const uint16_t input_wd, const uint16_t input_ht,
+    const uint16_t in_channels, const int32_t input_offset,
+    const uint16_t stride_wd, const uint16_t stride_ht,
+    const int8_t *filter_data, const int32_t *bias,
+    int8_t *out_data, const uint16_t out_wd, const uint16_t out_ht,
+    const uint16_t out_channels, const int32_t out_offset,
+    const int32_t *out_shift, const int32_t *out_mult,
+    const int32_t activation_min, const int32_t activation_max,
+    void *scratch);
+
 /* ANSI C reference conv for comparison */
 extern void esp_nn_conv_s8_ansi(const data_dims_t *input_dims,
                                 const int8_t *input_data,
@@ -443,6 +456,22 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     {
         int32_t filter_row_size = filter_wd * channels;
         int32_t window_len = filter_wd * filter_ht * channels;
+
+        /* 3x3 optimized path: im2col per pixel, iterate OC with input in cache.
+         * TODO: fix inline asm priming + performance regression before enabling.
+         * Avoids the 128× input reload of the general aligned asm. */
+#if 0
+        if (esp_nn_conv_s8_3x3_can_use(filter_wd, filter_ht, channels) &&
+                pad_wd == 0 && pad_ht == 0) {
+            esp_nn_conv_s8_3x3_opt(input, input_wd, input_ht, channels,
+                                    input_offset, stride_wd, stride_ht,
+                                    filter_data, bias, out_data,
+                                    out_wd, out_ht, out_channels, out_offset,
+                                    out_shift, out_mult, activation_min, activation_max,
+                                    (void *)scratch_buffer);
+            return;
+        }
+#endif
 
         /* Im2col path: small in_ch where per-row SIMD is wasteful,
          * but entire window is large enough for SIMD dot product.

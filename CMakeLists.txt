@@ -31,6 +31,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/basic_math/esp_nn_mul_broadcast_s8_esp32s3.S"
         "src/convolution/esp_nn_conv_esp32s3.c"
         "src/convolution/esp_nn_conv_s8_1x1_esp32s3.c"
+        "src/convolution/esp_nn_conv_s8_3x3_opt_esp32s3.c"
         "src/convolution/esp_nn_depthwise_conv_s8_esp32s3.c"
         "src/convolution/esp_nn_conv_s16_mult8_esp32s3.S"
         "src/convolution/esp_nn_conv_s8_mult8_1x1_esp32s3.S"
