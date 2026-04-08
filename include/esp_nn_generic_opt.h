@@ -16,6 +16,7 @@
 
 #define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_ansi
 #define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_ansi
+#define esp_nn_mul_broadcast_channel_s8 esp_nn_mul_broadcast_channel_s8_ansi
 
 #define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_opt
 

@@ -57,6 +57,25 @@ void esp_nn_mul_elementwise_s8_ansi(const int8_t *input1_data,
                                     const int32_t activation_max,
                                     const int32_t size);
 
+/**
+ * @brief       broadcast MUL for [H,W,C] * [1,1,C] pattern (SE-block)
+ *
+ * @note        input2_per_ch has `channels` elements, broadcast to all spatial positions.
+ *              Uses fast requantization (constant nudge).
+ */
+void esp_nn_mul_broadcast_channel_s8_ansi(const int8_t *input1,
+                                      const int8_t *input2_per_ch,
+                                      const int32_t input1_offset,
+                                      const int32_t input2_offset,
+                                      int8_t *output,
+                                      const int32_t output_offset,
+                                      const int32_t output_mult,
+                                      const int32_t output_shift,
+                                      const int32_t activation_min,
+                                      const int32_t activation_max,
+                                      const int32_t total_spatial,
+                                      const int32_t channels);
+
 
 /************************** Convolution functions *****************************/
 

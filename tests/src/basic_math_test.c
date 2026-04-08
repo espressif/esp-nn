@@ -377,3 +377,175 @@ elementwise_mult_test_cleanup:
         }
     }
 }
+
+void esp_nn_mul_broadcast_channel_s8_test()
+{
+    int total_spatial = 49; /* 7x7 feature map */
+    int channels = 64;
+    int8_t *input1;
+    int8_t *input2_per_ch;
+    int8_t *out_data_c;
+    int8_t *out_data_opt;
+    int8_t *input1_orig = NULL;
+    int8_t *input2_orig = NULL;
+    int8_t *out_c_orig = NULL;
+    int8_t *out_opt_orig = NULL;
+    int32_t input1_offset = 34;
+    int32_t input2_offset = 35;
+    int32_t output_offset = 36;
+    int32_t output_shift = -7;
+    int32_t output_mult = MULT_MAX;
+    int32_t activation_min = -128;
+    int32_t activation_max = 127;
+
+    for (int itr = 0; itr < 10; itr++) {
+        switch (itr) {
+        case 0: // all zeros
+            input1_offset = 0;
+            input2_offset = 0;
+            output_offset = 0;
+            output_mult = 0;
+            output_shift = 0;
+            total_spatial = 49;
+            channels = 64;
+        break;
+        case 1: // hit min
+            input1_offset = -127;
+            input2_offset = -127;
+            output_offset = -128;
+            output_mult = MULT_MIN;
+            output_shift = 0;
+        break;
+        case 2: // hit max
+            input1_offset = 128;
+            input2_offset = 128;
+            output_offset = -127;
+            output_mult = MULT_MAX;
+            output_shift = SHIFT_MIN;
+        break;
+        case 3: // small channels (leftover only, no SIMD)
+            input1_offset = 64;
+            input2_offset = 32;
+            output_offset = -10;
+            output_mult = MULT_MAX / 2;
+            output_shift = -5;
+            total_spatial = 16;
+            channels = 5;
+        break;
+        case 4: // unaligned channels (SIMD + leftover)
+            total_spatial = 14;
+            channels = 19;
+        break;
+        case 5: // typical SE-block: 7x7 spatial, 96 channels
+            input1_offset = 128;
+            input2_offset = 128;
+            output_offset = -128;
+            output_mult = 1705397815;
+            output_shift = -3;
+            total_spatial = 49;
+            channels = 96;
+        break;
+        default: // random
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = -8 + rand() % 4;
+            total_spatial = 4 + rand() % 64;
+            channels = 8 + rand() % 128;
+        }
+
+        int size = total_spatial * channels;
+        input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        input2_orig = (int8_t *) ESP_NN_TEST_ALLOC(channels + 16);
+        out_c_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        out_opt_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+
+        if (input1_orig == NULL || input2_orig == NULL ||
+                out_c_orig == NULL || out_opt_orig == NULL) {
+            printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
+            goto broadcast_mul_test_cleanup;
+        }
+
+        input1 = (int8_t *) (((uint32_t) input1_orig + 15) & ~15);
+        input2_per_ch = (int8_t *) (((uint32_t) input2_orig + 15) & ~15);
+        out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
+        out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+
+        if (itr == 4) {
+            input1 = input1_orig; // unaligned input
+        }
+
+        for (int i = 0; i < size; ++i) {
+            input1[i] = rand() % 256 - 128;
+        }
+        for (int i = 0; i < channels; ++i) {
+            input2_per_ch[i] = rand() % 256 - 128;
+        }
+
+        if (itr == 0) {
+            profile_c_start();
+        }
+        /* C reference */
+        esp_nn_mul_broadcast_channel_s8_ansi(input1, input2_per_ch,
+                                             input1_offset, input2_offset,
+                                             out_data_c, output_offset,
+                                             output_mult, output_shift,
+                                             activation_min, activation_max,
+                                             total_spatial, channels);
+        if (itr == 0) {
+            profile_c_end();
+            profile_opt_start();
+        }
+        /* Optimized function */
+        esp_nn_mul_broadcast_channel_s8(input1, input2_per_ch,
+                                        input1_offset, input2_offset,
+                                        out_data_opt, output_offset,
+                                        output_mult, output_shift,
+                                        activation_min, activation_max,
+                                        total_spatial, channels);
+        if (itr == 0) {
+            profile_opt_end();
+        }
+
+        bool ret = CHECK_EQUAL(out_data_c, out_data_opt, size);
+        if (ret == false) {
+            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            printf("spatial=%d channels=%d size=%d\n", total_spatial, channels, size);
+            for (int idx = 0; idx < size; idx++) {
+                if (out_data_c[idx] != out_data_opt[idx]) {
+                    printf("first mismatch at idx=%d (row=%d ch=%d): got %02x exp %02x\n",
+                           idx, idx / channels, idx % channels,
+                           (uint8_t)out_data_opt[idx], (uint8_t)out_data_c[idx]);
+                    // print 8 more mismatches
+                    int cnt = 0;
+                    for (int j = idx + 1; j < size && cnt < 8; j++) {
+                        if (out_data_c[j] != out_data_opt[j]) {
+                            printf("  mismatch at idx=%d (row=%d ch=%d): got %02x exp %02x\n",
+                                   j, j / channels, j % channels,
+                                   (uint8_t)out_data_opt[j], (uint8_t)out_data_c[j]);
+                            cnt++;
+                        }
+                    }
+                    break;
+                }
+            }
+            goto broadcast_mul_test_cleanup;
+        }
+        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+
+broadcast_mul_test_cleanup:
+        if (input1_orig) {
+            free(input1_orig);
+        }
+        if (input2_orig) {
+            free(input2_orig);
+        }
+        if (out_c_orig) {
+            free(out_c_orig);
+        }
+        if (out_opt_orig) {
+            free(out_opt_orig);
+        }
+    }
+}

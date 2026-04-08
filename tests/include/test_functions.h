@@ -8,6 +8,7 @@
 /* int8_t ops tests */
 void esp_nn_add_elementwise_s8_test();
 void esp_nn_mul_elementwise_s8_test();
+void esp_nn_mul_broadcast_channel_s8_test();
 
 void esp_nn_depthwise_conv_s8_test();
 void esp_nn_conv_s8_test();

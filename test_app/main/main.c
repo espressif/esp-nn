@@ -68,6 +68,8 @@ void app_main()
     print_profile("add_s8");
     esp_nn_mul_elementwise_s8_test();
     print_profile("mul_s8");
+    esp_nn_mul_broadcast_channel_s8_test();
+    print_profile("mul_broadcast_ch_s8");
     esp_nn_depthwise_conv_s8_test();
     print_profile("depthwise_conv_s8");
     esp_nn_conv_s8_test();

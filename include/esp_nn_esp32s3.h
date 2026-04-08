@@ -225,6 +225,20 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 #define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_esp32s3
 #define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_esp32s3
 
+void esp_nn_mul_broadcast_channel_s8_esp32s3(const int8_t *input1,
+                                              const int8_t *input2_per_ch,
+                                              const int32_t input1_offset,
+                                              const int32_t input2_offset,
+                                              int8_t *output,
+                                              const int32_t output_offset,
+                                              const int32_t output_mult,
+                                              const int32_t output_shift,
+                                              const int32_t activation_min,
+                                              const int32_t activation_max,
+                                              const int32_t total_spatial,
+                                              const int32_t channels);
+#define esp_nn_mul_broadcast_channel_s8 esp_nn_mul_broadcast_channel_s8_esp32s3
+
 #define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_esp32s3
 
 #define esp_nn_get_conv_scratch_size esp_nn_get_conv_scratch_size_esp32s3
