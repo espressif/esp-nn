@@ -66,3 +66,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 else()
     target_compile_options(${COMPONENT_LIB} PRIVATE  -O2 -Wno-unused-function)
 endif()
+
+if(CONFIG_NN_SKIP_NUDGE)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SKIP_NUDGE)
+endif()

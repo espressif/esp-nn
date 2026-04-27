@@ -60,7 +60,7 @@ void esp_nn_mul_broadcast_channel_s8_ansi(const int8_t *input1,
         for (int c = 0; c < channels; c++) {
             int32_t val = ((int32_t)in_row[c] + input1_offset) *
                           ((int32_t)input2_per_ch[c] + input2_offset);
-            val = esp_nn_multiply_by_quantized_mult_fast(val, output_mult, output_shift);
+            val = esp_nn_multiply_by_quantized_mult(val, output_mult, output_shift);
             val += output_offset;
             val = max(val, activation_min);
             val = min(val, activation_max);

@@ -157,7 +157,7 @@ skip_asm:
                 if (bias) {
                     conv_out += bias[out_ch_idx];
                 }
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult++, *out_shift++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult++, *out_shift++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
@@ -302,7 +302,7 @@ skip_asm_pad0:
                 if (bias) {
                     conv_out += *bias_ptr++;
                 }
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult_ptr++, *out_shift_ptr++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult_ptr++, *out_shift_ptr++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
@@ -344,7 +344,7 @@ skip_asm_pad0:
                 if (bias) {
                     conv_out += *bias_ptr++;
                 }
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult_ptr++, *out_shift_ptr++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult_ptr++, *out_shift_ptr++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);

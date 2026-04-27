@@ -104,10 +104,10 @@ static void esp_nn_depthwise_conv_s8_ch_mult_1(const data_dims_t *input_dims,
                     result2 += bias[ch_idx + 2];
                     result3 += bias[ch_idx + 3];
                 }
-                result0 = esp_nn_multiply_by_quantized_mult_fast(result0, *out_mult++, *out_shift++);
-                result1 = esp_nn_multiply_by_quantized_mult_fast(result1, *out_mult++, *out_shift++);
-                result2 = esp_nn_multiply_by_quantized_mult_fast(result2, *out_mult++, *out_shift++);
-                result3 = esp_nn_multiply_by_quantized_mult_fast(result3, *out_mult++, *out_shift++);
+                result0 = esp_nn_requantize(result0, *out_mult++, *out_shift++);
+                result1 = esp_nn_requantize(result1, *out_mult++, *out_shift++);
+                result2 = esp_nn_requantize(result2, *out_mult++, *out_shift++);
+                result3 = esp_nn_requantize(result3, *out_mult++, *out_shift++);
 
                 result0 += out_offset;
                 result1 += out_offset;
@@ -146,7 +146,7 @@ static void esp_nn_depthwise_conv_s8_ch_mult_1(const data_dims_t *input_dims,
                 if (bias) {
                     result += bias[ch_idx];
                 }
-                result = esp_nn_multiply_by_quantized_mult_fast(result, *out_mult++, *out_shift++);
+                result = esp_nn_requantize(result, *out_mult++, *out_shift++);
                 result += out_offset;
                 result = max(result, activation_min);
                 result = min(result, activation_max);
@@ -236,10 +236,10 @@ void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                         result2 += bias[out_ch_idx + 2];
                         result3 += bias[out_ch_idx + 3];
                     }
-                    result0 = esp_nn_multiply_by_quantized_mult_fast(result0, *out_mult++, *out_shift++);
-                    result1 = esp_nn_multiply_by_quantized_mult_fast(result1, *out_mult++, *out_shift++);
-                    result2 = esp_nn_multiply_by_quantized_mult_fast(result2, *out_mult++, *out_shift++);
-                    result3 = esp_nn_multiply_by_quantized_mult_fast(result3, *out_mult++, *out_shift++);
+                    result0 = esp_nn_requantize(result0, *out_mult++, *out_shift++);
+                    result1 = esp_nn_requantize(result1, *out_mult++, *out_shift++);
+                    result2 = esp_nn_requantize(result2, *out_mult++, *out_shift++);
+                    result3 = esp_nn_requantize(result3, *out_mult++, *out_shift++);
 
                     result0 += out_offset;
                     result1 += out_offset;
@@ -278,7 +278,7 @@ void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                     if (bias) {
                         result += bias[out_ch_idx];
                     }
-                    result = esp_nn_multiply_by_quantized_mult_fast(result, *out_mult++, *out_shift++);
+                    result = esp_nn_requantize(result, *out_mult++, *out_shift++);
                     result += out_offset;
                     result = max(result, activation_min);
                     result = min(result, activation_max);

@@ -246,7 +246,7 @@ static void esp_nn_conv_s8_im2col_s3(
                 int32_t conv_out = esp_nn_dot_s8_aligned_esp32s3(im2col_buf, filter_ptr, window_len_aligned);
                 conv_out += filter_sum[oc];
                 if (bias) conv_out += bias[oc];
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult_ptr++, *out_shift_ptr++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult_ptr++, *out_shift_ptr++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
