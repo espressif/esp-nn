@@ -26,4 +26,16 @@ config NN_OPTIMIZATIONS
    default 0 if NN_ANSI_C
    default 1 if NN_OPTIMIZED
 
+config NN_SKIP_NUDGE
+   bool "Use fast (non-bit-exact) requantization"
+   depends on NN_OPTIMIZED
+   default n
+   help
+      When enabled, kernels use a faster requantize path that may differ
+      from the TFLite reference by +/-1 LSB at half-shift boundaries.
+      On ESP32-S3, this also skips the nudge addition in the assembly
+      requantize for ~20% speedup.
+      Leave disabled for bit-exact behavior (recommended for tests and
+      for matching reference outputs).
+
 endmenu

@@ -68,6 +68,8 @@ void app_main()
     print_profile("add_s8");
     esp_nn_mul_elementwise_s8_test();
     print_profile("mul_s8");
+    esp_nn_mul_broadcast_channel_s8_test();
+    print_profile("mul_broadcast_ch_s8");
     esp_nn_depthwise_conv_s8_test();
     print_profile("depthwise_conv_s8");
     esp_nn_conv_s8_test();
@@ -84,6 +86,10 @@ void app_main()
     print_profile("fc_per_ch_s8");
     esp_nn_softmax_s8_test();
     print_profile("softmax_s8");
+    esp_nn_hard_swish_s8_test();
+    print_profile("hard_swish_s8");
+    esp_nn_mean_nhwc_s8_test();
+    print_profile("mean_nhwc_s8");
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */

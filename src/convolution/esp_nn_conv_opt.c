@@ -76,7 +76,7 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                 if (bias) {
                     conv_out += bias[out_ch_idx];
                 }
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult++, *out_shift++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult++, *out_shift++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
@@ -168,7 +168,7 @@ void esp_nn_conv_s8_opt(const data_dims_t *input_dims,
                 if (bias) {
                     conv_out += bias[out_ch_idx];
                 }
-                conv_out = esp_nn_multiply_by_quantized_mult_fast(conv_out, *out_mult++, *out_shift++);
+                conv_out = esp_nn_requantize(conv_out, *out_mult++, *out_shift++);
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);

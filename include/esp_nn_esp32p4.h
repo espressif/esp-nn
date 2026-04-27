@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -44,6 +44,7 @@ void esp_nn_set_conv_scratch_buf_esp32p4(const void *buf);
 
 #define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_ansi
 #define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_ansi
+#define esp_nn_mul_broadcast_channel_s8 esp_nn_mul_broadcast_channel_s8_ansi
 
 #define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_opt
 
@@ -56,6 +57,12 @@ void esp_nn_set_conv_scratch_buf_esp32p4(const void *buf);
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_opt
 
 #define esp_nn_relu6_s8 esp_nn_relu6_s8_ansi
+
+#define esp_nn_hard_swish_s8 esp_nn_hard_swish_s8_ansi
+#define esp_nn_get_hard_swish_scratch_size() 0
+#define esp_nn_set_hard_swish_scratch_buf(buf)
+
+#define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_ansi
 
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_ansi
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_ansi

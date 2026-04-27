@@ -162,6 +162,17 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult_fast(int32_t x, in
     return result;
 }
 
+/*
+ * Unified requantize wrapper. Defining either SKIP_NUDGE (legacy) or
+ * CONFIG_NN_SKIP_NUDGE (Kconfig-driven) selects the faster, non-bit-exact
+ * path; otherwise the bit-exact TFLite-reference path is used.
+ */
+#if defined(SKIP_NUDGE) || defined(CONFIG_NN_SKIP_NUDGE)
+#define esp_nn_requantize(x, m, s) esp_nn_multiply_by_quantized_mult_fast((x), (m), (s))
+#else
+#define esp_nn_requantize(x, m, s) esp_nn_multiply_by_quantized_mult((x), (m), (s))
+#endif
+
 static void esp_nn_aligned_s8_pad_with_value(const int8_t *src, int8_t *dst,
                                              const uint16_t input_wd,
                                              const uint16_t input_ht,

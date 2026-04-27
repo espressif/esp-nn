@@ -1,16 +1,8 @@
-// Copyright 2020-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #pragma once
 
@@ -64,6 +56,25 @@ void esp_nn_mul_elementwise_s8_ansi(const int8_t *input1_data,
                                     const int32_t activation_min,
                                     const int32_t activation_max,
                                     const int32_t size);
+
+/**
+ * @brief       broadcast MUL for [H,W,C] * [1,1,C] pattern (SE-block)
+ *
+ * @note        input2_per_ch has `channels` elements, broadcast to all spatial positions.
+ *              Uses fast requantization (constant nudge).
+ */
+void esp_nn_mul_broadcast_channel_s8_ansi(const int8_t *input1,
+                                      const int8_t *input2_per_ch,
+                                      const int32_t input1_offset,
+                                      const int32_t input2_offset,
+                                      int8_t *output,
+                                      const int32_t output_offset,
+                                      const int32_t output_mult,
+                                      const int32_t output_shift,
+                                      const int32_t activation_min,
+                                      const int32_t activation_max,
+                                      const int32_t total_spatial,
+                                      const int32_t channels);
 
 
 /************************** Convolution functions *****************************/
@@ -128,6 +139,34 @@ void esp_nn_set_depthwise_conv_scratch_buf_ansi(const void *buf);
  * @note        inout: int8_t
  */
 void esp_nn_relu6_s8_ansi(int8_t *data, uint16_t size);
+
+/**
+ * @brief       hard_swish activation: y = x * relu6(x + 3) / 6
+ *
+ * @note        Quantized int8 fixed-point implementation
+ */
+void esp_nn_hard_swish_s8_ansi(const int8_t *input, int8_t *output,
+                                const int32_t size,
+                                const int16_t input_zero_point,
+                                const int16_t output_mult_fxp,
+                                const int16_t reluish_mult_fxp,
+                                const int32_t reluish_mult_exp,
+                                const int32_t output_mult_exp,
+                                const int16_t output_zero_point);
+
+/**
+ * @brief       mean reduction over spatial dims (H,W) for NHWC int8 tensor
+ *
+ * @note        Specialized for 4D [N,H,W,C] → [N,1,1,C] reduction.
+ *              Used by Squeeze-and-Excite in MobileNetV3.
+ */
+void esp_nn_mean_nhwc_s8_ansi(const int8_t *input, int8_t *output,
+                               const int32_t height, const int32_t width,
+                               const int32_t channels,
+                               const int32_t input_zero_point,
+                               const int32_t output_zero_point,
+                               const int32_t multiplier,
+                               const int32_t shift);
 
 /************************** Pooling functions *****************************/
 

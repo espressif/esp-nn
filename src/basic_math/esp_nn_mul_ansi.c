@@ -40,3 +40,31 @@ void esp_nn_mul_elementwise_s8_ansi(const int8_t *input1_data,
         output[i] = (int8_t) out;
     }
 }
+
+void esp_nn_mul_broadcast_channel_s8_ansi(const int8_t *input1,
+                                          const int8_t *input2_per_ch,
+                                          const int32_t input1_offset,
+                                          const int32_t input2_offset,
+                                          int8_t *output,
+                                          const int32_t output_offset,
+                                          const int32_t output_mult,
+                                          const int32_t output_shift,
+                                          const int32_t activation_min,
+                                          const int32_t activation_max,
+                                          const int32_t total_spatial,
+                                          const int32_t channels)
+{
+    for (int s = 0; s < total_spatial; s++) {
+        const int8_t *in_row = input1 + s * channels;
+        int8_t *out_row = output + s * channels;
+        for (int c = 0; c < channels; c++) {
+            int32_t val = ((int32_t)in_row[c] + input1_offset) *
+                          ((int32_t)input2_per_ch[c] + input2_offset);
+            val = esp_nn_multiply_by_quantized_mult(val, output_mult, output_shift);
+            val += output_offset;
+            val = max(val, activation_min);
+            val = min(val, activation_max);
+            out_row[c] = (int8_t)val;
+        }
+    }
+}
