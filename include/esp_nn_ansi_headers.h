@@ -367,3 +367,34 @@ void esp_nn_softmax_s8_opt(const int8_t *input_data,
                            const int32_t shift,
                            const int32_t diff_min,
                            int8_t *output_data);
+
+/**
+ * @brief       Get scratch buffer size for int8 logistic (sigmoid).
+ * @return      256 (size of LUT in bytes)
+ */
+int32_t esp_nn_get_logistic_s8_scratch_size_ansi(void);
+
+/**
+ * @brief       Prepare LUT for int8 logistic (sigmoid).
+ *              Call once during model preparation after scratch is allocated.
+ *
+ * @param       scratch_buf         Scratch buffer (256 bytes, from get_scratch_size)
+ * @param       input_zero_point    Input quantization zero point
+ * @param       input_scale         Input quantization scale (float)
+ *
+ * @note        Output quantization is fixed: scale=1/256, zero_point=-128.
+ */
+void esp_nn_logistic_s8_prepare_ansi(int8_t *scratch_buf,
+                                      int32_t input_zero_point,
+                                      float input_scale);
+
+/**
+ * @brief       Apply int8 logistic (sigmoid) using precomputed LUT.
+ *
+ * @param       input       Input int8 data
+ * @param       output      Output int8 data
+ * @param       size        Number of elements
+ * @param       scratch_buf 256-byte LUT from esp_nn_logistic_s8_prepare()
+ */
+void esp_nn_logistic_s8_ansi(const int8_t *input, int8_t *output,
+                              int32_t size, const int8_t *scratch_buf);

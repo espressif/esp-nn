@@ -13,6 +13,7 @@ set(c_srcs
     "src/fully_connected/esp_nn_fully_connected_ansi.c"
     "src/softmax/esp_nn_softmax_ansi.c"
     "src/softmax/esp_nn_softmax_opt.c"
+    "src/logistic/esp_nn_logistic_ansi.c"
     "src/pooling/esp_nn_avg_pool_ansi.c"
     "src/pooling/esp_nn_max_pool_ansi.c")
 
@@ -29,6 +30,8 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/basic_math/esp_nn_mul_s8_esp32s3.S"
         "src/basic_math/esp_nn_mul_broadcast_s8_esp32s3.S"
         "src/convolution/esp_nn_conv_esp32s3.c"
+        "src/convolution/esp_nn_conv_s8_1x1_esp32s3.c"
+        "src/convolution/esp_nn_conv_s8_3x3_opt_esp32s3.c"
         "src/convolution/esp_nn_depthwise_conv_s8_esp32s3.c"
         "src/convolution/esp_nn_conv_s16_mult8_esp32s3.S"
         "src/convolution/esp_nn_conv_s8_mult8_1x1_esp32s3.S"
@@ -53,7 +56,18 @@ endif()
 
 if(CONFIG_IDF_TARGET_ESP32P4)
     set(p4_srcs
-        "src/convolution/esp_nn_conv_esp32p4.c")
+        "src/common/esp_nn_mean_s8_esp32p4.c"
+        "src/common/esp_nn_multiply_by_quantized_mult_esp32p4.S"
+        "src/activation_functions/esp_nn_hard_swish_s8_esp32p4.c"
+        "src/activation_functions/esp_nn_relu_s8_esp32p4.c"
+        "src/basic_math/esp_nn_add_s8_esp32p4.c"
+        "src/basic_math/esp_nn_mul_s8_esp32p4.c"
+        "src/convolution/esp_nn_conv_esp32p4.c"
+        "src/convolution/esp_nn_depthwise_conv_esp32p4.c"
+        "src/fully_connected/esp_nn_fully_connected_s8_esp32p4.c"
+        "src/pooling/esp_nn_avg_pool_s8_esp32p4.c"
+        "src/pooling/esp_nn_max_pool_s8_esp32p4.c"
+        "src/softmax/esp_nn_softmax_s8_esp32p4.c")
 endif()
 
 idf_component_register(SRCS "${c_srcs}"

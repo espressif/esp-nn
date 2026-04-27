@@ -2,4 +2,4 @@
 #
 # esp-nn
 #
-CONFIG_NN_ESP32=y
+CONFIG_NN_OPTIMIZED=y

@@ -43,3 +43,7 @@
 #define esp_nn_get_softmax_scratch_size esp_nn_get_softmax_scratch_size_opt
 #define esp_nn_set_softmax_scratch_buf esp_nn_set_softmax_scratch_buf_opt
 #define esp_nn_softmax_s8 esp_nn_softmax_s8_opt
+
+#define esp_nn_get_logistic_s8_scratch_size esp_nn_get_logistic_s8_scratch_size_ansi
+#define esp_nn_logistic_s8_prepare esp_nn_logistic_s8_prepare_ansi
+#define esp_nn_logistic_s8 esp_nn_logistic_s8_ansi
