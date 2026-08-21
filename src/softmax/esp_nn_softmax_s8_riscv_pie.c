@@ -13,8 +13,11 @@ static int32_t *p4_scratch_buf = NULL;
 
 int32_t esp_nn_get_softmax_scratch_size_riscv_pie(const int32_t width, const int32_t height)
 {
+    (void) width;
     (void) height;
-    return width * 4;
+    /* Two 256-entry per-layer LUTs (raw exp + accumulation-scaled exp);
+     * the kernel no longer caches per-row exp values. */
+    return 2 * 256 * 4 + 16;
 }
 
 void esp_nn_set_softmax_scratch_buf_riscv_pie(void *buffer)
@@ -58,6 +61,25 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
     const int8_t *in_ptr = input_data;
     int8_t *out_ptr = output_data;
 
+    /* input_diff = in - max is confined to [-255, 0] and the quantization
+     * constants are per-layer, so exp has at most 256 distinct values:
+     * evaluate them once (identical arithmetic to the per-element path,
+     * bit-exact by construction) and index by max - in. exp_sum_lut holds
+     * the accumulation-scaled value used for sum_of_exps. */
+    int32_t *exp_lut = p4_scratch_buf;
+    int32_t *exp_sum_lut = p4_scratch_buf + 256;
+    for (int32_t d = 0; d < 256; d++) {
+        const int32_t diff = -d;
+        if (diff >= diff_min) {
+            const int32_t rescaled = SAT_HIGH_MUL(diff * mask, mult);
+            exp_lut[d] = esp_nn_exp_on_negative_values(rescaled);
+            exp_sum_lut[d] = DIV_POW2(exp_lut[d], ACCUM_BITS);
+        } else {
+            exp_lut[d] = 0;
+            exp_sum_lut[d] = 0;
+        }
+    }
+
     for (int row_idx = 0; row_idx < height; row_idx++) {
         /* Phase 1: Find max in row using PIE vectorization.
          * Use auto-incrementing loads to avoid redundant mv per iteration. */
@@ -98,18 +120,10 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
             }
         }
 
-        /* Phase 2: Compute exp values and sum */
-        int32_t input_diff = 0;
+        /* Phase 2: Sum the (precomputed) exp values */
         int32_t sum_of_exps = 0;
-
         for (col = 0; col < width; col++) {
-            input_diff = in_ptr[col] - max_in_row;
-            if (input_diff >= diff_min) {
-                const int32_t input_diff_rescaled = SAT_HIGH_MUL(input_diff * mask, mult);
-                const int32_t exp_raw = esp_nn_exp_on_negative_values(input_diff_rescaled);
-                p4_scratch_buf[col] = exp_raw;
-                sum_of_exps += DIV_POW2(exp_raw, ACCUM_BITS);
-            }
+            sum_of_exps += exp_sum_lut[max_in_row - in_ptr[col]];
         }
 
         /* Phase 3: Normalize */
@@ -118,9 +132,9 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
         const int32_t bits_over_unit = ACCUM_BITS - headroom_plus1 + 31 - sizeof(int8_t) * 8;
 
         for (col = 0; col < width; col++) {
-            input_diff = in_ptr[col] - max_in_row;
+            const int32_t input_diff = in_ptr[col] - max_in_row;
             if (input_diff >= diff_min) {
-                int32_t exp_raw = p4_scratch_buf[col];
+                const int32_t exp_raw = exp_lut[-input_diff];
                 const int32_t shifted_output = SAT_HIGH_MUL(shifted_scale, exp_raw);
                 const int32_t result = DIV_POW2(shifted_output, bits_over_unit) - 128;
                 out_ptr[col] = (int8_t) esp_nn_saturate8(result);
