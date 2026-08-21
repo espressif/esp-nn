@@ -30,7 +30,11 @@ static inline int16_t sat_round_dbl_high_mul_s16(int16_t a, int16_t b)
 {
     if (a == b && a == -32768) return 32767;
     int32_t ab = (int32_t)a * (int32_t)b;
-    return (int16_t)((ab + (1 << 14)) >> 15);
+    /* Sign-dependent nudge and truncating division: exactly
+     * gemmlowp::SaturatingRoundingDoublingHighMul<int16>, which the TFLM
+     * reference hard-swish uses. */
+    const int32_t nudge = (ab >= 0) ? (1 << 14) : (1 - (1 << 14));
+    return (int16_t)((ab + nudge) / (1 << 15));
 }
 
 /*
@@ -47,10 +51,13 @@ static inline int16_t sat_dbl_high_mul_s16(int16_t a, int16_t b)
  */
 static inline int16_t rounding_div_pot_s16(int16_t val, int exponent)
 {
-    int32_t mask = (1 << exponent) - 1;
-    int32_t remainder = val & mask;
-    int32_t threshold = (mask >> 1) + (val < 0 ? 1 : 0);
-    return (int16_t)((val >> exponent) + (remainder > threshold ? 1 : 0));
+    /* Exactly gemmlowp::RoundingDivideByPOT<int16_t>: every intermediate is
+     * int16-typed, so exponents >= 16 wrap the mask (the TFLM reference
+     * inherits that behavior and real MobileNetV3 layers reach it). */
+    const int16_t mask = (int16_t)((1u << exponent) - 1u);
+    const int16_t remainder = (int16_t)(val & mask);
+    const int16_t threshold = (int16_t)((int16_t)(mask >> 1) + (val < 0 ? 1 : 0));
+    return (int16_t)((int16_t)(val >> exponent) + (remainder > threshold ? 1 : 0));
 }
 
 void esp_nn_hard_swish_s8_ansi(const int8_t *input,
