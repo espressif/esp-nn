@@ -1094,8 +1094,12 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
             return input_scratch + filter_scratch + align_buf_size + offset_acc_scratch;
         }
 
-        /* Im2col path: scratch = filter_sum + im2col_buf */
-        if (filter_wd * filter_ht * in_ch >= 16) {
+        /* Im2col path: scratch = filter_sum + im2col_buf. Padded convs with
+         * SIMD-wide rows and a filter beyond the L1 panel budget route to the
+         * tiled path (sized by the padded-case block below), as dispatched. */
+        if (filter_wd * filter_ht * in_ch >= 16 &&
+                !((pad_wd != 0 || pad_ht != 0) && filter_wd * in_ch >= 16 &&
+                  (int32_t)filter_wd * filter_ht * in_ch * out_ch > 96 * 1024)) {
             int window_len = filter_wd * filter_ht * in_ch;
             int im2col_scratch = window_len;  /* one window buffer */
             return offset_acc_scratch + im2col_scratch + align_buf_size;
@@ -1178,6 +1182,20 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
         esp_nn_conv_s8_padded(input_dims, input, filter_dims, filter_data, bias,
                               output_dims, out_data, conv_params, quant_data,
                               scratch_buffer);
+    } else if ((pad_wd != 0 || pad_ht != 0) &&
+               filter_wd * input_dims->channels >= 16 &&
+               (int32_t)filter_wd * filter_ht * input_dims->channels *
+                       output_dims->channels > 96 * 1024) {
+        /* Padded conv whose filter exceeds the L2 cache: the pixel-outer
+         * im2col loop re-streams the whole filter per pixel, and once it
+         * no longer fits L2 that traffic comes from flash (yolo11n's
+         * 147 KB 3x3 pad-1 head ran 6.4 c/MAC). Stage the padding once and
+         * run the dense OC-panel kernel per tile. Filters that fit L2 stay
+         * on im2col, whose contiguous window dot has the higher peak
+         * throughput (32 B/iteration, double-buffered). */
+        esp_nn_conv_s8_tiled(input_dims, input, filter_dims, filter_data, bias,
+                             output_dims, out_data, conv_params, quant_data,
+                             scratch_buffer);
     } else if (filter_wd * filter_ht * input_dims->channels >= 16) {
         /* Small in_ch but window_len >= 16: use im2col for zero-waste PIE.
          * Also handles padded cases naturally. */
