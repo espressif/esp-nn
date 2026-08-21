@@ -980,18 +980,22 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
             return offset_acc_scratch + filt_aligned + tile_input + align_buf_size;
         }
 
-        /* Padded case: check if tiling is beneficial */
+        /* Padded case: check if tiling is beneficial. The tiled kernel pads
+         * channels up to eff_ch when filter_wd * in_ch < 16 so the PIE row
+         * dot has 16 lanes; the input staging buffer must be sized with
+         * eff_ch, not in_ch (sizing with in_ch under-reserved the buffer and
+         * the tile copy ran past the scratch allocation). */
+        int eff_ch = in_ch;
+        int filt_aligned = 0;
+        if (filter_wd * in_ch < 16) {
+            eff_ch = ((16 + filter_wd - 1) / filter_wd + 15) & ~15;
+            filt_aligned = filter_wd * filter_ht * eff_ch * out_ch;
+        }
         int padded_input_wd = input_wd + 2 * pad_wd;
-        int full_input_size = padded_input_wd * (input_ht + 2 * pad_ht) * in_ch;
+        int full_input_size = padded_input_wd * (input_ht + 2 * pad_ht) * eff_ch;
 
-        if (full_input_size + offset_acc_scratch > L1D_BUDGET) {
+        if (full_input_size + offset_acc_scratch + filt_aligned > L1D_BUDGET) {
             /* Tiled path: compute tile input size */
-            int eff_ch = in_ch;
-            int filt_aligned = 0;
-            if (filter_wd * in_ch < 16) {
-                eff_ch = ((16 + filter_wd - 1) / filter_wd + 15) & ~15;
-                filt_aligned = filter_wd * filter_ht * eff_ch * out_ch;
-            }
             int tile_row_bytes = padded_input_wd * eff_ch;
             int budget_for_input = L1D_BUDGET - offset_acc_scratch - filt_aligned;
             int tile_T = 1;
@@ -1006,7 +1010,8 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
         } else {
             /* Monolithic padded path */
             input_scratch = full_input_size;
-            filter_scratch = filter_wd * filter_ht * new_channels * out_ch;
+            filter_scratch = filt_aligned ? filt_aligned
+                             : filter_wd * filter_ht * new_channels * out_ch;
         }
         return input_scratch + filter_scratch + align_buf_size + offset_acc_scratch;
     }
