@@ -364,13 +364,30 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
         return;
     }
 
+    /* OC-panel tiling (see esp_nn_conv_s8_padded): sweep a panel of output
+     * channels across all pixels so the panel's filter rows stay resident in
+     * the 64 KB L1 D-cache; filter data is fetched from memory once per
+     * layer instead of once per pixel. Arithmetic order per output element
+     * is unchanged: bit-identical results. */
+    int32_t oc_tile = out_channels;
+    if ((int32_t)out_channels * in_channels > 24 * 1024) {
+        oc_tile = (24 * 1024) / in_channels;
+        if (oc_tile < 4) {
+            oc_tile = 4;
+        }
+    }
+
+    for (int32_t oc_base = 0; oc_base < out_channels; oc_base += oc_tile) {
+    const int32_t oc_end = min(oc_base + oc_tile, out_channels);
     for (int32_t in_row = 0; in_row < out_ht; in_row++) {
         for (int32_t in_col = 0; in_col < out_wd; in_col++) {
-            const int32_t *out_mult = quant_data->mult;
-            const int32_t *out_shift = quant_data->shift;
-            filter_ptr = filter_data;
+            const int32_t *out_mult = quant_data->mult + oc_base;
+            const int32_t *out_shift = quant_data->shift + oc_base;
+            filter_ptr = filter_data + oc_base * in_channels;
             const int8_t *input_base_ptr = input_data + (in_row * input_wd + in_col) * in_channels;
-            for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
+            int8_t *out_ptr = out_data
+                    + ((int32_t)(in_row * out_wd + in_col)) * out_channels + oc_base;
+            for (int32_t out_ch_idx = oc_base; out_ch_idx < oc_end; out_ch_idx++) {
                 /* initializations */
                 int32_t conv_out = 0;
                 const int8_t *input_ptr = input_base_ptr;
@@ -431,9 +448,10 @@ skip_asm:
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
-                *out_data++ = (int8_t) conv_out;
+                *out_ptr++ = (int8_t) conv_out;
             }
         }
+    }
     }
 }
 
@@ -487,109 +505,178 @@ static void esp_nn_conv_s8_padded(
 
     const int32_t row_size = filter_wd * in_channels;
 
-    bool right_pad = max(0, ((out_wd - 1) * stride_wd + filter_wd - input_wd));
-    bool bottom_pad = max(0, ((out_ht - 1) * stride_ht + filter_ht - input_ht));
+    /* Interior extent: output columns/rows whose whole filter window lies
+     * inside the input. Anything beyond falls in TFLite's implicit trailing
+     * padding (clipped taps), handled by the edge paths below. */
+    /* Guard the truncating division: an input smaller than the filter has
+     * no fully-inside output at all, not one. */
+    int32_t eff_wd = (input_wd >= filter_wd) ? (input_wd - filter_wd) / stride_wd + 1 : 0;
+    int32_t eff_ht = (input_ht >= filter_ht) ? (input_ht - filter_ht) / stride_ht + 1 : 0;
+    if (eff_wd > out_wd) eff_wd = out_wd;
+    if (eff_ht > out_ht) eff_ht = out_ht;
+    const bool right_pad = eff_wd < out_wd;
+    const bool bottom_pad = eff_ht < out_ht;
 
-    for (int32_t out_y = 0; out_y < out_ht - bottom_pad; out_y++) {
-        for (int32_t out_x = 0; out_x < out_wd - right_pad; out_x++) {
+    /*
+     * OC-panel tiling: sweep a panel of output channels across all output
+     * pixels before moving to the next panel. The panel's filters
+     * (oc_tile * filter_size bytes) stay resident in the L1 D-cache
+     * (P4 TRM 9.3.3.2: 64 KB dcache, 2-way, 64 B lines) for the whole pixel
+     * sweep, so filter data is fetched from memory once per layer instead of
+     * once per output pixel. Arithmetic order per output element is
+     * unchanged: bit-identical results.
+     */
+    const int32_t filter_size = filter_ht * row_size;
+    int32_t oc_tile = out_channels;
+    if ((int32_t)out_channels * filter_size > 24 * 1024 && filter_size > 0) {
+        oc_tile = (24 * 1024) / filter_size;
+        if (oc_tile < 4) {
+            oc_tile = 4;
+        }
+    }
+
+
+    for (int32_t oc_base = 0; oc_base < out_channels; oc_base += oc_tile) {
+        const int32_t oc_end = min(oc_base + oc_tile, out_channels);
+        const int8_t *panel_filter = filter_data + oc_base * filter_size;
+        for (int32_t out_y = 0; out_y < eff_ht; out_y++) {
             const int32_t base_y = stride_ht * out_y;
-            const int32_t base_x = stride_wd * out_x;
-            const int32_t *out_mult_ptr = out_mult;
-            const int32_t *out_shift_ptr = out_shift;
-            const int32_t *bias_ptr = bias;
-            const int8_t *filter_data_ptr = filter_data;
-            for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-                int32_t conv_out = 0, filter_y_idx;
-                if (row_size >= 16) {
-                    asm volatile("esp.zero.xacc                  \n\t");
-                }
+            for (int32_t out_x = 0; out_x < eff_wd; out_x++) {
+                const int32_t base_x = stride_wd * out_x;
+                const int8_t *filter_data_ptr = panel_filter;
+                int8_t *out_ptr = out_data
+                        + ((int32_t)out_y * out_wd + out_x) * out_channels + oc_base;
+                for (int32_t out_ch_idx = oc_base; out_ch_idx < oc_end; out_ch_idx++) {
+                    int32_t conv_out = 0, filter_y_idx;
+                    if (row_size >= 16) {
+                        asm volatile("esp.zero.xacc                  \n\t");
+                    }
 
-                for (filter_y_idx = 0; filter_y_idx < filter_ht; filter_y_idx++) {
-                    const int32_t in_row = base_y + filter_y_idx;
-                    const int32_t in_col = base_x;
-                    const int8_t *input_data_ptr =
-                            input_data + (in_row * input_wd + in_col) * in_channels;
-                    int32_t row_idx = 0;
+                    for (filter_y_idx = 0; filter_y_idx < filter_ht; filter_y_idx++) {
+                        const int32_t in_row = base_y + filter_y_idx;
+                        const int32_t in_col = base_x;
+                        const int8_t *input_data_ptr =
+                                input_data + (in_row * input_wd + in_col) * in_channels;
+                        int32_t row_idx = 0;
 #if 1 // inline asm
-                // for now check for the alignment as well
-                if (row_size < 16) {// || ((uint32_t) input_ptr & 15) || ((uint32_t) filter_ptr & 15)) {
-                    goto skip_asm_pad0;
-                }
+                    // for now check for the alignment as well
+                    if (row_size < 16) {// || ((uint32_t) input_ptr & 15) || ((uint32_t) filter_ptr & 15)) {
+                        goto skip_asm_pad0;
+                    }
 
-                int32_t c16 = (row_size >> 4) - 1;
-                asm volatile (
-                    "mv x30, %[inp]                 \n\t"
-                    "mv x31, %[flt]                 \n\t"
-                    "esp.vld.128.ip  q0, x30, 16    \n\t"
-                    "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    {
+                    int32_t c16 = (row_size >> 4) - 1;
+                    /* Two loop forms, identical arithmetic: the zero-overhead
+                     * hardware loop (as in the 1x1 kernel) drops the addi/bnez
+                     * pair per 16-byte chunk and pays off once the trip count
+                     * amortizes its setup; the software loop stays for short
+                     * rows (small in_ch), where esp.lp.setup measured slower
+                     * on ESP32-S31. */
+                    if (c16 >= 4) {
+                        asm volatile (
+                            "mv x30, %[inp]                 \n\t"
+                            "mv x31, %[flt]                 \n\t"
+                            "esp.vld.128.ip  q0, x30, 16    \n\t"
+                            "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                    /* NOTE: software loop kept deliberately - row_size here is
-                     * filter_wd * in_ch with small in_ch, so the trip count is
-                     * 0-2; esp.lp.setup cost cannot amortize over that. */
-                    "beqz %[c16], 2f                \n\t"
-                    "mv   s7, %[c16]                \n\t"
-                    "1:                             \n\t"
-                    "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                    "esp.vld.128.ip  q1, x31, 16    \n\t"
-                    "addi s7, s7, -1                \n\t"
-                    "bnez s7, 1b                    \n\t"
-                    "2:                             \n\t"
+                            /* zero-overhead loop; end label ON last body insn */
+                            "esp.lp.setup 0, %[c16], 1f     \n\t"
+                            "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
+                            "1:                             \n\t"
+                            "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                    // move input_ptr and filter_ptr
-                    "mv %[inp], x30                 \n\t"
-                    "mv %[flt], x31                 \n\t"
-                    "esp.vmulas.s8.xacc  q0, q1     \n\t"
+                            // move input_ptr and filter_ptr
+                            "mv %[inp], x30                 \n\t"
+                            "mv %[flt], x31                 \n\t"
+                            "esp.vmulas.s8.xacc  q0, q1     \n\t"
 
-                    : [inp] "+r" (input_data_ptr), [flt] "+r" (filter_data_ptr)
-                    : [c16] "r"(c16)
-                    : "x30", "x31", "s7"
-                );
-                row_idx = row_size & ~15;
+                            : [inp] "+r" (input_data_ptr), [flt] "+r" (filter_data_ptr)
+                            : [c16] "r"(c16)
+                            : "x30", "x31"
+                        );
+                    } else {
+                        asm volatile (
+                            "mv x30, %[inp]                 \n\t"
+                            "mv x31, %[flt]                 \n\t"
+                            "esp.vld.128.ip  q0, x30, 16    \n\t"
+                            "esp.vld.128.ip  q1, x31, 16    \n\t"
+
+                            "beqz %[c16], 2f                \n\t"
+                            "mv   s7, %[c16]                \n\t"
+                            "1:                             \n\t"
+                            "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
+                            "esp.vld.128.ip  q1, x31, 16    \n\t"
+                            "addi s7, s7, -1                \n\t"
+                            "bnez s7, 1b                    \n\t"
+                            "2:                             \n\t"
+
+                            // move input_ptr and filter_ptr
+                            "mv %[inp], x30                 \n\t"
+                            "mv %[flt], x31                 \n\t"
+                            "esp.vmulas.s8.xacc  q0, q1     \n\t"
+
+                            : [inp] "+r" (input_data_ptr), [flt] "+r" (filter_data_ptr)
+                            : [c16] "r"(c16)
+                            : "x30", "x31", "s7"
+                        );
+                    }
+                    row_idx = row_size & ~15;
+                    }
 skip_asm_pad0:
 #endif
-                    for (; row_idx < row_size - 3; row_idx += 4) {
-                        conv_out += *input_data_ptr++ * *filter_data_ptr++;
-                        conv_out += *input_data_ptr++ * *filter_data_ptr++;
-                        conv_out += *input_data_ptr++ * *filter_data_ptr++;
-                        conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                        for (; row_idx < row_size - 3; row_idx += 4) {
+                            conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                            conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                            conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                            conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                        }
+                        for (; row_idx < row_size; row_idx++) {
+                            conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                        }
                     }
-                    for (; row_idx < row_size; row_idx++) {
-                        conv_out += *input_data_ptr++ * *filter_data_ptr++;
+                    if (row_size >= 16) {
+                        asm volatile (
+                            "esp.movx.r.xacc.l  x30   \n\t"
+                            "add %0, %0, x30          \n\t"
+                            : "+r" (conv_out)
+                            :
+                            : "x30"
+                        );
                     }
-                }
-                if (row_size >= 16) {
-                    asm volatile (
-                        "esp.movx.r.xacc.l  x30   \n\t"
-                        "add %0, %0, x30          \n\t"
-                        : "+r" (conv_out)
-                        :
-                        : "x30"
-                    );
-                }
-                /* add input_offset term */
-                conv_out += filter_sum[out_ch_idx];
+                    /* add input_offset term */
+                    conv_out += filter_sum[out_ch_idx];
 
-                if (bias) {
-                    conv_out += *bias_ptr++;
+                    if (bias) {
+                        conv_out += bias[out_ch_idx];
+                    }
+                    conv_out = esp_nn_requantize(conv_out, out_mult[out_ch_idx],
+                                                 out_shift[out_ch_idx]);
+                    conv_out += out_offset;
+                    conv_out = max(conv_out, activation_min);
+                    conv_out = min(conv_out, activation_max);
+                    *out_ptr++ = (int8_t) conv_out;
                 }
-                conv_out = esp_nn_requantize(conv_out, *out_mult_ptr++, *out_shift_ptr++);
-                conv_out += out_offset;
-                conv_out = max(conv_out, activation_min);
-                conv_out = min(conv_out, activation_max);
-                *out_data++ = (int8_t) conv_out;
             }
         }
+    }
 
-        for (int32_t out_x = out_wd - right_pad; out_x < out_wd; out_x++) {
+    /* Right-edge columns whose filter window runs past the input: scalar
+     * path with the clipped tap count, as before (few pixels). */
+    for (int32_t out_y = 0; out_y < eff_ht && right_pad; out_y++) {
+        for (int32_t out_x = eff_wd; out_x < out_wd; out_x++) {
             const int32_t base_y = stride_ht * out_y;
             const int32_t base_x = stride_wd * out_x;
             const int32_t *out_mult_ptr = out_mult;
             const int32_t *out_shift_ptr = out_shift;
             const int32_t *bias_ptr = bias;
+            int8_t *out_ptr = out_data
+                    + ((int32_t)out_y * out_wd + out_x) * out_channels;
             for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
                 int32_t conv_out = 0, filter_y_idx;
+                /* Clip taps per pixel: the overhang grows toward the edge. */
+                const int32_t fx_end = min(filter_wd, input_wd - base_x);
                 for (filter_y_idx = 0; filter_y_idx < filter_ht; filter_y_idx++) {
-                    for (int32_t filter_x_idx = 0; filter_x_idx < filter_wd - right_pad; filter_x_idx++) {
+                    for (int32_t filter_x_idx = 0; filter_x_idx < fx_end; filter_x_idx++) {
                         const int32_t in_row = base_y + filter_y_idx;
                         const int32_t in_col = base_x + filter_x_idx;
 
@@ -618,7 +705,7 @@ skip_asm_pad0:
                 conv_out += out_offset;
                 conv_out = max(conv_out, activation_min);
                 conv_out = min(conv_out, activation_max);
-                *out_data++ = (int8_t) conv_out;
+                *out_ptr++ = (int8_t) conv_out;
             }
         }
     }
@@ -627,13 +714,15 @@ skip_asm_pad0:
     // generic kernel, which clamps filter windows to the input extent (the
     // rows falling in the implicit trailing padding contribute zero).
     if (bottom_pad) {
-        int in_row = (out_ht - 1) * stride_ht;
+        const int32_t in_row = eff_ht * stride_ht;
+        const int32_t rows = out_ht - eff_ht;
         esp_nn_conv_s8_opt(&(data_dims_t){input_dims->width, input_dims->height - in_row,
                                           input_dims->channels, 0},
                             input_data + in_row * input_dims->width * input_dims->channels,
                             filter_dims, filter_data, bias,
-                            &(data_dims_t){output_dims->width, 1, output_dims->channels, 0},
-                            out_data, conv_params, quant_data);
+                            &(data_dims_t){output_dims->width, (uint16_t)rows, output_dims->channels, 0},
+                            out_data + (int32_t)eff_ht * out_wd * out_channels,
+                            conv_params, quant_data);
     }
 }
 
