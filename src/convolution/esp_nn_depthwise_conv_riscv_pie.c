@@ -6,6 +6,7 @@
 
 #include <esp_nn_defs.h>
 #include <common_functions.h>
+#include <esp_nn_multicore.h>
 #include <stdlib.h>
 
 /* Note: esp_nn_requant_2x_riscv_pie.S exists but inline ESP_NN_REQUANT_2X macro
@@ -45,7 +46,7 @@ void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf)
  * For non-edge output positions: result[ch] = QACC_MAC + filter_sum[ch] * input_offset
  * For edge positions: falls back to scalar with input_offset applied directly. */
 __attribute__ ((noinline))
-static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
+static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                                        const int8_t *input_data,
                                        const data_dims_t *filter_dims,
                                        const int8_t *filter_data,
@@ -53,7 +54,8 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
                                        const data_dims_t *output_dims,
                                        int8_t *out_data,
                                        const dw_conv_params_t *conv_params,
-                                       const quant_data_t *quant_data)
+                                       const quant_data_t *quant_data,
+                                       int32_t *layer_scratch)
 {
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
@@ -96,7 +98,7 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
     /* Pre-compute combined offset: filter_sum * input_offset + bias per channel.
      * This fuses two additions per channel into one pre-computed value.
      * Constant for the entire layer - computed once. */
-    int32_t *combined_offset = scratch_buffer;
+    int32_t *combined_offset = layer_scratch;
     for (int ch = 0; ch < channels; ch++) {
         int32_t s = 0;
         if (input_offset != 0) {
@@ -266,6 +268,82 @@ static void depthwise_conv_s8_ch1_pie(const data_dims_t *input_dims,
     }
 }
 
+typedef struct {
+    data_dims_t input_dims;
+    const int8_t *input_data;
+    const data_dims_t *filter_dims;
+    const int8_t *filter_data;
+    const int32_t *bias;
+    data_dims_t output_dims;
+    int8_t *out_data;
+    dw_conv_params_t conv_params;
+    const quant_data_t *quant_data;
+} dw_pie_mt_job_t;
+
+static void dw_pie_mt_worker(void *p)
+{
+    const dw_pie_mt_job_t *j = (const dw_pie_mt_job_t *)p;
+    /* Worker uses its own per-layer constants buffer: no shared-scratch race. */
+    int32_t *wscr = (int32_t *)esp_nn_dual_core_scratch(
+            j->input_dims.channels * sizeof(int32_t) + 16);
+    depthwise_conv_s8_ch1_pie_impl(&j->input_dims, j->input_data, j->filter_dims,
+                                   j->filter_data, j->bias, &j->output_dims,
+                                   j->out_data, &j->conv_params, j->quant_data,
+                                   wscr);
+}
+
+/* Output-row split of the ch_mult==1 PIE path: taps are clipped against
+ * input_ht inside the kernel, so the bottom slice can enter the input at an
+ * interior row with pad_ht = 0 and both slices see exactly the taps of the
+ * single call, on disjoint output rows (bit-identical). */
+static bool dw_pie_rows_split(const data_dims_t *input_dims,
+                              const int8_t *input_data,
+                              const data_dims_t *filter_dims,
+                              const int8_t *filter_data,
+                              const int32_t *bias,
+                              const data_dims_t *output_dims,
+                              int8_t *out_data,
+                              const dw_conv_params_t *conv_params,
+                              const quant_data_t *quant_data)
+{
+    const uint16_t out_ht = output_dims->height;
+    const uint16_t h0 = out_ht / 2;
+    const int32_t in_row_off =
+            (int32_t)h0 * conv_params->stride.height - conv_params->padding.height;
+    if (!esp_nn_dual_core_active() || out_ht < 4 || in_row_off < 0) {
+        return false;
+    }
+    if (esp_nn_dual_core_scratch(input_dims->channels * sizeof(int32_t) + 16) == NULL) {
+        return false;
+    }
+    dw_pie_mt_job_t job = {
+        .input_dims = *input_dims, .input_data = input_data,
+        .filter_dims = filter_dims, .filter_data = filter_data, .bias = bias,
+        .output_dims = *output_dims, .out_data = out_data,
+        .conv_params = *conv_params, .quant_data = quant_data,
+    };
+    job.output_dims.height = h0;
+    if (!esp_nn_dual_core_run(dw_pie_mt_worker, &job)) {
+        return false;
+    }
+    {
+        data_dims_t in1 = *input_dims;
+        data_dims_t outd1 = *output_dims;
+        dw_conv_params_t params1 = *conv_params;
+        in1.height = input_dims->height - in_row_off;
+        outd1.height = out_ht - h0;
+        params1.padding.height = 0;
+        depthwise_conv_s8_ch1_pie_impl(
+                &in1,
+                input_data + in_row_off * input_dims->width * input_dims->channels,
+                filter_dims, filter_data, bias, &outd1,
+                out_data + (int32_t)h0 * output_dims->width * output_dims->channels,
+                &params1, quant_data, scratch_buffer);
+    }
+    esp_nn_dual_core_wait();
+    return true;
+}
+
 void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        const int8_t *input_data,
                                        const data_dims_t *filter_dims,
@@ -286,8 +364,12 @@ void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                           out_data, conv_params, quant_data);
             return;
         }
-        depthwise_conv_s8_ch1_pie(input_dims, input_data, filter_dims, filter_data,
-                                   bias, output_dims, out_data, conv_params, quant_data);
+        if (!dw_pie_rows_split(input_dims, input_data, filter_dims, filter_data,
+                               bias, output_dims, out_data, conv_params, quant_data)) {
+            depthwise_conv_s8_ch1_pie_impl(input_dims, input_data, filter_dims, filter_data,
+                                           bias, output_dims, out_data, conv_params,
+                                           quant_data, scratch_buffer);
+        }
         return;
     }
 
