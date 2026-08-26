@@ -383,7 +383,10 @@ typedef struct {
     const int8_t *input_data;
     uint16_t input_wd, input_ht, channels;
     int32_t input_offset;
-    uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
+    /* pad_wd/pad_ht are the leading (left/top) pads; pad_right/pad_bottom are
+     * derived from the output extent and may differ, as TFLite's "SAME"
+     * padding is asymmetric whenever the total pad is odd. */
+    uint16_t pad_wd, pad_ht, pad_right, pad_bottom, stride_wd, stride_ht;
     const int8_t *filter_aligned;
     const int32_t *bias;
     int8_t *out_data;
@@ -402,7 +405,7 @@ typedef struct {
  * per strip. Used directly and as the per-core body of the dual-core split. */
 static void dw3x3_strip_rows(const dw3x3_strip_job_t *j)
 {
-    const int padded_wd = j->input_wd + 2 * j->pad_wd;
+    const int padded_wd = j->input_wd + j->pad_wd + j->pad_right;
     const int8_t pad_val = (int8_t)(-j->input_offset);
     const int row_bytes = padded_wd * j->channels;
     int strip_rows = j->tile_bytes / row_bytes;
@@ -429,7 +432,7 @@ static void dw3x3_strip_rows(const dw3x3_strip_job_t *j)
                        j->input_data + src_y * j->input_wd * j->channels,
                        j->input_wd * j->channels);
                 memset(tile + (j->pad_wd + j->input_wd) * j->channels, pad_val,
-                       j->pad_wd * j->channels);
+                       j->pad_right * j->channels);
             }
             tile += row_bytes;
         }
@@ -630,16 +633,14 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
 
     if ((ch_mult == 1) && (channels % 8 == 0)) {
         if(filter_wd == 3 && filter_ht == 3) {
-            /* symmetric padding only: same test the kernel dispatch makes */
-            if ((channels % 16 == 0) &&
-                (((pad_wd == 1) && (pad_ht == 1)) || ((pad_wd == 0) && (pad_ht == 0)))) {
-                if (pad_wd || pad_ht) {
-                    pad_width = pad_wd * 2;
-                    pad_height = pad_ht * 2;
-                } else {
-                    pad_width = (out_wd * stride_wd + filter_wd - 1) - input_wd;
-                    pad_height = (out_ht * stride_ht + filter_ht - 1) - input_ht;
-                }
+            if (channels % 16 == 0) {
+                /* Mirrors the kernel: leading pad from the caller, trailing
+                 * pad from whatever the output extent still needs. Covers
+                 * TFLite's asymmetric "SAME" shapes on this path. */
+                pad_width = pad_wd + max(0, (out_wd - 1) * stride_wd + filter_wd
+                                            - pad_wd - input_wd);
+                pad_height = pad_ht + max(0, (out_ht - 1) * stride_ht + filter_ht
+                                             - pad_ht - input_ht);
                 if (pad_width || pad_height) {
                     int full_input = (input_wd + pad_width) * (input_ht + pad_height) * channels;
                     if (full_input <= 40 * 1024) {
@@ -909,19 +910,42 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
 
     if ((ch_mult == 1) && (channels % 8 == 0)) {
         if ((filter_wd == 3) && (filter_ht == 3)) {
-            if ((channels % 16 == 0) && (pad_wd == 1) && (pad_ht == 1)) {
-                /* process in 8 bits with s8 padded assembly */
+            if (channels % 16 == 0) {
+                /* process in 8 bits with s8 padded assembly. Leading padding
+                 * comes from the caller; trailing padding is whatever the
+                 * output extent still needs, so TFLite's asymmetric "SAME"
+                 * shapes stay on this path instead of falling through to the
+                 * channel-padding one. */
                 int8_t *filter_aligned = (int8_t *) active_scratch;
                 int8_t *input_padded = (int8_t *) active_scratch + filter_size + align_len;
+                const int pad_right = max(0, (out_wd - 1) * stride_wd + filter_wd
+                                             - pad_wd - input_wd);
+                const int pad_bottom = max(0, (out_ht - 1) * stride_ht + filter_ht
+                                              - pad_ht - input_ht);
+                const int padded_wd_full = input_wd + pad_wd + pad_right;
+                const int padded_ht_full = input_ht + pad_ht + pad_bottom;
+
+                if ((pad_wd | pad_ht | pad_right | pad_bottom) == 0) {
+                    /* nothing to pad: run straight off the caller's buffer */
+                    memcpy(filter_aligned, filter_data, filter_size);
+                    dw3x3_run_split(input_data, input_wd, input_ht, channels,
+                                    input_offset, stride_wd, stride_ht,
+                                    filter_aligned, bias, out_data, out_wd, out_ht,
+                                    out_offset, out_shift, out_mult,
+                                    activation_min, activation_max);
+                    return;
+                }
                 memcpy(filter_aligned, filter_data, filter_size);
 
-                int padded_input_size = (input_wd + 2*pad_wd) * (input_ht + 2*pad_ht) * channels;
+                int padded_input_size = padded_wd_full * padded_ht_full * channels;
                 if (padded_input_size <= 40 * 1024) {
                     /* Small enough — full padding, single assembly call */
-                    esp_nn_aligned_s8_pad_with_value(input_data, input_padded, input_wd, input_ht, channels,
-                                                     -input_offset, pad_wd, pad_ht);
-                    dw3x3_run_split(input_padded, input_wd + 2 * pad_wd,
-                                    input_ht + 2 * pad_ht, channels, input_offset,
+                    esp_nn_aligned_s8_pad_asymmetric(input_data, input_padded,
+                                                     input_wd, input_ht, channels,
+                                                     -input_offset, pad_wd, pad_ht,
+                                                     pad_right, pad_bottom);
+                    dw3x3_run_split(input_padded, padded_wd_full,
+                                    padded_ht_full, channels, input_offset,
                                     stride_wd, stride_ht, filter_aligned, bias,
                                     out_data, out_wd, out_ht, out_offset, out_shift,
                                     out_mult, activation_min, activation_max);
@@ -932,7 +956,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                      * input row filter_ht times from the (PSRAM) input.
                      * With the dual-core worker active, each core runs its
                      * own half of the output rows with its own tile. */
-                    int padded_wd = input_wd + 2 * pad_wd;
+                    int padded_wd = padded_wd_full;
                     int row_bytes = padded_wd * channels;
                     int avail = (active_scratch == (int16_t *)preferred_scratch_buffer)
                                 ? (int)preferred_scratch_size : required_scratch;
@@ -940,7 +964,8 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                         .input_data = input_data, .input_wd = input_wd,
                         .input_ht = input_ht, .channels = channels,
                         .input_offset = input_offset, .pad_wd = pad_wd,
-                        .pad_ht = pad_ht, .stride_wd = stride_wd,
+                        .pad_ht = pad_ht, .pad_right = pad_right,
+                        .pad_bottom = pad_bottom, .stride_wd = stride_wd,
                         .stride_ht = stride_ht, .filter_aligned = filter_aligned,
                         .bias = bias, .out_data = out_data, .out_wd = out_wd,
                         .out_y_begin = 0, .out_y_end = out_ht,
@@ -974,26 +999,6 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                         dw3x3_strip_rows(&job);
                     }
                 }
-            } else if ((channels % 16 == 0) && (pad_wd == 0) && (pad_ht == 0)) {
-                /* process in 8 bits */
-                int8_t *filter_aligned = (int8_t *) active_scratch;
-                int8_t *input_padded = (int8_t *) active_scratch + filter_size + align_len;
-
-                // check if we need to pad additionally
-                int pad_right = (out_wd * stride_wd + filter_wd - 1) - input_wd;
-                int pad_bottom = (out_ht * stride_ht + filter_ht - 1) - input_ht;
-                if (pad_right || pad_bottom) { // pad right and bottom
-                    esp_nn_aligned_s8_pad_end_with_value(input_data, input_padded, input_wd, input_ht,
-                                                         channels, -input_offset, pad_right, pad_bottom);
-                } else {
-                    input_padded = (int8_t *) input_data;
-                }
-                memcpy(filter_aligned, filter_data, filter_size);
-                dw3x3_run_split(input_padded, input_wd + pad_right,
-                                input_ht + pad_bottom, channels, input_offset,
-                                stride_wd, stride_ht, filter_aligned, bias,
-                                out_data, out_wd, out_ht, out_offset, out_shift,
-                                out_mult, activation_min, activation_max);
             } else if (channels >= 12) {
                 /* channels % 8 == 0, not % 16, channels >= 12: pad to 16 is worthwhile
                  * (overhead <= 33%). For ch=8, padding to 16 doubles data — use s16 instead */
