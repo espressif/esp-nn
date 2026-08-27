@@ -3,3 +3,14 @@
 # esp-nn
 #
 CONFIG_NN_OPTIMIZED=y
+
+#
+# GDB Stub
+#
+CONFIG_ESP_GDBSTUB_ENABLED=y
+CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
+
+#
+# Heap memory debugging
+#
+CONFIG_HEAP_POISONING_LIGHT=y
