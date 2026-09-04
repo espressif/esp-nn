@@ -663,7 +663,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 29; itr++) {
+    for (int itr = 0; itr < 31; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -673,8 +673,35 @@ void esp_nn_conv_s8_test()
          * TFLite-style asymmetric "SAME" padding where only the leading
          * (top/left) padding is passed in and trailing padding is implicit. */
         uint16_t force_out_wd = 0, force_out_ht = 0;
+        int groups = 1;
 
         switch (itr) {
+        case 29: // grouped 1x1 conv (groups=4)
+            in_wd = 8;
+            in_ht = 8;
+            in_channels = 64;
+            out_channels = 128;
+            groups = 4;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 30: // grouped 3x3 conv, stride 2, pad 1 (groups=2)
+            in_wd = 12;
+            in_ht = 12;
+            in_channels = 32;
+            out_channels = 64;
+            groups = 2;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         case 0: // ch % 8 == 0 && filter (1,1), padding (0,0)
             in_wd = 10;
             in_ht = 10;
@@ -1173,7 +1200,8 @@ void esp_nn_conv_s8_test()
 
         data_dims_t input_dims = {.width = in_wd, .height = in_ht, .channels = in_channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = out_channels, 1};
-        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, .channels = in_channels, 1};
+        data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht,
+                                   .channels = (uint16_t)(in_channels / groups), 1};
         conv_params_t conv_params = {.in_offset = input_offset, .out_offset = out_offset,
                                     .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
                                     .dilation = {0, 0}, .activation = {activation_min, activation_max}};

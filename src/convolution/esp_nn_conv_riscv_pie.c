@@ -1048,6 +1048,15 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
         return;
     }
 
+    /* Grouped conv (filter_ch < input_ch) must be caught before any fast
+     * path: they all assume full-depth filters. Same catch as the S3 and
+     * generic dispatches; the ansi reference handles groups. */
+    if (input_dims->channels != filter_dims->channels) {
+        esp_nn_conv_s8_ansi(input_dims, input, filter_dims, filter_data,
+                            bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
+
     const uint16_t filter_wd = filter_dims->width;
     const uint16_t filter_ht = filter_dims->height;
     const uint16_t pad_wd = conv_params->padding.width;
