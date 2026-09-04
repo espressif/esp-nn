@@ -150,11 +150,12 @@ static void esp_nn_conv_s8_1x1_filter_major(
         }
         int32_t offset_acc = bias ? bias[oc] : 0;
         if (input_offset != 0) {
-            int32_t filter_sum = 0;
-            for (int c = 0; c < in_channels; ++c) {
-                filter_sum += filter[c];
-            }
-            offset_acc += input_offset * filter_sum;
+            /* Vectorized: this path is gated on a small spatial map, so the
+             * per-channel sum is a sizeable fraction of the work here, not
+             * the negligible prepass it is on large maps. esp-nn#36 was the
+             * scalar form of this in fully_connected. */
+            offset_acc += input_offset *
+                          esp_nn_filter_sum_s8_esp32s3(filter, in_channels);
         }
 
         for (int pos = 0; pos < spatial_size; ++pos) {
