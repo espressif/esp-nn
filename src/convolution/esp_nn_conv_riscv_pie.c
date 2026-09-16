@@ -751,6 +751,55 @@ static void esp_nn_conv_s8_im2col(
  * This keeps the working set in L1D for large input tensors.
  * Reuses the existing esp_nn_conv_s8_padded PIE inner loop per tile.
  */
+/* Tile plan for the padded tiny-window conv. Computed by BOTH the scratch
+ * getter and the kernel from the same inputs, so the two can never disagree
+ * on the path taken or on the bytes staged: a divergence here silently
+ * overruns the caller's arena. */
+typedef struct {
+    int eff_ch;        /* channels after PIE lane padding (in_ch if none) */
+    int filt_aligned;  /* bytes of the channel-padded filter copy, 0 if none */
+    int row_bytes;     /* one staged (padded-width) input row */
+    int tile_T;        /* output rows per tile */
+    int staged_rows;   /* input rows staged for the tallest tile */
+    int scratch_bytes; /* filter_sum + filt_aligned + staging */
+} conv_tile_plan_t;
+
+static void conv_plan_tiles(int input_wd, int in_ch,
+                            int filter_wd, int filter_ht, int out_ch, int out_ht,
+                            int pad_wd, int stride_ht, conv_tile_plan_t *p)
+{
+    p->eff_ch = in_ch;
+    p->filt_aligned = 0;
+    if (filter_wd * in_ch < 16) {
+        /* PIE row dot needs 16 lanes: pad channels up */
+        p->eff_ch = ((16 + filter_wd - 1) / filter_wd + 15) & ~15;
+        p->filt_aligned = filter_wd * filter_ht * p->eff_ch * out_ch;
+    }
+    p->row_bytes = (input_wd + 2 * pad_wd) * p->eff_ch;
+    const int fixed = out_ch * 4 + p->filt_aligned; /* filter_sum + filter copy */
+
+    /* Monolithic by default. The kernel stages every input row the output
+     * needs, (out_ht - 1) * stride + filter_ht of them; for TFLite SAME shapes
+     * with trailing pad > leading pad that exceeds input_ht + 2 * pad_ht, so
+     * size from the rows actually staged, not from the padded input. */
+    p->tile_T = out_ht;
+    if (((out_ht - 1) * stride_ht + filter_ht) * p->row_bytes + fixed > L1D_BUDGET) {
+        const int budget = L1D_BUDGET - fixed;
+        if (filter_ht * p->row_bytes <= budget) {
+            p->tile_T = (budget - filter_ht * p->row_bytes)
+                        / (stride_ht * p->row_bytes) + 1;
+        } else {
+            /* Even one filter-height band overflows L1: take the smallest
+             * tile and let it spill rather than staging the whole input. */
+            p->tile_T = 1;
+        }
+        if (p->tile_T < 1) p->tile_T = 1;
+        if (p->tile_T > out_ht) p->tile_T = out_ht;
+    }
+    p->staged_rows = (p->tile_T - 1) * stride_ht + filter_ht;
+    p->scratch_bytes = fixed + p->staged_rows * p->row_bytes;
+}
+
 __attribute__ ((noinline))
 static void esp_nn_conv_s8_tiled(
         const data_dims_t *input_dims,
@@ -777,14 +826,13 @@ static void esp_nn_conv_s8_tiled(
     const uint16_t stride_ht = conv_params->stride.height;
     const int32_t input_offset = conv_params->in_offset;
 
-    /* Check if we need channel padding for PIE (row_size must be >= 16) */
-    int new_ch = in_ch;
-    int need_ch_pad = 0;
-    if (filter_wd * in_ch < 16) {
-        new_ch = (16 + filter_wd - 1) / filter_wd;  /* minimum channels for PIE */
-        new_ch = (new_ch + 15) & ~15;                /* align to 16 */
-        need_ch_pad = 1;
-    }
+    /* Shared plan: channel padding for PIE (row_size must be >= 16) and the
+     * tile height. The scratch getter runs the identical computation. */
+    conv_tile_plan_t plan;
+    conv_plan_tiles(input_wd, in_ch, filter_wd, filter_ht, out_ch, out_ht,
+                    pad_wd, stride_ht, &plan);
+    int new_ch = plan.eff_ch;
+    int need_ch_pad = (plan.filt_aligned != 0);
     int padded_input_wd = input_wd + 2 * pad_wd;
 
     /* Scratch layout:
@@ -831,20 +879,9 @@ static void esp_nn_conv_s8_tiled(
     int eff_ch = need_ch_pad ? new_ch : in_ch;
     int tile_input_row_bytes = padded_input_wd * eff_ch;
 
-    /* Compute tile height T (output rows per tile) */
-    int tile_T = out_ht;
-    int total_input_bytes = padded_input_wd * (input_ht + 2 * pad_ht) * eff_ch;
-    int used_scratch = filter_sum_size + aligned_filter_size;
-    if (total_input_bytes + used_scratch > L1D_BUDGET) {
-        int budget_for_input = L1D_BUDGET - used_scratch;
-        int min_input_rows = filter_ht;
-        if (min_input_rows * tile_input_row_bytes <= budget_for_input) {
-            tile_T = (budget_for_input - filter_ht * tile_input_row_bytes)
-                     / (stride_ht * tile_input_row_bytes) + 1;
-            if (tile_T < 1) tile_T = 1;
-            if (tile_T > out_ht) tile_T = out_ht;
-        }
-    }
+    /* Tile height T (output rows per tile) comes from the shared plan */
+    const int tile_T = plan.tile_T;
+    (void)tile_input_row_bytes;
 
     /* Process tiles */
     const int8_t *use_filter = need_ch_pad ? aligned_filter : filter_data;
@@ -853,8 +890,11 @@ static void esp_nn_conv_s8_tiled(
     for (int32_t tile_y = 0; tile_y < out_ht; tile_y += tile_T) {
         int32_t actual_T = min(tile_T, out_ht - tile_y);
 
+        /* Input rows feeding output rows [tile_y, tile_y + actual_T):
+         * exactly (actual_T - 1) * stride + filter_ht of them, which is what
+         * conv_plan_tiles() sized the staging buffer for. */
         int32_t in_row_start = tile_y * stride_ht - pad_ht;
-        int32_t in_row_end = (tile_y + actual_T - 1) * stride_ht + filter_ht - 1;
+        int32_t in_row_end = (tile_y + actual_T - 1) * stride_ht - pad_ht + filter_ht - 1;
         int32_t tile_input_ht = in_row_end - in_row_start + 1;
 
         /* Copy/pad input rows into tile buffer, with channel padding if needed */
@@ -980,40 +1020,14 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
             return offset_acc_scratch + filt_aligned + tile_input + align_buf_size;
         }
 
-        /* Padded case: check if tiling is beneficial. The tiled kernel pads
-         * channels up to eff_ch when filter_wd * in_ch < 16 so the PIE row
-         * dot has 16 lanes; the input staging buffer must be sized with
-         * eff_ch, not in_ch (sizing with in_ch under-reserved the buffer and
-         * the tile copy ran past the scratch allocation). */
-        int eff_ch = in_ch;
-        int filt_aligned = 0;
-        if (filter_wd * in_ch < 16) {
-            eff_ch = ((16 + filter_wd - 1) / filter_wd + 15) & ~15;
-            filt_aligned = filter_wd * filter_ht * eff_ch * out_ch;
-        }
-        int padded_input_wd = input_wd + 2 * pad_wd;
-        int full_input_size = padded_input_wd * (input_ht + 2 * pad_ht) * eff_ch;
-
-        if (full_input_size + offset_acc_scratch + filt_aligned > L1D_BUDGET) {
-            /* Tiled path: compute tile input size */
-            int tile_row_bytes = padded_input_wd * eff_ch;
-            int budget_for_input = L1D_BUDGET - offset_acc_scratch - filt_aligned;
-            int tile_T = 1;
-            if (budget_for_input > 0 && filter_ht * tile_row_bytes <= budget_for_input) {
-                tile_T = (budget_for_input - filter_ht * tile_row_bytes)
-                         / (stride_ht * tile_row_bytes) + 1;
-                if (tile_T > (int)(output_dims->height)) tile_T = output_dims->height;
-            }
-            int tile_input_rows = (tile_T - 1) * stride_ht + filter_ht + 2 * pad_ht;
-            input_scratch = tile_input_rows * tile_row_bytes;
-            filter_scratch = filt_aligned;
-        } else {
-            /* Monolithic padded path */
-            input_scratch = full_input_size;
-            filter_scratch = filt_aligned ? filt_aligned
-                             : filter_wd * filter_ht * new_channels * out_ch;
-        }
-        return input_scratch + filter_scratch + align_buf_size + offset_acc_scratch;
+        /* Padded tiny-window case: the tiled kernel and this getter share
+         * conv_plan_tiles(), so the staging buffer is sized with the same
+         * eff_ch, the same tile decision and the same staged-row count the
+         * kernel will use. */
+        conv_tile_plan_t plan;
+        conv_plan_tiles(input_wd, in_ch, filter_wd, filter_ht, out_ch,
+                        output_dims->height, pad_wd, stride_ht, &plan);
+        return plan.scratch_bytes + align_buf_size;
     }
     return align_buf_size;
 }
