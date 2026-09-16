@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
 
@@ -111,11 +113,32 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
                                          const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_esp32s3(const void *buf);
 
+/**
+ * @brief       Prefer a caller-owned buffer for convolution workspace
+ *
+ * @note        The buffer must remain valid until it is replaced or cleared
+ *              with (NULL, 0). The buffer must be 16-byte aligned. If it is
+ *              unaligned or too small for an operation, the ordinary scratch
+ *              buffer remains in use.
+ */
+void esp_nn_set_conv_preferred_scratch_buf_esp32s3(void *buf, size_t size);
+
 int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
                                                    const data_dims_t *filter_dims,
                                                    const data_dims_t *output_dims,
                                                    const dw_conv_params_t *conv_params);
 void esp_nn_set_depthwise_conv_scratch_buf_esp32s3(const void *buf);
+
+/**
+ * @brief       Prefer a caller-owned buffer for depthwise workspace
+ *
+ * @note        The buffer must remain valid until it is replaced or cleared
+ *              with (NULL, 0). The buffer must be 16-byte aligned. If it is
+ *              unaligned or too small for an operation, the ordinary scratch
+ *              buffer remains in use.
+ */
+void esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(void *buf,
+                                                             size_t size);
 
 /************************** Pooling functions *****************************/
 

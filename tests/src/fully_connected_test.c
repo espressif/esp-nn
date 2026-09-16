@@ -340,6 +340,47 @@ fc_per_ch_s8_buffers_cleanup:
 #define FC_ALIGN_GUARD      32
 #define FC_ALIGN_TRIALS     8
 
+#if CONFIG_IDF_TARGET_ESP32S3
+extern int32_t esp_nn_dot_s8_unaligned_esp32s3(const int8_t *a,
+                                               const int8_t *b,
+                                               int32_t len_div16);
+
+static bool fc_check_exact_sized_dot_product(void)
+{
+    const int vector_counts[] = {1, 2, 39, 40};
+    const int offsets[] = {0, 1, 7, 15};
+
+    for (int vc = 0; vc < (int)(sizeof(vector_counts) / sizeof(vector_counts[0])); ++vc) {
+        const int len = vector_counts[vc] * 16;
+        for (int oi = 0; oi < (int)(sizeof(offsets) / sizeof(offsets[0])); ++oi) {
+            const int offset = offsets[oi];
+            int8_t *a = ESP_NN_TEST_ALLOC(len);
+            int8_t *b_base = ESP_NN_TEST_ALLOC(len + offset);
+            if (!a || !b_base) {
+                free(a);
+                free(b_base);
+                return false;
+            }
+            int8_t *b = b_base + offset;
+            int32_t expected = 0;
+            for (int i = 0; i < len; ++i) {
+                a[i] = rand() % 256 - 128;
+                b[i] = rand() % 256 - 128;
+                expected += (int32_t)a[i] * b[i];
+            }
+            int32_t actual = esp_nn_dot_s8_unaligned_esp32s3(
+                    a, b, vector_counts[vc]);
+            free(a);
+            free(b_base);
+            if (actual != expected) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+#endif
+
 typedef struct {
     int mismatch_pt;    /* per-tensor kernel vs its ansi reference */
     int mismatch_pc;    /* per-channel kernel vs its ansi reference */
@@ -467,6 +508,14 @@ void esp_nn_fully_connected_align_s8_test()
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     printf("geometry: row_len %d, filter_offset 0, input_offset -3 (esp-nn#34)\n",
            FC_ALIGN_ROW_LEN);
+
+#if CONFIG_IDF_TARGET_ESP32S3
+    bool bounded_dot_ok = fc_check_exact_sized_dot_product();
+    printf("-- exact-sized bounded dot-product inputs: %s%s%s\n",
+           bounded_dot_ok ? ANSI_COLOR_GREEN : ANSI_COLOR_RED,
+           bounded_dot_ok ? "passed" : "failed",
+           ANSI_COLOR_RESET);
+#endif
 
     /* Sweep A: input misalignment 0..15, filter 16-byte aligned, out_ch = 2.
      * Exercises the `input_data & 15` dispatcher predicate. */

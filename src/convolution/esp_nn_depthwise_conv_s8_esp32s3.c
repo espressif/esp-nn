@@ -10,6 +10,8 @@
 #include <common_functions.h>
 
 static int16_t *scratch_buffer = NULL;
+static uint8_t *preferred_scratch_buffer = NULL;
+static size_t preferred_scratch_size = 0;
 
 extern void esp_nn_depthwise_conv_s16_mult8_3x3_esp32s3(const int16_t *input_data,
                                                         const uint16_t input_wd,
@@ -491,6 +493,13 @@ void esp_nn_set_depthwise_conv_scratch_buf_esp32s3(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
+void esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(void *buf,
+                                                             size_t size)
+{
+    preferred_scratch_buffer = (uint8_t *)buf;
+    preferred_scratch_size = size;
+}
+
 /**
  * ESP32-S3 optimized depthwise convolution implementation.
  *
@@ -632,15 +641,23 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t activation_max = conv_params->activation.max;
     const uint16_t ch_mult = conv_params->ch_mult;
 
-    int filter_size = filter_wd * filter_ht * channels * ch_mult;
-    int align_len = 16 - (filter_size & 15);
-    int input_size = input_wd * input_ht * channels;
-    int16_t *filter_data16 = scratch_buffer;
-    int16_t *input_data16 = scratch_buffer + filter_size + align_len;
     if (scratch_buffer == NULL) {
         printf("esp_nn_depthwise_conv error! scratch_buffer not set!\n");
         return;
     }
+    int required_scratch = esp_nn_get_depthwise_conv_scratch_size_esp32s3(
+            input_dims, filter_dims, output_dims, conv_params);
+    int16_t *active_scratch = scratch_buffer;
+    if (preferred_scratch_buffer != NULL &&
+            (((uintptr_t)preferred_scratch_buffer & 15) == 0) &&
+            required_scratch <= preferred_scratch_size) {
+        active_scratch = (int16_t *)preferred_scratch_buffer;
+    }
+    int filter_size = filter_wd * filter_ht * channels * ch_mult;
+    int align_len = 16 - (filter_size & 15);
+    int input_size = input_wd * input_ht * channels;
+    int16_t *filter_data16 = active_scratch;
+    int16_t *input_data16 = active_scratch + filter_size + align_len;
 
     /* Width-1 tensor with a (K,1) filter: int8 in place. Alignment is
      * arranged inside the helper, not demanded of the caller. */
@@ -661,8 +678,8 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         if ((filter_wd == 3) && (filter_ht == 3)) {
             if ((channels % 16 == 0) && (pad_wd == 1) && (pad_ht == 1)) {
                 /* process in 8 bits with s8 padded assembly */
-                int8_t *filter_aligned = (int8_t *) scratch_buffer;
-                int8_t *input_padded = (int8_t *) scratch_buffer + filter_size + align_len;
+                int8_t *filter_aligned = (int8_t *) active_scratch;
+                int8_t *input_padded = (int8_t *) active_scratch + filter_size + align_len;
                 memcpy(filter_aligned, filter_data, filter_size);
 
                 int padded_input_size = (input_wd + 2*pad_wd) * (input_ht + 2*pad_ht) * channels;
@@ -713,8 +730,8 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                 }
             } else if ((channels % 16 == 0) && (pad_wd == 0) && (pad_ht == 0)) {
                 /* process in 8 bits */
-                int8_t *filter_aligned = (int8_t *) scratch_buffer;
-                int8_t *input_padded = (int8_t *) scratch_buffer + filter_size + align_len;
+                int8_t *filter_aligned = (int8_t *) active_scratch;
+                int8_t *input_padded = (int8_t *) active_scratch + filter_size + align_len;
 
                 // check if we need to pad additionally
                 int pad_right = (out_wd * stride_wd + filter_wd - 1) - input_wd;
@@ -739,7 +756,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
 
                 /* Pad filter: 3x3 x new_ch */
                 int new_filter_size = 9 * new_ch;
-                int8_t *filter_padded = (int8_t *) scratch_buffer;
+                int8_t *filter_padded = (int8_t *) active_scratch;
                 memset(filter_padded, 0, new_filter_size);
                 for (int f = 0; f < 9; f++) {
                     memcpy(filter_padded + f * new_ch, filter_data + f * channels, channels);
@@ -876,7 +893,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         int padded_filter_size = filter_wd * filter_ht * padded_channels;
 
         // Use scratch buffer for padded data (ensure 16-byte alignment for SIMD)
-        int16_t *padded_filter_data16 = (int16_t*)scratch_buffer;
+        int16_t *padded_filter_data16 = active_scratch;
         size_t input_start = (size_t)(padded_filter_data16 + padded_filter_size);
         int16_t *padded_input_data16 = (int16_t*)((input_start + 15) & ~15);
         size_t out_start = (size_t)(padded_input_data16 + padded_input_size);

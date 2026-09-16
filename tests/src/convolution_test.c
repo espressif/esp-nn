@@ -30,6 +30,7 @@ void esp_nn_depthwise_conv_s8_test()
     int32_t activation_min = -125;
     int32_t activation_max = 120;
     void *scratch_buf = NULL;
+    void *preferred_depthwise_scratch = NULL;
 
     /* independent variables */
     int input_wd, input_ht, channels;
@@ -519,6 +520,26 @@ void esp_nn_depthwise_conv_s8_test()
             memset(scratch_guard, SCRATCH_GUARD_BYTE, SCRATCH_GUARD_SZ);
             esp_nn_set_depthwise_conv_scratch_buf(scratch_buf + align_sz);
         }
+#if CONFIG_IDF_TARGET_ESP32S3
+        if (itr >= 10 && itr <= 12) {
+            preferred_depthwise_scratch = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
+            if (preferred_depthwise_scratch == NULL) {
+                printf(ANSI_COLOR_RED"[%d] preferred scratch allocation failed\n"ANSI_COLOR_RESET,
+                       itr);
+                goto dc_s8_cleanup;
+            }
+            uint8_t *preferred_aligned = (uint8_t *)
+                    (((uintptr_t)preferred_depthwise_scratch + 15) & ~(uintptr_t)15);
+            void *preferred = preferred_aligned + (itr == 11);
+            size_t preferred_size = itr == 12 && scratch_buf_size > 0
+                    ? (size_t)scratch_buf_size - 1
+                    : (size_t)scratch_buf_size;
+            esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(
+                    preferred, preferred_size);
+        } else if (itr == 13) {
+            esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(NULL, 0);
+        }
+#endif
 
         /* enable profiler */
         profile_c_start();
@@ -582,6 +603,9 @@ void esp_nn_depthwise_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
+#if CONFIG_IDF_TARGET_ESP32S3
+        esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(NULL, 0);
+#endif
         if (input_orig) {
             free(input_orig);
         }
@@ -607,6 +631,10 @@ void esp_nn_depthwise_conv_s8_test()
             free(scratch_buf);
             scratch_buf = NULL;
         }
+        if (preferred_depthwise_scratch) {
+            free(preferred_depthwise_scratch);
+            preferred_depthwise_scratch = NULL;
+        }
         esp_nn_set_depthwise_conv_scratch_buf(NULL);
     }
 }
@@ -620,6 +648,7 @@ void esp_nn_conv_s8_test()
     int32_t out_offset = 3;
 
     void *scratch_buf = NULL;
+    void *preferred_scratch_buf = NULL;
     int8_t *input_orig = NULL;
     int8_t *out_c_orig = NULL;
     int8_t *out_opt_orig = NULL;
@@ -634,7 +663,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 27; itr++) {
+    for (int itr = 0; itr < 29; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -894,7 +923,12 @@ void esp_nn_conv_s8_test()
             in_wd = 5;
             in_ht = 3;
             in_channels = 240;
+#if CONFIG_IDF_TARGET_ESP32S3
+            /* Keep the S3 unit-test allocation within its internal-memory heap. */
+            out_channels = 256;
+#else
             out_channels = 640;
+#endif
             filter_ht = 1;
             filter_wd = 1;
             pad_wd = 0;
@@ -941,6 +975,19 @@ void esp_nn_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             input_offset = 0;
+            break;
+        case 27: // Batched tail using an aligned caller-owned workspace
+        case 28: // Batched tail with an unaligned preferred-buffer fallback
+            in_wd = 5;
+            in_ht = 3;
+            in_channels = 16;
+            out_channels = 16;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
             break;
         case 19: // asymmetric "SAME" padding as TFLite generates it (3x3, stride 2)
             in_wd = 7;
@@ -990,13 +1037,14 @@ void esp_nn_conv_s8_test()
         }
 
         int in_size = in_wd * in_ht * in_channels;
-        int filter_size = filter_wd * filter_ht * in_channels * out_channels + 2;
+        int filter_size = filter_wd * filter_ht * in_channels * out_channels;
+        int filter_prefix = itr == 17 ? 5 : 0;
         int out_size = out_wd * out_ht * out_channels;
 
         input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
         out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
-        filter_data = ESP_NN_TEST_ALLOC(filter_size + 16);
+        filter_data = ESP_NN_TEST_ALLOC(filter_size + filter_prefix);
         bias = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
         out_shift = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
         out_mult = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
@@ -1019,7 +1067,7 @@ void esp_nn_conv_s8_test()
         }
 
         /* Generate filter data between -128 -> +127 */
-        for (int i = 0; i < filter_size; ++i) {
+        for (int i = 0; i < filter_size + filter_prefix; ++i) {
             filter_data[i] = rand() % 256 - 128;
         }
 
@@ -1144,6 +1192,20 @@ void esp_nn_conv_s8_test()
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
         }
+#if CONFIG_IDF_TARGET_ESP32S3
+        if (itr == 27 || itr == 28) {
+            preferred_scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
+            if (preferred_scratch_buf == NULL) {
+                printf(ANSI_COLOR_RED"[%3d] preferred scratch allocation failed\n"ANSI_COLOR_RESET,
+                       itr);
+                goto conv_s8_cleanup;
+            }
+            uint8_t *preferred_aligned = (uint8_t *)
+                    (((uintptr_t)preferred_scratch_buf + 15) & ~(uintptr_t)15);
+            esp_nn_set_conv_preferred_scratch_buf_esp32s3(
+                    preferred_aligned + (itr == 28), scratch_buf_size);
+        }
+#endif
 
         /* enable profiler */
         profile_c_start();
@@ -1177,6 +1239,9 @@ void esp_nn_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
+#if CONFIG_IDF_TARGET_ESP32S3
+        esp_nn_set_conv_preferred_scratch_buf_esp32s3(NULL, 0);
+#endif
         /* Restore original filter pointer (may have been offset for alignment test) */
         filter_data = filter_data_orig_save;
         if (input_orig) {
@@ -1210,6 +1275,10 @@ void esp_nn_conv_s8_test()
         if (scratch_buf) {
             free(scratch_buf);
             scratch_buf = NULL;
+        }
+        if (preferred_scratch_buf) {
+            free(preferred_scratch_buf);
+            preferred_scratch_buf = NULL;
         }
     }
 }
