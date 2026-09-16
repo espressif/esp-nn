@@ -77,6 +77,11 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     max     a14,a15,a11                 # [11] left_shift
     sub     a4,a14,a15              # right_shift
     s32i.n  a4,a1,20                # [9]  gra_spill_temp_4
+    // a4 is the SRDHM nudge (1 << 30) from here on. It must be loaded before
+    // the two early branches below: .process_leftover reads it, and entering
+    // there directly (size < 8, or an input not 16-byte aligned) used to see
+    // right_shift in a4 instead, i.e. floor() in place of round-to-nearest.
+    l32r    a4,.LC0_26_123
 
     blti    a3,8,.process_leftover             # [20]
 
@@ -283,7 +288,11 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     sll     a7,a7                       // to_add
 
     extui   a8,a3,31,1                  # [24], sign
-    add     a3,a3,a8            // add sign
+    // Round half away from zero, as esp_nn_div_by_power_of_two does:
+    // (x + half) >> e for x >= 0, (x + half - 1) >> e for x < 0. The
+    // vector path adds the (0 / -1) compare mask; here the sign bit must
+    // therefore be subtracted, not added.
+    sub     a3,a3,a8            // subtract sign
     add     a3,a3,a7            // add to_add
 
     ssr     a9                          # [20] load right_shift
