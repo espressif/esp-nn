@@ -14,3 +14,8 @@ CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y
 # Heap memory debugging
 #
 CONFIG_HEAP_POISONING_LIGHT=y
+
+# One CPU-bound task that never yields: the task watchdog only warns on
+# hardware and reboot-loops under esp-emu; hangs are caught by its timeout.
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESP_TASK_WDT_INIT=n
