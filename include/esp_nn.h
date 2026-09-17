@@ -47,6 +47,13 @@ extern "C" {
 #include "esp_nn_ansi_c.h"
 #endif
 
+/* Optional per-kernel scratch APIs: an arch header that needs scratch
+ * defines these itself; everything else gets the no-op ANSI versions. */
+#ifndef esp_nn_get_mean_scratch_size
+#define esp_nn_get_mean_scratch_size esp_nn_get_mean_scratch_size_ansi
+#define esp_nn_set_mean_scratch_buf esp_nn_set_mean_scratch_buf_ansi
+#endif
+
 #ifdef __cplusplus
 }
 #endif

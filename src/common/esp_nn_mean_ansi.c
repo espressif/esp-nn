@@ -45,3 +45,17 @@ void esp_nn_mean_nhwc_s8_ansi(const int8_t *input,
         output[c] = (int8_t)result;
     }
 }
+
+int32_t esp_nn_get_mean_scratch_size_ansi(const int32_t height, const int32_t width,
+                                          const int32_t channels)
+{
+    (void) height;
+    (void) width;
+    (void) channels;
+    return 0;
+}
+
+void esp_nn_set_mean_scratch_buf_ansi(void *buffer)
+{
+    (void) buffer;
+}

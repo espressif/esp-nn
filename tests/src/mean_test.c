@@ -46,11 +46,18 @@ void esp_nn_mean_nhwc_s8_test()
         int8_t *input_orig = malloc(input_size + 16);
         int8_t *out_c_orig = malloc(c + 16);
         int8_t *out_opt_orig = malloc(c + 16);
+        void *scratch_orig = NULL;
+        int32_t scratch_size = esp_nn_get_mean_scratch_size(h, w, c);
+        if (scratch_size) {
+            scratch_orig = malloc(scratch_size + 16);
+        }
 
-        if (!input_orig || !out_c_orig || !out_opt_orig) {
+        if (!input_orig || !out_c_orig || !out_opt_orig || (scratch_size && !scratch_orig)) {
             printf(ANSI_COLOR_RED"mean [%d] alloc failed\n"ANSI_COLOR_RESET, t);
             goto cleanup;
         }
+        esp_nn_set_mean_scratch_buf(scratch_orig
+                                    ? (void *)(((uintptr_t)scratch_orig + 15) & ~(uintptr_t)15) : NULL);
 
         int8_t *input = (int8_t *)(((uint32_t)input_orig + 15) & ~15);
         int8_t *out_c = (int8_t *)(((uint32_t)out_c_orig + 15) & ~15);
@@ -85,5 +92,6 @@ void esp_nn_mean_nhwc_s8_test()
         if (input_orig) free(input_orig);
         if (out_c_orig) free(out_c_orig);
         if (out_opt_orig) free(out_opt_orig);
+        if (scratch_orig) free(scratch_orig);
     }
 }

@@ -139,10 +139,12 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
     {
         int32_t row_len_div16 = row_len >> 4;
 
-        /* Pre-compute per-channel corrections once */
-        int32_t corrections[out_channels];
+        int32_t row_len_rem = row_len & 15;
+        int32_t simd_bytes = row_len_div16 << 4;
+
         for (int ch = 0; ch < out_channels; ch++) {
             const int8_t *f_ptr = filter_data + ch * row_len;
+            /* Per-channel correction, inline (no out_channels-sized VLA) */
             int32_t corr = 0;
             if (input_offset != 0) {
                 corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
@@ -150,14 +152,6 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
             if (bias) {
                 corr += bias[ch];
             }
-            corrections[ch] = corr;
-        }
-
-        int32_t row_len_rem = row_len & 15;
-        int32_t simd_bytes = row_len_div16 << 4;
-
-        for (int ch = 0; ch < out_channels; ch++) {
-            const int8_t *f_ptr = filter_data + ch * row_len;
             /* Pass the aligned operand first; the dot product is symmetric. */
             int32_t acc = input_aligned
                 ? esp_nn_dot_s8_unaligned_esp32s3(input_data, f_ptr, row_len_div16)
@@ -168,7 +162,7 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                 acc += (int32_t)input_data[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
             }
 
-            acc += corrections[ch];
+            acc += corr;
 
             acc = esp_nn_multiply_by_quantized_mult(acc, out_mult, out_shift);
             acc += out_offset;
@@ -216,10 +210,12 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
     {
         int32_t row_len_div16 = row_len >> 4;
 
-        /* Pre-compute per-channel corrections once */
-        int32_t corrections[out_channels];
+        int32_t row_len_rem = row_len & 15;
+        int32_t simd_bytes = row_len_div16 << 4;
+
         for (int ch = 0; ch < out_channels; ch++) {
             const int8_t *f_ptr = filter_data + ch * row_len;
+            /* Per-channel correction, inline (no out_channels-sized VLA) */
             int32_t corr = 0;
             if (input_offset != 0) {
                 corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
@@ -227,14 +223,6 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
             if (bias) {
                 corr += bias[ch];
             }
-            corrections[ch] = corr;
-        }
-
-        int32_t row_len_rem = row_len & 15;
-        int32_t simd_bytes = row_len_div16 << 4;
-
-        for (int ch = 0; ch < out_channels; ch++) {
-            const int8_t *f_ptr = filter_data + ch * row_len;
             /* Pass the aligned operand first; the dot product is symmetric. */
             int32_t acc = input_aligned
                 ? esp_nn_dot_s8_unaligned_esp32s3(input_data, f_ptr, row_len_div16)
@@ -244,7 +232,7 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
                 acc += (int32_t)input_data[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
             }
 
-            acc += corrections[ch];
+            acc += corr;
 
             acc = esp_nn_multiply_by_quantized_mult(acc, out_mult[ch], out_shift[ch]);
             acc += out_offset;
