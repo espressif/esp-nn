@@ -4,6 +4,7 @@
 *.s
 *.orig
 *.pyc
+__pycache__/
 
 # gtags
 GTAGS
@@ -34,6 +35,10 @@ test_app/build
 test_app/sdkconfig
 test_app/sdkconfig.old
 test_app/dependencies.lock
+test_app/ci_bins/
+
+# CI test stage output
+test_results/
 
 # Doc build artifacts
 docs/_build/
