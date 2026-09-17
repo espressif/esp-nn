@@ -55,6 +55,33 @@ void esp_nn_conv_s8_ansi_mt_split(const data_dims_t *input_dims,
                                   const conv_params_t *conv_params,
                                   const quant_data_t *quant_data);
 
+typedef void (*esp_nn_conv_s8_target_fn_t)(const data_dims_t *,
+                                           const int8_t *,
+                                           const data_dims_t *,
+                                           const int8_t *,
+                                           const int32_t *,
+                                           const data_dims_t *,
+                                           int8_t *,
+                                           const conv_params_t *,
+                                           const quant_data_t *);
+
+/* Grouped conv as G standard convs through the target's optimized path
+ * (repack input slice, contiguous group filters, scatter staged output).
+ * Bit-identical to the reference grouped loop. Returns false when shapes
+ * or scratch don't fit. */
+bool esp_nn_conv_s8_grouped_repack(esp_nn_conv_s8_target_fn_t conv_fn,
+                                   const data_dims_t *input_dims,
+                                   const int8_t *input_data,
+                                   const data_dims_t *filter_dims,
+                                   const int8_t *filter_data,
+                                   const int32_t *bias,
+                                   const data_dims_t *output_dims,
+                                   int8_t *out_data,
+                                   const conv_params_t *conv_params,
+                                   const quant_data_t *quant_data,
+                                   void *scratch, int scratch_size,
+                                   int inner_scratch_size);
+
 /** Kernel-private scratch for the worker's slice (grown on demand,
  * internal-SRAM first). Returns NULL if allocation fails. */
 void *esp_nn_dual_core_scratch(int size);

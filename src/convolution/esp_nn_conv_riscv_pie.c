@@ -55,6 +55,20 @@
 #include "../common/esp_nn_filter_sum_riscv_pie.h"
 #include <esp_nn_multicore.h>
 
+int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
+                                           const data_dims_t *filter_dims,
+                                           const data_dims_t *output_dims,
+                                           const conv_params_t *conv_params);
+void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
+                              const int8_t *input,
+                              const data_dims_t *filter_dims,
+                              const int8_t *filter_data,
+                              const int32_t *bias,
+                              const data_dims_t *output_dims,
+                              int8_t *out_data,
+                              const conv_params_t *conv_params,
+                              const quant_data_t *quant_data);
+
 static int16_t *scratch_buffer = NULL;
 
 /*
@@ -898,13 +912,6 @@ static void esp_nn_conv_s8_padded(
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
 
-    /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
-    if (in_channels != filter_dims->channels) {
-        esp_nn_conv_s8_ansi_mt_split(input_dims, input_data, filter_dims, filter_data,
-                                     bias, output_dims, out_data, conv_params, quant_data);
-        return;
-    }
-
     int32_t *filter_sum = (int32_t *) scratch; // alignment of 4 bytes assumed
 
     /* pre-calculate filter_sum * input_offset */
@@ -1638,6 +1645,24 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params)
 {
+    /* Grouped conv runs each group through the standard path with repacked
+     * slices: inner requirement (per-group dims) + input slice + output
+     * staging. */
+    if (filter_dims->channels && filter_dims->channels < input_dims->channels &&
+            input_dims->channels % filter_dims->channels == 0) {
+        const int32_t groups_ = input_dims->channels / filter_dims->channels;
+        if (groups_ > 1 && output_dims->channels % groups_ == 0) {
+            data_dims_t in_g_ = *input_dims;
+            data_dims_t out_g_ = *output_dims;
+            in_g_.channels = filter_dims->channels;
+            out_g_.channels = output_dims->channels / groups_;
+            const int inner_ = esp_nn_get_conv_scratch_size_riscv_pie(&in_g_, filter_dims, &out_g_, conv_params);
+            const int32_t in_slice_ = (int32_t)input_dims->width * input_dims->height * filter_dims->channels;
+            const int32_t out_slice_ = (int32_t)output_dims->width * output_dims->height * out_g_.channels;
+            return inner_ + in_slice_ + out_slice_ + 64;
+        }
+    }
+
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
     const uint16_t in_ch = input_dims->channels;
@@ -1865,11 +1890,32 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
     }
 
     /* Grouped conv (filter_ch < input_ch) must be caught before any fast
-     * path: they all assume full-depth filters. Same catch as the S3 and
-     * generic dispatches; the ansi reference handles groups. */
+     * path: they all assume full-depth filters. Run each group through the
+     * optimized path via repacked slices (recursing into this dispatcher
+     * with matching channel counts), or fall back to the reference with a
+     * dual-core row split. Lives here, not in a sub-kernel, because every
+     * sub-kernel is only reached with matching channels. */
     if (input_dims->channels != filter_dims->channels) {
-        esp_nn_conv_s8_ansi(input_dims, input, filter_dims, filter_data,
-                            bias, output_dims, out_data, conv_params, quant_data);
+        data_dims_t in_g = *input_dims;
+        data_dims_t out_g = *output_dims;
+        const int32_t groups = filter_dims->channels
+                ? input_dims->channels / filter_dims->channels : 0;
+        if (groups > 1 && output_dims->channels % groups == 0) {
+            in_g.channels = filter_dims->channels;
+            out_g.channels = output_dims->channels / groups;
+            const int inner = esp_nn_get_conv_scratch_size_riscv_pie(
+                    &in_g, filter_dims, &out_g, conv_params);
+            const int total = esp_nn_get_conv_scratch_size_riscv_pie(
+                    input_dims, filter_dims, output_dims, conv_params);
+            if (esp_nn_conv_s8_grouped_repack(
+                    esp_nn_conv_s8_riscv_pie, input_dims, input,
+                    filter_dims, filter_data, bias, output_dims, out_data,
+                    conv_params, quant_data, scratch_buffer, total, inner)) {
+                return;
+            }
+        }
+        esp_nn_conv_s8_ansi_mt_split(input_dims, input, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params, quant_data);
         return;
     }
 

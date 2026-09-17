@@ -479,6 +479,24 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params)
 {
+    /* Grouped conv runs each group through the standard path with repacked
+     * slices: inner requirement (per-group dims) + input slice + output
+     * staging. */
+    if (filter_dims->channels && filter_dims->channels < input_dims->channels &&
+            input_dims->channels % filter_dims->channels == 0) {
+        const int32_t groups_ = input_dims->channels / filter_dims->channels;
+        if (groups_ > 1 && output_dims->channels % groups_ == 0) {
+            data_dims_t in_g_ = *input_dims;
+            data_dims_t out_g_ = *output_dims;
+            in_g_.channels = filter_dims->channels;
+            out_g_.channels = output_dims->channels / groups_;
+            const int inner_ = esp_nn_get_conv_scratch_size_esp32s3(&in_g_, filter_dims, &out_g_, conv_params);
+            const int32_t in_slice_ = (int32_t)input_dims->width * input_dims->height * filter_dims->channels;
+            const int32_t out_slice_ = (int32_t)output_dims->width * output_dims->height * out_g_.channels;
+            return inner_ + in_slice_ + out_slice_ + 64;
+        }
+    }
+
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
     const uint16_t in_ch = input_dims->channels;
@@ -600,8 +618,28 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
 
-    /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
+    /* Grouped conv (filter_ch < input_ch): run each group through the
+     * optimized path via repacked slices; reference row-split otherwise. */
     if (channels != filter_dims->channels) {
+        data_dims_t in_g = *input_dims;
+        data_dims_t out_g = *output_dims;
+        const int32_t groups = filter_dims->channels
+                ? channels / filter_dims->channels : 0;
+        if (groups > 1 && output_dims->channels % groups == 0 &&
+                channels % filter_dims->channels == 0) {
+            in_g.channels = filter_dims->channels;
+            out_g.channels = output_dims->channels / groups;
+            const int inner = esp_nn_get_conv_scratch_size_esp32s3(
+                    &in_g, filter_dims, &out_g, conv_params);
+            const int total = esp_nn_get_conv_scratch_size_esp32s3(
+                    input_dims, filter_dims, output_dims, conv_params);
+            if (esp_nn_conv_s8_grouped_repack(
+                    esp_nn_conv_s8_esp32s3, input_dims, input,
+                    filter_dims, filter_data, bias, output_dims, out_data,
+                    conv_params, quant_data, scratch_buffer, total, inner)) {
+                return;
+            }
+        }
         esp_nn_conv_s8_ansi_mt_split(input_dims, input, filter_dims, filter_data,
                                      bias, output_dims, out_data, conv_params, quant_data);
         return;
