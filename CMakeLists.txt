@@ -16,7 +16,8 @@ set(c_srcs
     "src/logistic/esp_nn_logistic_ansi.c"
     "src/pooling/esp_nn_avg_pool_ansi.c"
     "src/pooling/esp_nn_max_pool_ansi.c"
-    "src/common/esp_nn_multicore.c")
+    "src/common/esp_nn_multicore.c"
+    "src/convolution/esp_nn_conv_mt_split.c")
 
 if(CONFIG_IDF_TARGET_ESP32S3)
     set(s3_srcs

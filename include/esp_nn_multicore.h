@@ -7,6 +7,8 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include "esp_nn_defs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +42,18 @@ bool esp_nn_dual_core_run(void (*fn)(void *), void *arg);
 
 /** Block until the dispatched job completes. */
 void esp_nn_dual_core_wait(void);
+
+/* Dual-core output-row split around the reference conv (grouped-conv and
+ * other fallback shapes); bit-identical to a single esp_nn_conv_s8_ansi call. */
+void esp_nn_conv_s8_ansi_mt_split(const data_dims_t *input_dims,
+                                  const int8_t *input_data,
+                                  const data_dims_t *filter_dims,
+                                  const int8_t *filter_data,
+                                  const int32_t *bias,
+                                  const data_dims_t *output_dims,
+                                  int8_t *out_data,
+                                  const conv_params_t *conv_params,
+                                  const quant_data_t *quant_data);
 
 /** Kernel-private scratch for the worker's slice (grown on demand,
  * internal-SRAM first). Returns NULL if allocation fails. */

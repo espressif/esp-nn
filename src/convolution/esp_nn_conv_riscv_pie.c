@@ -53,6 +53,7 @@
 
 #include <common_functions.h>
 #include "../common/esp_nn_filter_sum_riscv_pie.h"
+#include <esp_nn_multicore.h>
 
 static int16_t *scratch_buffer = NULL;
 
@@ -899,8 +900,8 @@ static void esp_nn_conv_s8_padded(
 
     /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
     if (in_channels != filter_dims->channels) {
-        esp_nn_conv_s8_ansi(input_dims, input_data, filter_dims, filter_data,
-                            bias, output_dims, out_data, conv_params, quant_data);
+        esp_nn_conv_s8_ansi_mt_split(input_dims, input_data, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params, quant_data);
         return;
     }
 
@@ -1743,6 +1744,111 @@ void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
+typedef void (*conv_s8_pie_fn_t)(const data_dims_t *, const int8_t *,
+                                 const data_dims_t *, const int8_t *,
+                                 const int32_t *, const data_dims_t *,
+                                 int8_t *, const conv_params_t *,
+                                 const quant_data_t *, void *);
+
+typedef struct {
+    conv_s8_pie_fn_t fn;
+    data_dims_t input_dims;
+    const int8_t *input;
+    const data_dims_t *filter_dims;
+    const int8_t *filter_data;
+    const int32_t *bias;
+    data_dims_t output_dims;
+    int8_t *out_data;
+    conv_params_t conv_params;
+    const quant_data_t *quant_data;
+    void *scratch;
+} conv_pie_rows_mt_job_t;
+
+static void conv_pie_rows_mt_worker(void *p)
+{
+    const conv_pie_rows_mt_job_t *j = (const conv_pie_rows_mt_job_t *)p;
+    j->fn(&j->input_dims, j->input, j->filter_dims, j->filter_data, j->bias,
+          &j->output_dims, j->out_data, &j->conv_params, j->quant_data,
+          j->scratch);
+}
+
+/* Output-row split for the pixel-independent conv paths. The top slice
+ * keeps the top padding; the bottom slice enters the input at an interior
+ * row with pad_ht = 0, so both slices evaluate exactly the taps the single
+ * call would, on disjoint output rows (bit-identical results). Returns
+ * false when the split is not applicable or the worker is unavailable. */
+static bool conv_pie_rows_split(conv_s8_pie_fn_t fn,
+                                const data_dims_t *input_dims,
+                                const int8_t *input,
+                                const data_dims_t *filter_dims,
+                                const int8_t *filter_data,
+                                const int32_t *bias,
+                                const data_dims_t *output_dims,
+                                int8_t *out_data,
+                                const conv_params_t *conv_params,
+                                const quant_data_t *quant_data,
+                                void *scratch)
+{
+    const uint16_t out_ht = output_dims->height;
+    const uint16_t h0 = out_ht / 2;
+    const int32_t in_row_off =
+            (int32_t)h0 * conv_params->stride.height - conv_params->padding.height;
+    if (!esp_nn_dual_core_active() || out_ht < 4 || in_row_off < 0) {
+        return false;
+    }
+    const int scratch_size = esp_nn_get_conv_scratch_size_riscv_pie(
+            input_dims, filter_dims, output_dims, conv_params);
+    void *wscr = esp_nn_dual_core_scratch(scratch_size + 16);
+    if (wscr == NULL) {
+        return false;
+    }
+    conv_pie_rows_mt_job_t job = {
+        .fn = fn, .input_dims = *input_dims, .input = input,
+        .filter_dims = filter_dims, .filter_data = filter_data, .bias = bias,
+        .output_dims = *output_dims, .out_data = out_data,
+        .conv_params = *conv_params, .quant_data = quant_data, .scratch = wscr,
+    };
+    job.output_dims.height = h0;
+    if (!esp_nn_dual_core_run(conv_pie_rows_mt_worker, &job)) {
+        return false;
+    }
+    {
+        data_dims_t in1 = *input_dims;
+        data_dims_t outd1 = *output_dims;
+        conv_params_t params1 = *conv_params;
+        in1.height = input_dims->height - in_row_off;
+        outd1.height = out_ht - h0;
+        params1.padding.height = 0;
+        fn(&in1,
+           input + in_row_off * input_dims->width * input_dims->channels,
+           filter_dims, filter_data, bias, &outd1,
+           out_data + (int32_t)h0 * output_dims->width * output_dims->channels,
+           &params1, quant_data, scratch);
+    }
+    esp_nn_dual_core_wait();
+    return true;
+}
+
+typedef struct {
+    data_dims_t input_dims;
+    const int8_t *input;
+    const int8_t *filter_data;
+    const int32_t *bias;
+    data_dims_t output_dims;
+    int8_t *out_data;
+    const conv_params_t *conv_params;
+    const quant_data_t *quant_data;
+    void *scratch;
+} conv1x1_pie_mt_job_t;
+
+static void conv1x1_pie_mt_worker(void *p)
+{
+    const conv1x1_pie_mt_job_t *j = (const conv1x1_pie_mt_job_t *)p;
+    esp_nn_conv_s8_1x1(&j->input_dims, j->input, j->filter_data, j->bias,
+                       &j->output_dims, j->out_data, j->conv_params,
+                       j->quant_data, j->scratch);
+}
+
 void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                             const int8_t *input,
                             const data_dims_t *filter_dims,
@@ -1776,6 +1882,38 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
 
     if (filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0 &&
             stride_wd == 1 && stride_ht == 1) {
+        /* Rows are independent for a stride-1 unpadded 1x1: split them
+         * across both cores (bit-identical, disjoint outputs). */
+        if (esp_nn_dual_core_active() && output_dims->height >= 4) {
+            const int scratch_size = esp_nn_get_conv_scratch_size_riscv_pie(
+                    input_dims, filter_dims, output_dims, conv_params);
+            void *wscr = esp_nn_dual_core_scratch(scratch_size + 16);
+            const uint16_t h0 = output_dims->height / 2;
+            if (wscr != NULL && h0 > 0) {
+                conv1x1_pie_mt_job_t job = {
+                    .input_dims = *input_dims, .input = input,
+                    .filter_data = filter_data, .bias = bias,
+                    .output_dims = *output_dims, .out_data = out_data,
+                    .conv_params = conv_params, .quant_data = quant_data,
+                    .scratch = wscr,
+                };
+                job.input_dims.height = h0;
+                job.output_dims.height = h0;
+                if (esp_nn_dual_core_run(conv1x1_pie_mt_worker, &job)) {
+                    data_dims_t in1 = *input_dims;
+                    data_dims_t outd1 = *output_dims;
+                    in1.height = input_dims->height - h0;
+                    outd1.height = output_dims->height - h0;
+                    const int32_t off = (int32_t)h0 * input_dims->width;
+                    esp_nn_conv_s8_1x1(&in1, input + off * input_dims->channels,
+                                       filter_data, bias, &outd1,
+                                       out_data + off * output_dims->channels,
+                                       conv_params, quant_data, scratch_buffer);
+                    esp_nn_dual_core_wait();
+                    return;
+                }
+            }
+        }
         esp_nn_conv_s8_1x1(input_dims, input, filter_data, bias,
                            output_dims, out_data, conv_params, quant_data,
                            scratch_buffer);
@@ -1795,9 +1933,14 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
     } else if (pad_wd == 0 && pad_ht == 0 &&
                filter_wd * input_dims->channels >= 16) {
         /* No-pad, channels large enough for PIE: use direct padded path */
-        esp_nn_conv_s8_padded(input_dims, input, filter_dims, filter_data, bias,
-                              output_dims, out_data, conv_params, quant_data,
-                              scratch_buffer);
+        if (!conv_pie_rows_split(esp_nn_conv_s8_padded, input_dims, input,
+                                 filter_dims, filter_data, bias, output_dims,
+                                 out_data, conv_params, quant_data,
+                                 scratch_buffer)) {
+            esp_nn_conv_s8_padded(input_dims, input, filter_dims, filter_data, bias,
+                                  output_dims, out_data, conv_params, quant_data,
+                                  scratch_buffer);
+        }
     } else if ((pad_wd != 0 || pad_ht != 0) &&
                filter_wd * input_dims->channels >= 16 &&
                (int32_t)filter_wd * filter_ht * input_dims->channels *
@@ -1815,9 +1958,14 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
     } else if (filter_wd * filter_ht * input_dims->channels >= 16) {
         /* Small in_ch but window_len >= 16: use im2col for zero-waste PIE.
          * Also handles padded cases naturally. */
-        esp_nn_conv_s8_im2col(input_dims, input, filter_dims, filter_data, bias,
-                              output_dims, out_data, conv_params, quant_data,
-                              scratch_buffer);
+        if (!conv_pie_rows_split(esp_nn_conv_s8_im2col, input_dims, input,
+                                 filter_dims, filter_data, bias, output_dims,
+                                 out_data, conv_params, quant_data,
+                                 scratch_buffer)) {
+            esp_nn_conv_s8_im2col(input_dims, input, filter_dims, filter_data, bias,
+                                  output_dims, out_data, conv_params, quant_data,
+                                  scratch_buffer);
+        }
     } else if (pad_wd != 0 || pad_ht != 0) {
         /* Padded case with very small window: use tiled path */
         esp_nn_conv_s8_tiled(input_dims, input, filter_dims, filter_data, bias,

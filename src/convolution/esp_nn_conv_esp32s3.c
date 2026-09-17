@@ -602,8 +602,8 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
 
     /* Grouped conv (filter_ch < input_ch): fall back to ansi which handles it */
     if (channels != filter_dims->channels) {
-        esp_nn_conv_s8_ansi(input_dims, input, filter_dims, filter_data,
-                            bias, output_dims, out_data, conv_params, quant_data);
+        esp_nn_conv_s8_ansi_mt_split(input_dims, input, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params, quant_data);
         return;
     }
 
