@@ -663,7 +663,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 32; itr++) {
+    for (int itr = 0; itr < 43; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -689,7 +689,25 @@ void esp_nn_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
-        case 31: // tiny window on a very wide row: one filter-height band of
+        case 42: // big-filter padded conv: pad 1, filter_wd * in_ch >= 16 and
+                 // filter bytes > 96 KB, so the P4 dispatcher takes the dense
+                 // tiled route (staged padding + OC-panel kernel per tile);
+                 // 18 staged rows of 18 x 128 (41 KB) do not fit the 32 KB
+                 // L1 budget, so tile_T < out_ht and several tiles run.
+                 // Kept at ~28 MMAC: the ANSI reference of a bigger shape
+                 // pushed the emulated c6/h2 runs past the CI time cap.
+            in_wd = 16;
+            in_ht = 16;
+            in_channels = 128;
+            out_channels = 96;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 41: // tiny window on a very wide row: one filter-height band of
                  // staged (channel-padded) rows exceeds the L1 tile budget.
                  // The getter and kernel must agree on the fallback tile.
             in_wd = 700;
@@ -715,6 +733,142 @@ void esp_nn_conv_s8_test()
             pad_ht = 1;
             stride_wd = 2;
             stride_ht = 2;
+            break;
+        case 38: // depthwise-as-grouped conv (groups == in_channels, fpg = 1), pad 1
+            in_wd = 6;
+            in_ht = 6;
+            in_channels = 128;
+            out_channels = 128;
+            groups = 128;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 31: // 1x1 with filter > L1 panel budget (OC-panel path, pos chunking)
+            in_wd = 10;
+            in_ht = 10;
+            in_channels = 256;
+            out_channels = 128;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 32: // 1x1 with an odd input depth: the QACC batch runs an odd tap
+                 // count (33) and 24 pixels leave an 8-pixel per-pixel tail
+            in_wd = 6;
+            in_ht = 4;
+            in_channels = 33;
+            out_channels = 24;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 33: // yolo dense class: 3x3 stride 2 pad 0, 432-tap window through
+                 // the 16-pixel QACC batch (dense no-pad route)
+            in_wd = 14;              // filter_total 20736 > 16384 with in_offset != 0
+            in_ht = 14;
+            in_channels = 48;
+            out_channels = 48;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 34: // yolo 1x1 class: large spatial, 400 pixels = 25 full QACC batches
+            in_wd = 20;
+            in_ht = 20;
+            in_channels = 32;
+            out_channels = 32;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 39: // TFLite SAME on an input narrower than the filter: 2x2 -> 3x3
+                 // stride 2, out 1x1 with pad_before 0. No output window lies
+                 // inside the input, so the im2col interior batch must be empty
+                 // (a truncating (in - f) / s would claim pixel 0 as interior).
+            in_wd = 2;
+            in_ht = 2;
+            in_channels = 16;
+            out_channels = 16;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            force_out_wd = 1;
+            force_out_ht = 1;
+            break;
+        case 40: // same shape, deep channels (window > im2col batch max):
+                 // routes to the padded-xacc path, whose eff_wd/eff_ht must
+                 // be 0, not 1. 272 x 16 keeps the S3 getter's filter
+                 // scratch (~39 KB) allocatable on the test board while the
+                 // 2448-element window still exceeds the im2col batch cap.
+            in_wd = 2;
+            in_ht = 2;
+            in_channels = 272;
+            out_channels = 16;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            force_out_wd = 1;
+            force_out_ht = 1;
+            break;
+        case 35: // yolo first-layer class: 3 channels, im2col window
+            in_wd = 21;
+            in_ht = 21;
+            in_channels = 3;
+            out_channels = 16;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 36: // pad 1 stride 1: im2col with the interior rows batched, borders per pixel
+            in_wd = 12;
+            in_ht = 12;
+            in_channels = 48;
+            out_channels = 48;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 37: // asymmetric SAME pad (trailing pad > pad_wd), stride 2, batched interior
+            in_wd = 13;
+            in_ht = 13;
+            in_channels = 48;
+            out_channels = 48;
+            filter_ht = 3;
+            filter_wd = 3;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            force_out_wd = 7;
+            force_out_ht = 7;
             break;
         case 0: // ch % 8 == 0 && filter (1,1), padding (0,0)
             in_wd = 10;
