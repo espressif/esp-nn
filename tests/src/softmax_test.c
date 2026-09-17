@@ -104,4 +104,9 @@ void esp_nn_softmax_s8_test()
     /* Odd width (non-aligned) */
     run_softmax_test(8, 17, INT32_MAX / 2, 7, -128, iter++);
     run_softmax_test(8, 3, INT32_MAX / 2, 7, -128, iter++);
+    /* SIMD-width rows whose stride is not a multiple of 16: rows 1+ start
+     * unaligned (yolo11n op140 is 36-wide) - regression for the S3
+     * find-max, which must not issue unaligned ee.vld.128 loads. */
+    run_softmax_test(8, 36, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(4, 1000, INT32_MAX / 2, 7, -128, iter++);
 }

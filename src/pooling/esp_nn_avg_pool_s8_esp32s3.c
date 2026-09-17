@@ -56,8 +56,10 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
         return;
     }
 
-    /* C path with int16 accumulation for non-aligned channels */
-    int16_t acc_buf[channels];
+    /* C path with int16 accumulation for non-aligned channels, in fixed-size
+     * channel chunks (constant frame, no VLA) */
+    enum { AVG_POOL_CH_CHUNK = 64 };
+    int16_t acc_buf[AVG_POOL_CH_CHUNK];
 
     int32_t base_y = -pad_ht;
     for (int32_t out_y = 0; out_y < output_ht; out_y++, base_y += stride_ht) {
@@ -68,27 +70,31 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
             int32_t fy_end = min(filter_ht, input_ht - base_y);
             int32_t fx_end = min(filter_wd, input_wd - base_x);
             int32_t filter_cnt = (fy_end - fy_start) * (fx_end - fx_start);
-
-            memset(acc_buf, 0, channels * sizeof(int16_t));
-
-            for (int32_t fy = fy_start; fy < fy_end; fy++) {
-                for (int32_t fx = fx_start; fx < fx_end; fx++) {
-                    int32_t in_idx = ((base_y + fy) * input_wd + (base_x + fx)) * channels;
-                    for (int c = 0; c < channels; c++) {
-                        acc_buf[c] += (int16_t)input[in_idx + c];
-                    }
-                }
-            }
-
             int32_t half_cnt = filter_cnt / 2;
             int32_t out_idx = (out_y * output_wd + out_x) * channels;
-            for (int c = 0; c < channels; c++) {
-                int32_t result = acc_buf[c];
-                result = result > 0 ? (result + half_cnt) / filter_cnt
-                                    : (result - half_cnt) / filter_cnt;
-                result = max(result, activation_min);
-                result = min(result, activation_max);
-                output[out_idx + c] = (int8_t)result;
+
+            for (int32_t c0 = 0; c0 < channels; c0 += AVG_POOL_CH_CHUNK) {
+                int32_t n = min(AVG_POOL_CH_CHUNK, channels - c0);
+                memset(acc_buf, 0, n * sizeof(int16_t));
+
+                for (int32_t fy = fy_start; fy < fy_end; fy++) {
+                    for (int32_t fx = fx_start; fx < fx_end; fx++) {
+                        const int8_t *in_ptr = input
+                            + ((base_y + fy) * input_wd + (base_x + fx)) * channels + c0;
+                        for (int c = 0; c < n; c++) {
+                            acc_buf[c] += (int16_t)in_ptr[c];
+                        }
+                    }
+                }
+
+                for (int c = 0; c < n; c++) {
+                    int32_t result = acc_buf[c];
+                    result = result > 0 ? (result + half_cnt) / filter_cnt
+                                        : (result - half_cnt) / filter_cnt;
+                    result = max(result, activation_min);
+                    result = min(result, activation_max);
+                    output[out_idx + c0 + c] = (int8_t)result;
+                }
             }
         }
     }

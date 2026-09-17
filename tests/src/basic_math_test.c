@@ -297,6 +297,13 @@ void esp_nn_mul_elementwise_s8_test()
             output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
             output_shift = -8 + rand() % 4;
             size = 4 + rand() % 64;
+            if (itr == 5) {
+                /* Unaligned input2 (see below) sends the whole array through
+                 * the S3 kernel's scalar path; at this length a requant
+                 * rounding tie is a statistical certainty, which is what
+                 * caught the scalar path using the wrong nudge register. */
+                size = 4096 + 3;
+            }
         }
 
         input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);

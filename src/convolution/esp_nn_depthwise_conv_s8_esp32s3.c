@@ -442,7 +442,9 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
                 int total_pad_ht = pad_ht * 2 + max(0, (out_ht * stride_ht + 2) - input_ht);
                 int new_input_size = (input_wd + total_pad_wd) * (input_ht + total_pad_ht) * new_ch;
                 int out_buf_size = out_wd * out_ht * new_ch;
-                return new_filter_size + new_input_size + out_buf_size + 64;
+                /* + channel-padded shift/mult/bias arrays (see the kernel) */
+                int quant_pad_size = 3 * new_ch * (int)sizeof(int32_t);
+                return new_filter_size + new_input_size + out_buf_size + quant_pad_size + 64;
             } else {
                 /* ch=8: s16 path is more efficient (no channel padding overhead) */
                 int input_s = input_wd * input_ht * channels;
@@ -787,8 +789,11 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                 /* Padded output buffer */
                 int8_t *out_padded = input_padded + padded_input_total;
 
-                /* Pad quant arrays */
-                int32_t shift_pad[new_ch], mult_pad[new_ch], bias_pad[new_ch];
+                /* Channel-padded quant arrays: in scratch after the output
+                 * buffer (getter reserves 3 * new_ch int32), not on the stack. */
+                int32_t *shift_pad = (int32_t *)(out_padded + out_wd * out_ht * new_ch);
+                int32_t *mult_pad = shift_pad + new_ch;
+                int32_t *bias_pad = mult_pad + new_ch;
                 memcpy(shift_pad, out_shift, channels * sizeof(int32_t));
                 memcpy(mult_pad, out_mult, channels * sizeof(int32_t));
                 memset(shift_pad + channels, 0, (new_ch - channels) * sizeof(int32_t));

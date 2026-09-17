@@ -158,23 +158,18 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
     int32_t global_corr = filter_offset * input_sum
                           + (int32_t)row_len * input_offset * filter_offset;
 
-    int32_t corrections[out_channels];
-    for (int32_t ch = 0; ch < out_channels; ++ch) {
-        int32_t corr = global_corr;
-        if (input_offset != 0) {
-            const int8_t *f_ptr = filter_data + (int32_t)row_len * ch;
-            corr += esp_nn_filter_sum_s8_riscv_pie(f_ptr, row_len) * input_offset;
-        }
-        if (bias) {
-            corr += bias[ch];
-        }
-        corrections[ch] = corr;
-    }
-
     for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
         const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+        /* Per-channel correction, inline (no out_channels-sized VLA) */
+        int32_t corr = global_corr;
+        if (input_offset != 0) {
+            corr += esp_nn_filter_sum_s8_riscv_pie(filter_row, row_len) * input_offset;
+        }
+        if (bias) {
+            corr += bias[out_c];
+        }
         int32_t result = fc_dot_s8_pie(input_data, filter_row, row_len);
-        result += corrections[out_c];
+        result += corr;
         result = esp_nn_requantize(result, out_mult, out_shift);
         result += out_offset;
         result = max(result, activation_min);
@@ -234,23 +229,18 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
     int32_t global_corr = filter_offset * input_sum
                           + (int32_t)row_len * input_offset * filter_offset;
 
-    int32_t corrections[out_channels];
-    for (int32_t ch = 0; ch < out_channels; ++ch) {
-        int32_t corr = global_corr;
-        if (input_offset != 0) {
-            const int8_t *f_ptr = filter_data + (int32_t)row_len * ch;
-            corr += esp_nn_filter_sum_s8_riscv_pie(f_ptr, row_len) * input_offset;
-        }
-        if (bias) {
-            corr += bias[ch];
-        }
-        corrections[ch] = corr;
-    }
-
     for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
         const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+        /* Per-channel correction, inline (no out_channels-sized VLA) */
+        int32_t corr = global_corr;
+        if (input_offset != 0) {
+            corr += esp_nn_filter_sum_s8_riscv_pie(filter_row, row_len) * input_offset;
+        }
+        if (bias) {
+            corr += bias[out_c];
+        }
         int32_t result = fc_dot_s8_pie(input_data, filter_row, row_len);
-        result += corrections[out_c];
+        result += corr;
         result = esp_nn_requantize(result, out_mult[out_c], out_shift[out_c]);
         result += out_offset;
         result = max(result, activation_min);

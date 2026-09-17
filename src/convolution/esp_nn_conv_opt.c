@@ -105,6 +105,15 @@ void esp_nn_conv_s8_opt(const data_dims_t *input_dims,
     const uint16_t filter_wd = filter_dims->width;
     const uint16_t filter_ht = filter_dims->height;
 
+    /* Grouped conv (filter_ch < input_ch) must be caught BEFORE the 1x1
+     * fast path: a grouped 1x1 would otherwise run at full input depth and
+     * produce wrong results. The S3/PIE dispatches already catch this. */
+    if (input_dims->channels != filter_dims->channels) {
+        esp_nn_conv_s8_ansi(input_dims, input_data, filter_dims, filter_data,
+                            bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
+
     if (filter_wd == 1 && filter_ht == 1) {
         esp_nn_conv_s8_1x1(input_dims, input_data, filter_data, bias,
                            output_dims, out_data, conv_params, quant_data);

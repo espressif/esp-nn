@@ -168,6 +168,11 @@ void esp_nn_mean_nhwc_s8_ansi(const int8_t *input, int8_t *output,
                                const int32_t multiplier,
                                const int32_t shift);
 
+/** Scratch for the mean: 0 for the reference implementation. */
+int32_t esp_nn_get_mean_scratch_size_ansi(const int32_t height, const int32_t width,
+                                          const int32_t channels);
+void esp_nn_set_mean_scratch_buf_ansi(void *buffer);
+
 /************************** Pooling functions *****************************/
 
 

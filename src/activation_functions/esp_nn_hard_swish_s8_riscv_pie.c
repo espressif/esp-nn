@@ -16,13 +16,18 @@
 static inline __attribute__((always_inline))
 int16_t sat_rnd_dbl_hi_mul(int16_t a, int16_t b) {
     if (__builtin_expect(a == b && a == -32768, 0)) return 32767;
-    return (int16_t)(((int32_t)a * (int32_t)b + (1 << 14)) >> 15);
+    int32_t ab = (int32_t)a * (int32_t)b;
+    /* Sign-dependent nudge and truncating division: exactly
+     * gemmlowp::SaturatingRoundingDoublingHighMul<int16>. */
+    const int32_t nudge = (ab >= 0) ? (1 << 14) : (1 - (1 << 14));
+    return (int16_t)((ab + nudge) / (1 << 15));
 }
 
 static inline __attribute__((always_inline))
 int16_t sat_dbl_hi_mul(int16_t a, int16_t b) {
     if (__builtin_expect(a == b && a == -32768, 0)) return 32767;
-    return (int16_t)(((int32_t)a * (int32_t)b) >> 15);
+    /* Truncating division, exactly reference SaturatingDoublingHighMul. */
+    return (int16_t)(((int32_t)a * (int32_t)b) / (1 << 15));
 }
 
 static inline __attribute__((always_inline))
@@ -34,10 +39,12 @@ int16_t sat_left_shift_s16(int32_t val) {
 
 static inline __attribute__((always_inline))
 int16_t rounding_div_pot_s16(int16_t val, int exp) {
-    int32_t mask = (1 << exp) - 1;
-    int32_t remainder = val & mask;
-    int32_t threshold = (mask >> 1) + (val < 0 ? 1 : 0);
-    return (int16_t)((val >> exp) + (remainder > threshold ? 1 : 0));
+    /* Exactly gemmlowp::RoundingDivideByPOT<int16_t>: int16-typed
+     * intermediates, so exponents >= 16 wrap the mask. */
+    const int16_t mask = (int16_t)((1u << exp) - 1u);
+    const int16_t remainder = (int16_t)(val & mask);
+    const int16_t threshold = (int16_t)((int16_t)(mask >> 1) + (val < 0 ? 1 : 0));
+    return (int16_t)((int16_t)(val >> exp) + (remainder > threshold ? 1 : 0));
 }
 
 /* Core output computation shared by all paths */

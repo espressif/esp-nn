@@ -299,7 +299,12 @@ void esp_nn_mean_nhwc_s8_esp32s3(const int8_t *input, int8_t *output,
                                   const int32_t output_zero_point,
                                   const int32_t multiplier,
                                   const int32_t shift);
+int32_t esp_nn_get_mean_scratch_size_esp32s3(const int32_t height, const int32_t width,
+                                             const int32_t channels);
+void esp_nn_set_mean_scratch_buf_esp32s3(void *buffer);
 #define esp_nn_mean_nhwc_s8 esp_nn_mean_nhwc_s8_esp32s3
+#define esp_nn_get_mean_scratch_size esp_nn_get_mean_scratch_size_esp32s3
+#define esp_nn_set_mean_scratch_buf esp_nn_set_mean_scratch_buf_esp32s3
 
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_esp32s3
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32s3

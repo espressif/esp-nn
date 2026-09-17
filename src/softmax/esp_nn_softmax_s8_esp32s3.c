@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "softmax_common.h"
+#include <esp_nn_ansi_headers.h>
 
 static int32_t *scratch_buf_s3 = NULL;
 
@@ -31,9 +32,11 @@ static inline int8_t find_max_s8(const int8_t *data, int32_t len)
     int32_t idx = 0;
 
 #if defined(__XTENSA__)
-    if (len >= 32) {
-        /* Use ee.vmax.s8 for 16 elements/cycle — only for len >= 32
-         * to avoid potential alignment issues with small buffers */
+    if (len >= 32 && (((uintptr_t)data & 15) == 0)) {
+        /* Use ee.vmax.s8 for 16 elements/cycle. ee.vld.128 requires a
+         * 16-byte-aligned address on the S3: rows whose stride is not a
+         * multiple of 16 (e.g. a softmax over width 36) start unaligned
+         * and must take the scalar path or the loaded lanes are wrong. */
         int8_t tmp_buf[16] __attribute__((aligned(16)));
         const int8_t *ptr = data;
         int8_t *buf_ptr = tmp_buf;
@@ -80,7 +83,10 @@ void esp_nn_softmax_s8_esp32s3(const int8_t *input_data,
                                 int8_t *output_data)
 {
     if (scratch_buf_s3 == NULL) {
-        /* Fall through to opt version if scratch not set */
+        /* No scratch: compute via the reference path instead of silently
+         * writing nothing. */
+        esp_nn_softmax_s8_ansi(input_data, height, width, mult, shift,
+                               diff_min, output_data);
         return;
     }
 

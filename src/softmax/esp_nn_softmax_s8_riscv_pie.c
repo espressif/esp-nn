@@ -5,6 +5,7 @@
  */
 
 #include "softmax_common.h"
+#include <esp_nn_ansi_headers.h>
 #include <stdio.h>
 #include <limits.h>
 
@@ -42,7 +43,10 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
                                 int8_t *output_data)
 {
     if (p4_scratch_buf == NULL) {
-        printf("%s error! scratch buffer not set\n", __FUNCTION__);
+        /* No scratch: compute via the reference path instead of silently
+         * writing nothing. */
+        esp_nn_softmax_s8_ansi(input_data, height, width, mult, shift,
+                               diff_min, output_data);
         return;
     }
 
