@@ -27,6 +27,23 @@
  *
  *              shift values are expected to be <= 0
  */
+void esp_nn_add_elementwise_s8_mt_esp32s3(const int8_t *input1_data,
+                                          const int8_t *input2_data,
+                                          const int32_t input1_offset,
+                                          const int32_t input2_offset,
+                                          const int32_t input1_mult,
+                                          const int32_t input2_mult,
+                                          const int32_t input1_shift,
+                                          const int32_t input2_shift,
+                                          const int32_t left_shift,
+                                          int8_t *output,
+                                          const int32_t out_offset,
+                                          const int32_t out_mult,
+                                          const int32_t out_shift,
+                                          const int32_t activation_min,
+                                          const int32_t activation_max,
+                                          const int32_t size);
+
 void esp_nn_add_elementwise_s8_esp32s3(const int8_t *input1_data,
                                        const int8_t *input2_data,
                                        const int32_t input1_offset,
@@ -249,8 +266,19 @@ void esp_nn_relu6_s8_esp32s3(int8_t *data, uint16_t size);
 
 /********************** function defines ***************************/
 
-#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_esp32s3
-#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_esp32s3
+#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_mt_esp32s3
+void esp_nn_mul_elementwise_s8_mt(const int8_t *input1_data,
+                                  const int8_t *input2_data,
+                                  const int32_t input1_offset,
+                                  const int32_t input2_offset,
+                                  int8_t *output,
+                                  const int32_t out_offset,
+                                  const int32_t out_mult,
+                                  const int32_t out_shift,
+                                  const int32_t activation_min,
+                                  const int32_t activation_max,
+                                  const int32_t size);
+#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_mt
 
 void esp_nn_mul_broadcast_channel_s8_esp32s3(const int8_t *input1,
                                               const int8_t *input2_per_ch,

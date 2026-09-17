@@ -137,6 +137,14 @@ void esp_nn_add_elementwise_s8_test()
             left_shift = 20;
             size = 216;
         break;
+        case 5: // dual-core split threshold (>= 8192) with an odd SIMD tail
+            size = 8192 + 15;
+            __attribute__((fallthrough));
+        case 6: // exactly the threshold; case 5 leaves size at 8207 otherwise
+            if (itr == 6) {
+                size = 8192;
+            }
+            __attribute__((fallthrough));
         default:  // practical random input
             input1_offset = rand() % 256 - 127; // range [-127, 128]
             input2_offset = rand() % 256 - 127; // range [-127, 128]
@@ -303,6 +311,10 @@ void esp_nn_mul_elementwise_s8_test()
                  * rounding tie is a statistical certainty, which is what
                  * caught the scalar path using the wrong nudge register. */
                 size = 4096 + 3;
+            } else if (itr == 6) {
+                size = 8192 + 15; // dual-core split threshold, odd SIMD tail
+            } else if (itr == 7) {
+                size = 8192;      // exactly the threshold
             }
         }
 

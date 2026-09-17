@@ -73,7 +73,18 @@ void esp_nn_mul_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                         const int32_t activation_min,
                                         const int32_t activation_max,
                                         const int32_t size);
-#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_riscv_pie
+void esp_nn_mul_elementwise_s8_mt(const int8_t *input1_data,
+                                  const int8_t *input2_data,
+                                  const int32_t input1_offset,
+                                  const int32_t input2_offset,
+                                  int8_t *output,
+                                  const int32_t out_offset,
+                                  const int32_t out_mult,
+                                  const int32_t out_shift,
+                                  const int32_t activation_min,
+                                  const int32_t activation_max,
+                                  const int32_t size);
+#define esp_nn_mul_elementwise_s8 esp_nn_mul_elementwise_s8_mt
 
 void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        const int8_t *input_data,
