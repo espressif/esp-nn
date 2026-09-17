@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <common_functions.h>
 #include <stdio.h>
+#include "test_functions.h"
 
 /* mult value range */
 #define MULT_MAX    INT32_MAX
@@ -48,6 +49,28 @@ uint32_t profile_opt_end();
 #define ANSI_COLOR_MAGENTA "\x1b[35m"
 #define ANSI_COLOR_CYAN    "\x1b[36m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
+
+/* Report one case and tally it. The count cannot drift from the message. */
+#define TEST_PASS(...) do {                     \
+    esp_nn_test_pass();                         \
+    printf(ANSI_COLOR_GREEN __VA_ARGS__);       \
+    printf(ANSI_COLOR_RESET);                   \
+} while (0)
+
+#define TEST_FAIL(...) do {                     \
+    esp_nn_test_fail();                         \
+    printf(ANSI_COLOR_RED __VA_ARGS__);         \
+    printf(ANSI_COLOR_RESET);                   \
+} while (0)
+
+/* An allocation that does not fit the target's heap is a skipped case, not a
+ * kernel failure: small-RAM targets (esp32c3-class) cannot host the largest
+ * tensors and must not fail the suite for it. */
+#define TEST_SKIP(...) do {                     \
+    esp_nn_test_skip();                         \
+    printf(ANSI_COLOR_YELLOW __VA_ARGS__);      \
+    printf(ANSI_COLOR_RESET);                   \
+} while (0)
 
 #define CHECK_EQUAL(ARRAY1, ARRAY2, size) ({    \
     bool res = true;                            \

@@ -30,7 +30,7 @@ void esp_nn_fully_connected_s8_test()
     int8_t *out_c_orig = malloc(max_out_ch + 16);
     int8_t *out_opt_orig = malloc(max_out_ch + 16);
     if (!input_orig || !filter_orig || !out_c_orig || !out_opt_orig) {
-        printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+        TEST_SKIP("%s allocations failed\n", __FUNCTION__);
         goto fc_s8_cleanup;
     }
     int8_t *input = (int8_t *)(((uint32_t)input_orig + 15) & ~15);
@@ -129,7 +129,7 @@ void esp_nn_fully_connected_s8_test()
 
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"[%3d] failed\n"ANSI_COLOR_RESET, itr);
+            TEST_FAIL("[%3d] failed\n", itr);
 #if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(output_opt, out_channels, 1);
@@ -144,8 +144,8 @@ void esp_nn_fully_connected_s8_test()
 #endif
             goto fc_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]"ANSI_COLOR_RESET,
-               itr, row_len, out_channels, input_offset);
+        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]",
+                  itr, row_len, out_channels, input_offset);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
     }
 
@@ -179,7 +179,7 @@ void esp_nn_fully_connected_per_ch_s8_test()
     int8_t *out_c_orig = malloc(max_out_ch + 16);
     int8_t *out_opt_orig = malloc(max_out_ch + 16);
     if (!input_orig || !filter_orig || !out_c_orig || !out_opt_orig) {
-        printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+        TEST_SKIP("%s allocations failed\n", __FUNCTION__);
         goto fc_per_ch_s8_buffers_cleanup;
     }
     int8_t *input = (int8_t *)(((uint32_t)input_orig + 15) & ~15);
@@ -244,7 +244,7 @@ void esp_nn_fully_connected_per_ch_s8_test()
         out_shift = ESP_NN_TEST_ALLOC(out_channels * sizeof(int32_t));
 
         if (out_shift == NULL || out_mult == NULL) {
-            printf(ANSI_COLOR_RED"out_shift/out_mult allocations failed\n"ANSI_COLOR_RESET);
+            TEST_SKIP("out_shift/out_mult allocations failed\n");
             goto fully_connected_per_ch_cleanup;
         }
 
@@ -286,11 +286,11 @@ void esp_nn_fully_connected_per_ch_s8_test()
 
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"[%3d] failed\n"ANSI_COLOR_RESET, itr);
+            TEST_FAIL("[%3d] failed\n", itr);
             goto fully_connected_per_ch_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]"ANSI_COLOR_RESET,
-               itr, row_len, out_channels, input_offset);
+        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]",
+                  itr, row_len, out_channels, input_offset);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     fully_connected_per_ch_cleanup:
@@ -477,6 +477,11 @@ static void fc_align_report(const char *what, int value,
 {
     bool ok = (res->mismatch_pt == 0 && res->mismatch_pc == 0 &&
                res->guard_pt == 0 && res->guard_pc == 0);
+    if (ok) {
+        esp_nn_test_pass();
+    } else {
+        esp_nn_test_fail();
+    }
     printf("%s", ok ? ANSI_COLOR_GREEN : ANSI_COLOR_RED);
     if (what) {
         printf("[%-14s %2d] ", what, value);
@@ -498,7 +503,7 @@ void esp_nn_fully_connected_align_s8_test()
 
     if (!input_orig || !filter_orig || !out_region || !out_ref ||
         !out_mult || !out_shift) {
-        printf(ANSI_COLOR_RED"%s allocations failed\n"ANSI_COLOR_RESET, __FUNCTION__);
+        TEST_SKIP("%s allocations failed\n", __FUNCTION__);
         goto fc_align_cleanup;
     }
 
@@ -510,11 +515,11 @@ void esp_nn_fully_connected_align_s8_test()
            FC_ALIGN_ROW_LEN);
 
 #if CONFIG_IDF_TARGET_ESP32S3
-    bool bounded_dot_ok = fc_check_exact_sized_dot_product();
-    printf("-- exact-sized bounded dot-product inputs: %s%s%s\n",
-           bounded_dot_ok ? ANSI_COLOR_GREEN : ANSI_COLOR_RED,
-           bounded_dot_ok ? "passed" : "failed",
-           ANSI_COLOR_RESET);
+    if (fc_check_exact_sized_dot_product()) {
+        TEST_PASS("-- exact-sized bounded dot-product inputs: passed\n");
+    } else {
+        TEST_FAIL("-- exact-sized bounded dot-product inputs: failed\n");
+    }
 #endif
 
     /* Sweep A: input misalignment 0..15, filter 16-byte aligned, out_ch = 2.
@@ -658,7 +663,7 @@ void esp_nn_fully_connected_perf_test()
     };
     const int32_t filter_offset = 0;    /* symmetric weights, as real int8 models */
     const int32_t out_mult = 1355715584, out_shift = -6;
-    int failures = 0;
+    int advisory = 0;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
 
@@ -674,7 +679,7 @@ void esp_nn_fully_connected_perf_test()
         int8_t *ref        = ESP_NN_TEST_ALLOC(out_ch);
         int32_t *bias      = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
         if (!input_raw || !filter_raw || !in2_raw || !filt2_raw || !out_raw || !ref || !bias) {
-            printf(ANSI_COLOR_RED"%s: allocation failed\n"ANSI_COLOR_RESET, cases[c].name);
+            TEST_SKIP("[%s] allocation failed\n", cases[c].name);
             goto perf_cleanup;
         }
         /* 16-byte align, as TFLite Micro's arena does. Plain malloc is 4-byte
@@ -709,10 +714,9 @@ void esp_nn_fully_connected_perf_test()
                     }
                 }
             }
-            failures++;
-            printf(ANSI_COLOR_RED"[%s] NOT BIT-EXACT vs ansi: %d/%d channels, first ch %d "
-                   "(opt %d, ref %d)\n"ANSI_COLOR_RESET,
-                   cases[c].name, bad, out_ch, first, out[first], ref[first]);
+            TEST_FAIL("[%s] NOT BIT-EXACT vs ansi: %d/%d channels, first ch %d "
+                      "(opt %d, ref %d)\n",
+                      cases[c].name, bad, out_ch, first, out[first], ref[first]);
             goto perf_cleanup;
         }
 
@@ -746,15 +750,23 @@ void esp_nn_fully_connected_perf_test()
         }
         uint32_t asm_floor = profile_opt_end();
 
-        float ratio = (float)chosen / (float)asm_floor;
-        bool ok = ratio <= cases[c].max_ratio;
+        /* Bit-exactness is the verdict; the dispatch-vs-assembly ratio below is
+         * advisory (a regression signal on hardware, noise under emulation). */
+        TEST_PASS("[%s] bit-exact vs ansi\n", cases[c].name);
+        /* Compare by cross-multiplication and report hundredths: nano-printf,
+         * the default C library on some targets, has no float conversions. */
+        const uint32_t max_x100 = (uint32_t) (cases[c].max_ratio * 100.0f + 0.5f);
+        bool ok = (uint64_t) chosen * 100 <= (uint64_t) max_x100 * asm_floor;
+        const uint32_t ratio_x100 = asm_floor
+                ? (uint32_t) (((uint64_t) chosen * 100 + asm_floor / 2) / asm_floor) : 0;
         if (!ok) {
-            failures++;
+            advisory++;
         }
-        printf("%s[%s] chosen %8"PRIu32" cyc, asm floor %8"PRIu32" cyc, %.2fx  %s%s\n",
+        printf("%s[%s] chosen %8"PRIu32" cyc, asm floor %8"PRIu32" cyc, %"PRIu32".%02"PRIu32"x  %s%s\n",
                ok ? ANSI_COLOR_GREEN : ANSI_COLOR_RED, cases[c].name,
-               chosen / FC_PERF_ITERS, asm_floor / FC_PERF_ITERS, ratio,
-               ok ? "ok" : "SLOWER THAN THE ASSEMBLY", ANSI_COLOR_RESET);
+               chosen / FC_PERF_ITERS, asm_floor / FC_PERF_ITERS,
+               ratio_x100 / 100, ratio_x100 % 100,
+               ok ? "ok" : "SLOWER THAN THE ASSEMBLY (advisory)", ANSI_COLOR_RESET);
 
     perf_cleanup:
         if (input_raw) {
@@ -779,7 +791,8 @@ void esp_nn_fully_connected_perf_test()
             free(bias);
         }
     }
-    if (failures) {
-        printf(ANSI_COLOR_RED"%s: %d failure(s)\n"ANSI_COLOR_RESET, __FUNCTION__, failures);
+    if (advisory) {
+        printf(ANSI_COLOR_YELLOW"%s: %d advisory ratio miss(es), not counted\n"ANSI_COLOR_RESET,
+               __FUNCTION__, advisory);
     }
 }

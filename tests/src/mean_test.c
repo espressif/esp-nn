@@ -53,7 +53,7 @@ void esp_nn_mean_nhwc_s8_test()
         }
 
         if (!input_orig || !out_c_orig || !out_opt_orig || (scratch_size && !scratch_orig)) {
-            printf(ANSI_COLOR_RED"mean [%d] alloc failed\n"ANSI_COLOR_RESET, t);
+            TEST_SKIP("mean [%d] alloc failed\n", t);
             goto cleanup;
         }
         esp_nn_set_mean_scratch_buf(scratch_orig
@@ -81,12 +81,12 @@ void esp_nn_mean_nhwc_s8_test()
 
         bool ret = CHECK_EQUAL(out_c, out_opt, c);
         if (!ret) {
-            printf(ANSI_COLOR_RED"mean [%d] failed [%dx%dx%d]\n"ANSI_COLOR_RESET,
-                   t, h, w, c);
+            TEST_FAIL("mean [%d] failed [%dx%dx%d]\n",
+                      t, h, w, c);
             goto cleanup;
         }
-        printf(ANSI_COLOR_GREEN"mean [%2d] passed [%dx%dx%d]\n"ANSI_COLOR_RESET,
-               t, h, w, c);
+        TEST_PASS("mean [%2d] passed [%dx%dx%d]\n",
+                  t, h, w, c);
 
     cleanup:
         if (input_orig) free(input_orig);

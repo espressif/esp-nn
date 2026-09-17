@@ -32,7 +32,7 @@ static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
     int8_t *out_c_orig = malloc(out_size + 16);
     int8_t *out_opt_orig = malloc(out_size + 16);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
-        printf(ANSI_COLOR_RED"avg_pool [%d] allocations failed\n"ANSI_COLOR_RESET, iter);
+        TEST_SKIP("avg_pool [%d] allocations failed\n", iter);
         goto avg_pool_cleanup;
     }
 
@@ -58,14 +58,14 @@ static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
 
     bool ret = CHECK_EQUAL(output_c, output_opt, out_size);
     if (ret == false) {
-        printf(ANSI_COLOR_RED"avg_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n"ANSI_COLOR_RESET,
-               iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-               stride_wd, stride_ht, pad_wd, pad_ht);
+        TEST_FAIL("avg_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+                  iter, input_wd, input_ht, channels, filter_wd, filter_ht,
+                  stride_wd, stride_ht, pad_wd, pad_ht);
         goto avg_pool_cleanup;
     }
-    printf(ANSI_COLOR_GREEN"avg_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n"ANSI_COLOR_RESET,
-           iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-           stride_wd, stride_ht, pad_wd, pad_ht);
+    TEST_PASS("avg_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+              iter, input_wd, input_ht, channels, filter_wd, filter_ht,
+              stride_wd, stride_ht, pad_wd, pad_ht);
 
 avg_pool_cleanup:
     if (input_orig) free(input_orig);
@@ -115,7 +115,7 @@ static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
     int8_t *out_c_orig = malloc(out_size + 16);
     int8_t *out_opt_orig = malloc(out_size + 16);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
-        printf(ANSI_COLOR_RED"max_pool [%d] allocations failed\n"ANSI_COLOR_RESET, iter);
+        TEST_SKIP("max_pool [%d] allocations failed\n", iter);
         goto max_pool_cleanup;
     }
 
@@ -141,14 +141,14 @@ static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
 
     bool ret = CHECK_EQUAL(output_c, output_opt, out_size);
     if (ret == false) {
-        printf(ANSI_COLOR_RED"max_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n"ANSI_COLOR_RESET,
-               iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-               stride_wd, stride_ht, pad_wd, pad_ht);
+        TEST_FAIL("max_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+                  iter, input_wd, input_ht, channels, filter_wd, filter_ht,
+                  stride_wd, stride_ht, pad_wd, pad_ht);
         goto max_pool_cleanup;
     }
-    printf(ANSI_COLOR_GREEN"max_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n"ANSI_COLOR_RESET,
-           iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-           stride_wd, stride_ht, pad_wd, pad_ht);
+    TEST_PASS("max_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+              iter, input_wd, input_ht, channels, filter_wd, filter_ht,
+              stride_wd, stride_ht, pad_wd, pad_ht);
 
 max_pool_cleanup:
     if (input_orig) free(input_orig);

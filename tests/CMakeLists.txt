@@ -1,6 +1,7 @@
 
 set(COMPONENT_ADD_INCLUDEDIRS ./include/)
-set(COMPONENT_SRCS "src/basic_math_test.c"
+set(COMPONENT_SRCS "src/test_utils.c"
+                   "src/basic_math_test.c"
                    "src/convolution_test.c"
                    "src/fully_connected_test.c"
                    "src/pooling_test.c"

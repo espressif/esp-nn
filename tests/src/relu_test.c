@@ -22,7 +22,7 @@ static void run_relu6_test(int size, int unalign, int iter)
     int8_t *inout_opt_orig = malloc(size + 32);
 
     if (input_orig == NULL || inout_c_orig == NULL || inout_opt_orig == NULL) {
-        printf(ANSI_COLOR_RED"relu6 [%d] allocations failed\n"ANSI_COLOR_RESET, iter);
+        TEST_SKIP("relu6 [%d] allocations failed\n", iter);
         goto relu6_cleanup;
     }
     /* deliberately misalign by `unalign` bytes to cover non-16-byte-aligned
@@ -47,10 +47,10 @@ static void run_relu6_test(int size, int unalign, int iter)
 
     bool ret = CHECK_EQUAL(inout_ansi, inout_opt, size);
     if (ret == false) {
-        printf(ANSI_COLOR_RED"relu6 [%d] failed [size %d, unalign %d]\n"ANSI_COLOR_RESET, iter, size, unalign);
+        TEST_FAIL("relu6 [%d] failed [size %d, unalign %d]\n", iter, size, unalign);
         goto relu6_cleanup;
     }
-    printf(ANSI_COLOR_GREEN"relu6 [%2d] passed [size %d, unalign %d]\n"ANSI_COLOR_RESET, iter, size, unalign);
+    TEST_PASS("relu6 [%2d] passed [size %d, unalign %d]\n", iter, size, unalign);
 
 relu6_cleanup:
     if (input_orig) free(input_orig);

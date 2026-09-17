@@ -479,7 +479,7 @@ void esp_nn_depthwise_conv_s8_test()
         if (bias == NULL || input_orig == NULL || filter_data == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL ||
                 out_shift == NULL || out_mult == NULL) {
-            printf(ANSI_COLOR_RED"[%d] allocations failed\n"ANSI_COLOR_RESET, itr);
+            TEST_SKIP("[%d] allocations failed\n", itr);
             goto dc_s8_cleanup;
         }
 
@@ -528,18 +528,15 @@ void esp_nn_depthwise_conv_s8_test()
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
-        if (ch_mult == 1 && channels >= 8 &&
-                scratch_buf_size < channels * (int) sizeof(int32_t)) {
-            printf(ANSI_COLOR_RED"[%d] scratch buffer too small: %d, need %d\n"ANSI_COLOR_RESET,
-                   itr, scratch_buf_size, channels * (int) sizeof(int32_t));
-            goto dc_s8_cleanup;
-        }
+        /* No pre-check on the getter's size: a kernel that needs more than it
+         * asked for trips the SCRATCH_GUARD, one that needs scratch when the
+         * getter said 0 faults on the NULL buffer (reset after every case). */
         int8_t *scratch_guard = NULL;
         if (scratch_buf_size > 0) {
             scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16 + SCRATCH_GUARD_SZ);
             if (scratch_buf == NULL) {
-                printf(ANSI_COLOR_RED"[%d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
-                       itr, scratch_buf_size);
+                TEST_SKIP("[%d] scratch_buf alloc failed size %d\n",
+                          itr, scratch_buf_size);
                 goto dc_s8_cleanup;
             }
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
@@ -551,8 +548,7 @@ void esp_nn_depthwise_conv_s8_test()
         if (itr >= 10 && itr <= 12) {
             preferred_depthwise_scratch = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
             if (preferred_depthwise_scratch == NULL) {
-                printf(ANSI_COLOR_RED"[%d] preferred scratch allocation failed\n"ANSI_COLOR_RESET,
-                       itr);
+                TEST_SKIP("[%d] preferred scratch allocation failed\n", itr);
                 goto dc_s8_cleanup;
             }
             uint8_t *preferred_aligned = (uint8_t *)
@@ -595,20 +591,20 @@ void esp_nn_depthwise_conv_s8_test()
             }
         }
         if (overflow) {
-            printf(ANSI_COLOR_RED"[%3d] scratch overflow: wrote at least %d bytes past"
-                   " reported size %d [pad: (%d, %d), stride: (%d, %d), out: (%3d,%3d),"
-                   " ch %3d]\n"ANSI_COLOR_RESET,
-                   itr, overflow, scratch_buf_size, pad_wd, pad_ht,
-                   stride_wd, stride_ht, out_wd, out_ht, channels);
+            TEST_FAIL("[%3d] scratch overflow: wrote at least %d bytes past"
+                      " reported size %d [pad: (%d, %d), stride: (%d, %d), out: (%3d,%3d),"
+                      " ch %3d]\n",
+                      itr, overflow, scratch_buf_size, pad_wd, pad_ht,
+                      stride_wd, stride_ht, out_wd, out_ht, channels);
             goto dc_s8_cleanup;
         }
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-        printf(ANSI_COLOR_RED"[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
-               " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]\n"ANSI_COLOR_RESET,
-               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
-               filter_wd, filter_ht, channels, ch_mult);
+            TEST_FAIL("[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
+                      " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]\n",
+                      itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+                      filter_wd, filter_ht, channels, ch_mult);
 #if 0
             printf("Output: \n");
             PRINT_ARRAY_HEX(out_data_opt, out_size / out_ht, out_ht);
@@ -623,10 +619,10 @@ void esp_nn_depthwise_conv_s8_test()
 #endif
             goto dc_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
-               " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]"ANSI_COLOR_RESET,
-               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
-               out_ht, filter_wd, filter_ht, channels, ch_mult);
+        TEST_PASS("[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
+                  " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]",
+                  itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
+                  out_ht, filter_wd, filter_ht, channels, ch_mult);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
@@ -1274,8 +1270,8 @@ void esp_nn_conv_s8_test()
         if (input_orig == NULL || filter_data == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL ||
                 bias == NULL || out_shift == NULL || out_mult == NULL) {
-            printf(ANSI_COLOR_RED"[%3d] alloc failed (in=%d filter=%d out=%d)\n"ANSI_COLOR_RESET,
-                   itr, in_size, filter_size, out_size);
+            TEST_SKIP("[%3d] alloc failed (in=%d filter=%d out=%d)\n",
+                      itr, in_size, filter_size, out_size);
             goto conv_s8_cleanup;
         }
 
@@ -1408,8 +1404,8 @@ void esp_nn_conv_s8_test()
         if (scratch_buf_size > 0) {
             scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16);
             if (scratch_buf == NULL) {
-                printf(ANSI_COLOR_RED"[%3d] scratch_buf alloc failed size %d\n"ANSI_COLOR_RESET,
-                       itr, scratch_buf_size);
+                TEST_SKIP("[%3d] scratch_buf alloc failed size %d\n",
+                          itr, scratch_buf_size);
                 goto conv_s8_cleanup;
             }
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
@@ -1420,8 +1416,7 @@ void esp_nn_conv_s8_test()
         if (itr == 27 || itr == 28 || itr == 31) {
             preferred_scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
             if (preferred_scratch_buf == NULL) {
-                printf(ANSI_COLOR_RED"[%3d] preferred scratch allocation failed\n"ANSI_COLOR_RESET,
-                       itr);
+                TEST_SKIP("[%3d] preferred scratch allocation failed\n", itr);
                 goto conv_s8_cleanup;
             }
             uint8_t *preferred_aligned = (uint8_t *)
@@ -1450,16 +1445,16 @@ void esp_nn_conv_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
-                   " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n"ANSI_COLOR_RESET,
-                   itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
-                   out_channels, filter_wd, filter_ht, in_channels);
+            TEST_FAIL("[%3d] failed [pad: (%d, %d), stride: (%d, %d)"
+                      " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n",
+                      itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+                      out_channels, filter_wd, filter_ht, in_channels);
             goto conv_s8_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
-               " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]"ANSI_COLOR_RESET,
-               itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
-               out_channels, filter_wd, filter_ht, in_channels);
+        TEST_PASS("[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
+                  " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]",
+                  itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
+                  out_channels, filter_wd, filter_ht, in_channels);
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
@@ -1504,5 +1499,6 @@ void esp_nn_conv_s8_test()
             free(preferred_scratch_buf);
             preferred_scratch_buf = NULL;
         }
+        esp_nn_set_conv_scratch_buf(NULL);
     }
 }

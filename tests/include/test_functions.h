@@ -5,6 +5,17 @@
  */
 
 
+#include <stdint.h>
+
+/* pass/fail tallies for the whole run, printed as the machine-readable verdict */
+extern uint32_t esp_nn_test_passed;
+extern uint32_t esp_nn_test_failed;
+extern uint32_t esp_nn_test_skipped;
+
+void esp_nn_test_pass(void);
+void esp_nn_test_fail(void);
+void esp_nn_test_skip(void);
+
 /* int8_t ops tests */
 void esp_nn_add_elementwise_s8_test();
 void esp_nn_mul_elementwise_s8_test();
