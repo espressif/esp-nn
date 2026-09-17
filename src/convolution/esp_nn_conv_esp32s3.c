@@ -125,56 +125,6 @@ static int16_t *scratch_buffer = NULL;
 static uint8_t *preferred_scratch_buffer = NULL;
 static size_t preferred_scratch_size = 0;
 
-/* Large pointwise matrices are otherwise streamed once per eight spatial
- * positions.  Iterate filters first when the spatial tensor is small, keeping
- * each filter row resident while ACCX applies it to every input position. */
-static void esp_nn_conv_s8_1x1_filter_major(
-        const int8_t *input, int spatial_size, int in_channels,
-        int32_t input_offset, const int8_t *filter_data, const int32_t *bias,
-        int8_t *out_data, int out_channels, int32_t out_offset,
-        const int32_t *out_shift, const int32_t *out_mult,
-        int32_t activation_min, int32_t activation_max)
-{
-    const int len_div16 = in_channels >> 4;
-
-    for (int oc = 0; oc < out_channels; ++oc) {
-        const int8_t *filter = filter_data + oc * in_channels;
-        const int8_t *dot_filter = filter;
-        bool aligned_dot = (((uintptr_t)filter & 15) == 0);
-        if (!aligned_dot && preferred_scratch_buffer != NULL &&
-                (((uintptr_t)preferred_scratch_buffer & 15) == 0) &&
-                in_channels <= preferred_scratch_size) {
-            memcpy(preferred_scratch_buffer, filter, in_channels);
-            dot_filter = (const int8_t *)preferred_scratch_buffer;
-            aligned_dot = true;
-        }
-        int32_t offset_acc = bias ? bias[oc] : 0;
-        if (input_offset != 0) {
-            /* Vectorized: this path is gated on a small spatial map, so the
-             * per-channel sum is a sizeable fraction of the work here, not
-             * the negligible prepass it is on large maps. esp-nn#36 was the
-             * scalar form of this in fully_connected. */
-            offset_acc += input_offset *
-                          esp_nn_filter_sum_s8_esp32s3(filter, in_channels);
-        }
-
-        for (int pos = 0; pos < spatial_size; ++pos) {
-            const int8_t *input_row = input + pos * in_channels;
-            int32_t acc = aligned_dot
-                    ? esp_nn_dot_s8_aligned_esp32s3(
-                            input_row, dot_filter, in_channels)
-                    : esp_nn_dot_s8_unaligned_esp32s3(
-                            input_row, filter, len_div16);
-            acc += offset_acc;
-            acc = esp_nn_requantize(acc, out_mult[oc], out_shift[oc]);
-            acc += out_offset;
-            acc = max(acc, activation_min);
-            acc = min(acc, activation_max);
-            out_data[pos * out_channels + oc] = (int8_t)acc;
-        }
-    }
-}
-
 extern void esp_nn_conv_s8_mult8_1x1_esp32s3(
                 const int8_t *input_data,
                 const uint16_t input_wd,
@@ -268,6 +218,75 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
             work);
     memcpy(out_data + vector_positions * out_channels, tail_output,
            tail * out_channels);
+}
+
+/*
+ * GEBP-style OC-panel driver for the mult8 1x1 asm. The asm streams the
+ * whole filter matrix once per 8-position batch, which thrashes the 64 KB
+ * L1 D-cache whenever the filter exceeds it. Output channels are therefore
+ * processed in panels sized to ~24 KB of filter rows: a panel stays
+ * resident across every position batch, so filter data is fetched from
+ * memory once per layer while the batched SIMD kernel does the math.
+ * Each panel's output is staged contiguous and scattered into the NHWC
+ * layout. Per-output-channel arithmetic is independent and unchanged:
+ * results are bit-identical to a single batched call.
+ */
+static void esp_nn_conv_s8_mult8_1x1_oc_panel(
+        const int8_t *input, int spatial_size, uint16_t in_channels,
+        int32_t input_offset, const int8_t *filter_data, const int32_t *bias,
+        int8_t *out_data, uint16_t out_channels, uint16_t out_stride,
+        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max, void *scratch)
+{
+    int oc_tile = (24 * 1024) / in_channels;
+    oc_tile &= ~7;
+    if (oc_tile < 8) {
+        oc_tile = 8;
+    }
+    if (oc_tile > 1024) {
+        oc_tile = 1024;
+    }
+    if (oc_tile > out_channels) {
+        oc_tile = out_channels;
+    }
+
+    uint8_t *work = (uint8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);
+    if (oc_tile == out_channels && out_stride == out_channels) {
+        /* Whole filter fits one panel: plain batched call, no staging. */
+        esp_nn_conv_s8_mult8_1x1_batched_tail(
+                input, spatial_size, 1, in_channels, input_offset,
+                filter_data, bias, out_data, out_channels, out_offset,
+                out_shift, out_mult, activation_min, activation_max, work);
+        return;
+    }
+
+    /* Staging area sits after the asm work region (transpose + tails). */
+    int8_t *staging = (int8_t *)(work + 24 * in_channels + 8 * oc_tile + 32);
+    int pos_chunk = (8 * 1024) / oc_tile;
+    pos_chunk &= ~7;
+    if (pos_chunk < 8) {
+        pos_chunk = 8;
+    }
+
+    for (int oc_base = 0; oc_base < out_channels; oc_base += oc_tile) {
+        const int oc_n = min(oc_tile, out_channels - oc_base);
+        for (int pos0 = 0; pos0 < spatial_size; pos0 += pos_chunk) {
+            const int pos_n = min(pos_chunk, spatial_size - pos0);
+            esp_nn_conv_s8_mult8_1x1_batched_tail(
+                    input + pos0 * in_channels, pos_n, 1, in_channels,
+                    input_offset, filter_data + oc_base * in_channels,
+                    bias ? bias + oc_base : NULL, staging, oc_n,
+                    out_offset, out_shift + oc_base, out_mult + oc_base,
+                    activation_min, activation_max, work);
+            const int8_t *src = staging;
+            int8_t *dst = out_data + pos0 * out_stride + oc_base;
+            for (int p = 0; p < pos_n; p++) {
+                memcpy(dst, src, oc_n);
+                src += oc_n;
+                dst += out_stride;
+            }
+        }
+    }
 }
 
 /* Use shared dot product from common — see esp_nn_dot_s8_esp32s3.S */
@@ -466,7 +485,12 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
         int existing_size = transpose_buf_size + align_buf_size;
         int batched_tail_size = 16 * in_ch + 8 * in_ch + 8 * out_ch +
                                 align_buf_size;
-        return max(existing_size, batched_tail_size);
+        /* OC-panel driver (filter > 24 KB): asm work + staging areas */
+        int panel_size = 24 * in_ch + 16 * 1024 + align_buf_size;
+        if ((int32_t)in_ch * out_ch <= 24 * 1024) {
+            panel_size = 0;
+        }
+        return max(max(existing_size, batched_tail_size), panel_size);
     } else {
         int32_t filter_row_size = filter_wd * in_ch;
         int32_t window_len = filter_wd * filter_ht * in_ch;
@@ -559,13 +583,24 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
         if (channels % 8 == 0) {
             int spatial_size = input_wd * input_ht;
             int filter_bytes = channels * out_channels;
-            if ((channels % 16) == 0 && spatial_size <= 64 &&
-                    filter_bytes >= 32 * 1024 &&
-                    (((uintptr_t)input & 15) == 0)) {
-                esp_nn_conv_s8_1x1_filter_major(
+            if (filter_bytes > 24 * 1024) {
+                /* Panel work + staging (24 * in_ch + 16 KB + 64) goes to the
+                 * preferred (internal) scratch when it fits, like the batched
+                 * path below; otherwise a PSRAM arena would host the very
+                 * buffers the L1-resident scheme depends on. */
+                void *panel_scratch = scratch_buffer;
+                if (preferred_scratch_buffer != NULL &&
+                        (((uintptr_t)preferred_scratch_buffer & 15) == 0) &&
+                        (size_t)(24 * channels + 16 * 1024 + 64) <= preferred_scratch_size) {
+                    panel_scratch = preferred_scratch_buffer;
+                }
+                /* Filter exceeds the L1 panel budget: the OC-panel driver keeps
+                 * each panel of filter rows hot across all position batches. */
+                esp_nn_conv_s8_mult8_1x1_oc_panel(
                         input, spatial_size, channels, input_offset,
-                        filter_data, bias, out_data, out_channels, out_offset,
-                        out_shift, out_mult, activation_min, activation_max);
+                        filter_data, bias, out_data, out_channels,
+                        out_channels, out_offset, out_shift, out_mult,
+                        activation_min, activation_max, panel_scratch);
                 return;
             }
             void *pointwise_scratch = scratch_buffer;

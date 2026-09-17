@@ -427,9 +427,22 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
                     if (full_input <= 40 * 1024) {
                         return filter_size + full_input + 16;
                     } else {
-                        /* Tiled: only need filter + strip buffer (filter_ht rows) */
-                        int strip = (input_wd + pad_width) * filter_ht * channels;
-                        return filter_size + strip + 16;
+                        /* Strip-tiled: filter + as many padded input rows as
+                         * fit the same 40 KB budget the monolithic path uses,
+                         * never fewer than filter_ht. The kernel derives its
+                         * strip height from this size (minus its 16-byte
+                         * alignment pad, hence +32 not +16), so reserving
+                         * only filter_ht rows here would silently degrade it
+                         * to one output row per assembly call. */
+                        int row_bytes = (input_wd + pad_width) * channels;
+                        int rows = (40 * 1024 - filter_size - 32) / row_bytes;
+                        if (rows < filter_ht) {
+                            rows = filter_ht;
+                        }
+                        if (rows > input_ht + pad_height) {
+                            rows = input_ht + pad_height;
+                        }
+                        return filter_size + rows * row_bytes + 32;
                     }
                 } else {
                     return filter_size + 16;
@@ -695,20 +708,34 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                                                       out_data, out_wd, out_ht, out_offset, out_shift,
                                                                       out_mult, activation_min, activation_max);
                 } else {
-                    /* Large input: row-tiled processing to reduce cache pressure.
-                     * Pad and process a strip of output rows at a time. */
+                    /* Large input: strip-tiled processing. Copy a strip of
+                     * input rows once and produce several output rows per
+                     * assembly call; per-row tiling would re-copy every
+                     * input row filter_ht times from the (PSRAM) input. */
                     int padded_wd = input_wd + 2 * pad_wd;
                     int8_t pad_val = (int8_t)(-input_offset);
+                    int row_bytes = padded_wd * channels;
+                    int avail = (active_scratch == (int16_t *)preferred_scratch_buffer)
+                                ? (int)preferred_scratch_size : required_scratch;
+                    int strip_rows = (avail - filter_size - align_len - 16) / row_bytes;
+                    if (strip_rows < filter_ht) {
+                        strip_rows = filter_ht; /* scratch contract guarantees this fits */
+                    }
+                    int out_rows_per_strip = (strip_rows - filter_ht) / stride_ht + 1;
 
-                    for (int out_y = 0; out_y < out_ht; out_y++) {
+                    for (int out_y = 0; out_y < out_ht; ) {
+                        int n_out = out_rows_per_strip;
+                        if (n_out > out_ht - out_y) {
+                            n_out = out_ht - out_y;
+                        }
+                        int in_rows = (n_out - 1) * stride_ht + filter_ht;
                         int in_y_start = out_y * stride_ht; /* in padded coords (pad_ht already accounted) */
-                        /* Pad filter_ht rows of input into scratch */
                         int8_t *tile = input_padded;
-                        for (int fy = 0; fy < filter_ht; fy++) {
-                            int src_y = in_y_start + fy - pad_ht; /* original input row */
+                        for (int r = 0; r < in_rows; r++) {
+                            int src_y = in_y_start + r - pad_ht; /* original input row */
                             if (src_y < 0 || src_y >= input_ht) {
                                 /* Padding row */
-                                memset(tile, pad_val, padded_wd * channels);
+                                memset(tile, pad_val, row_bytes);
                             } else {
                                 /* Left pad */
                                 memset(tile, pad_val, pad_wd * channels);
@@ -719,15 +746,15 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                 /* Right pad */
                                 memset(tile + (pad_wd + input_wd) * channels, pad_val, pad_wd * channels);
                             }
-                            tile += padded_wd * channels;
+                            tile += row_bytes;
                         }
-                        /* Process one output row */
                         esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(
-                            input_padded, padded_wd, filter_ht, channels, input_offset,
-                            stride_wd, 1, filter_aligned, bias,
+                            input_padded, padded_wd, in_rows, channels, input_offset,
+                            stride_wd, stride_ht, filter_aligned, bias,
                             out_data + out_y * out_wd * channels,
-                            out_wd, 1, out_offset, out_shift,
+                            out_wd, n_out, out_offset, out_shift,
                             out_mult, activation_min, activation_max);
+                        out_y += n_out;
                     }
                 }
             } else if ((channels % 16 == 0) && (pad_wd == 0) && (pad_ht == 0)) {
