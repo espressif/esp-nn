@@ -1416,7 +1416,8 @@ void esp_nn_conv_s8_test()
             esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
         }
 #if CONFIG_IDF_TARGET_ESP32S3
-        if (itr == 27 || itr == 28) {
+        /* 27/28: batched tail; 31: OC-panel driver, both with a preferred buffer. */
+        if (itr == 27 || itr == 28 || itr == 31) {
             preferred_scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
             if (preferred_scratch_buf == NULL) {
                 printf(ANSI_COLOR_RED"[%3d] preferred scratch allocation failed\n"ANSI_COLOR_RESET,
