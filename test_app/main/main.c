@@ -14,6 +14,7 @@
 #include <inttypes.h>
 
 #include <test_functions.h>
+#include <esp_nn_multicore.h>
 #include <esp_timer.h>
 
 
@@ -62,6 +63,10 @@ static void print_profile(const char *kernel)
 
 void app_main()
 {
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+    /* Exercise the dual-core split paths in the bit-exactness sweeps. */
+    esp_nn_dual_core_enable();
+#endif
     /* s8 tests */
     ESP_LOGI(TAG, "Running s8 tests...");
     esp_nn_add_elementwise_s8_test();

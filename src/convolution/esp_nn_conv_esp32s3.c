@@ -56,6 +56,7 @@
 
 #include <stdio.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
+#include <esp_nn_multicore.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -288,6 +289,37 @@ static void esp_nn_conv_s8_mult8_1x1_oc_panel(
         }
     }
 }
+
+#if ESP_NN_DUAL_CORE_SUPPORTED
+typedef struct {
+    const int8_t *input;
+    int spatial_size;
+    int in_channels;
+    int32_t input_offset;
+    const int8_t *filter_data;
+    const int32_t *bias;
+    int8_t *out_data;
+    int out_channels;
+    int out_stride;
+    int32_t out_offset;
+    const int32_t *out_shift;
+    const int32_t *out_mult;
+    int32_t activation_min;
+    int32_t activation_max;
+    uint8_t *copy_scratch;
+    size_t copy_scratch_size;
+} conv_1x1_panel_mt_job_t;
+
+static void conv_1x1_panel_mt_worker(void *p)
+{
+    const conv_1x1_panel_mt_job_t *j = (const conv_1x1_panel_mt_job_t *)p;
+    esp_nn_conv_s8_mult8_1x1_oc_panel(
+            j->input, j->spatial_size, j->in_channels, j->input_offset,
+            j->filter_data, j->bias, j->out_data, j->out_channels,
+            j->out_stride, j->out_offset, j->out_shift, j->out_mult,
+            j->activation_min, j->activation_max, j->copy_scratch);
+}
+#endif /* ESP_NN_DUAL_CORE_SUPPORTED */
 
 /* Use shared dot product from common — see esp_nn_dot_s8_esp32s3.S */
 
@@ -596,6 +628,40 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 }
                 /* Filter exceeds the L1 panel budget: the OC-panel driver keeps
                  * each panel of filter rows hot across all position batches. */
+                /* Cores split the output channels; outputs are disjoint,
+                 * arithmetic unchanged. */
+#if ESP_NN_DUAL_CORE_SUPPORTED
+                if (esp_nn_dual_core_active() && out_channels >= 32) {
+                    const int oc0 = ((out_channels / 2) + 7) & ~7;
+                    const int wneed = 24 * channels + 16 * 1024 + 64;
+                    uint8_t *wscr = (uint8_t *)esp_nn_dual_core_scratch(wneed);
+                    if (wscr != NULL && oc0 > 0 && oc0 < out_channels) {
+                        conv_1x1_panel_mt_job_t job = {
+                            .input = input, .spatial_size = spatial_size,
+                            .in_channels = channels, .input_offset = input_offset,
+                            .filter_data = filter_data, .bias = bias,
+                            .out_data = out_data, .out_channels = oc0,
+                            .out_stride = out_channels,
+                            .out_offset = out_offset, .out_shift = out_shift,
+                            .out_mult = out_mult, .activation_min = activation_min,
+                            .activation_max = activation_max,
+                            .copy_scratch = wscr, .copy_scratch_size = (size_t)wneed,
+                        };
+                        if (esp_nn_dual_core_run(conv_1x1_panel_mt_worker, &job)) {
+                            esp_nn_conv_s8_mult8_1x1_oc_panel(
+                                    input, spatial_size, channels, input_offset,
+                                    filter_data + oc0 * channels,
+                                    bias ? bias + oc0 : NULL,
+                                    out_data + oc0, out_channels - oc0, out_channels,
+                                    out_offset, out_shift + oc0, out_mult + oc0,
+                                    activation_min, activation_max, panel_scratch);
+                            esp_nn_dual_core_wait();
+                            return;
+                        }
+                        /* worker declined (nested or same-core call): single-core below */
+                    }
+                }
+#endif /* ESP_NN_DUAL_CORE_SUPPORTED */
                 esp_nn_conv_s8_mult8_1x1_oc_panel(
                         input, spatial_size, channels, input_offset,
                         filter_data, bias, out_data, out_channels,
