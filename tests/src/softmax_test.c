@@ -25,7 +25,7 @@ static void run_softmax_test(int32_t height, int32_t width, int32_t mult,
     int8_t *out_c_orig = malloc(size + 16);
     int8_t *out_opt_orig = malloc(size + 16);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
-        printf(ANSI_COLOR_RED"softmax [%d] allocations failed\n"ANSI_COLOR_RESET, iter);
+        TEST_SKIP("softmax [%d] allocations failed\n", iter);
         goto softmax_cleanup;
     }
 
@@ -45,8 +45,8 @@ static void run_softmax_test(int32_t height, int32_t width, int32_t mult,
     if (scratch_buf_size) {
         scratch_buf_orig = malloc(scratch_buf_size * 4 + 16);
         if (scratch_buf_orig == NULL) {
-            printf(ANSI_COLOR_RED"softmax [%d] scratch alloc failed size %"PRIi32"\n"ANSI_COLOR_RESET,
-                   iter, scratch_buf_size);
+            TEST_SKIP("softmax [%d] scratch alloc failed size %"PRIi32"\n",
+                      iter, scratch_buf_size);
             goto softmax_cleanup;
         }
         scratch_buf = (void *)(((uint32_t) scratch_buf_orig + 15) & ~15);
@@ -59,16 +59,16 @@ static void run_softmax_test(int32_t height, int32_t width, int32_t mult,
 
     bool ret = CHECK_EQUAL(out_ansi, out_opt, size);
     if (ret == false) {
-        printf(ANSI_COLOR_RED"softmax [%d] failed [h %"PRIi32", w %"PRIi32", mult %"PRIi32", shift %"PRIi32", diff_min %"PRIi32"]\n"ANSI_COLOR_RESET,
-               iter, height, width, mult, shift, diff_min);
+        TEST_FAIL("softmax [%d] failed [h %"PRIi32", w %"PRIi32", mult %"PRIi32", shift %"PRIi32", diff_min %"PRIi32"]\n",
+                  iter, height, width, mult, shift, diff_min);
         printf("Output: \n");
         PRINT_ARRAY_HEX(out_opt, width, height);
         printf("Expected: \n");
         PRINT_ARRAY_HEX(out_ansi, width, height);
         goto softmax_cleanup;
     }
-    printf(ANSI_COLOR_GREEN"softmax [%2d] passed [h %"PRIi32", w %"PRIi32", mult %"PRIi32", shift %"PRIi32"]\n"ANSI_COLOR_RESET,
-           iter, height, width, mult, shift);
+    TEST_PASS("softmax [%2d] passed [h %"PRIi32", w %"PRIi32", mult %"PRIi32", shift %"PRIi32"]\n",
+              iter, height, width, mult, shift);
 
 softmax_cleanup:
     if (input_orig) free(input_orig);

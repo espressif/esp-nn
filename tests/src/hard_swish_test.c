@@ -48,7 +48,7 @@ void esp_nn_hard_swish_s8_test()
         int8_t *out_opt_orig = malloc(size + 16);
 
         if (!input_orig || !out_c_orig || !out_opt_orig) {
-            printf(ANSI_COLOR_RED"hard_swish [%d] alloc failed\n"ANSI_COLOR_RESET, t);
+            TEST_SKIP("hard_swish [%d] alloc failed\n", t);
             goto cleanup;
         }
 
@@ -77,12 +77,12 @@ void esp_nn_hard_swish_s8_test()
 
             bool ret = CHECK_EQUAL(out_c, out_opt, size);
             if (!ret) {
-                printf(ANSI_COLOR_RED"hard_swish [size=%d, exp=%d] failed\n"ANSI_COLOR_RESET,
-                       size, (int)reluish_exps[exp_idx]);
+                TEST_FAIL("hard_swish [size=%d, exp=%d] failed\n",
+                          size, (int)reluish_exps[exp_idx]);
                 goto cleanup;
             }
         }
-        printf(ANSI_COLOR_GREEN"hard_swish [%2d] passed [size %d]\n"ANSI_COLOR_RESET, t, size);
+        TEST_PASS("hard_swish [%2d] passed [size %d]\n", t, size);
 
     cleanup:
         if (input_orig) free(input_orig);

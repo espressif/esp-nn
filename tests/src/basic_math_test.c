@@ -165,7 +165,7 @@ void esp_nn_add_elementwise_s8_test()
 
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
-            printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
+            TEST_SKIP("%s error allocating buffers\n", __FUNCTION__);
             goto elementwise_add_test_cleanup;
         }
 
@@ -215,7 +215,7 @@ void esp_nn_add_elementwise_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            TEST_FAIL("%s[%d] failed\n", __FUNCTION__, itr);
             printf("Output: \n");
             PRINT_ARRAY_INT8(out_data_opt, size, 1);
             printf("Expected: \n");
@@ -230,7 +230,7 @@ void esp_nn_add_elementwise_s8_test()
                    input1_mult, input2_mult, output_mult);
             goto elementwise_add_test_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        TEST_PASS("%s[%d] passed\n", __FUNCTION__, itr);
 
 elementwise_add_test_cleanup:
         if (input1_orig) {
@@ -325,7 +325,7 @@ void esp_nn_mul_elementwise_s8_test()
 
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
-            printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
+            TEST_SKIP("%s error allocating buffers\n", __FUNCTION__);
             goto elementwise_mult_test_cleanup;
         }
 
@@ -368,7 +368,7 @@ void esp_nn_mul_elementwise_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            TEST_FAIL("%s[%d] failed\n", __FUNCTION__, itr);
             printf("Output: \n");
             PRINT_ARRAY_HEX(out_data_opt, size, 1);
             printf("Expected: \n");
@@ -379,7 +379,7 @@ void esp_nn_mul_elementwise_s8_test()
             PRINT_ARRAY_HEX(input2, size, 1);
             goto elementwise_mult_test_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        TEST_PASS("%s[%d] passed\n", __FUNCTION__, itr);
 
 elementwise_mult_test_cleanup:
         if (input1_orig) {
@@ -482,7 +482,7 @@ void esp_nn_mul_broadcast_channel_s8_test()
 
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
-            printf(ANSI_COLOR_RED"%s error allocating buffers\n"ANSI_COLOR_RESET, __FUNCTION__);
+            TEST_SKIP("%s error allocating buffers\n", __FUNCTION__);
             goto broadcast_mul_test_cleanup;
         }
 
@@ -529,7 +529,7 @@ void esp_nn_mul_broadcast_channel_s8_test()
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, size);
         if (ret == false) {
-            printf(ANSI_COLOR_RED"%s[%d] failed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+            TEST_FAIL("%s[%d] failed\n", __FUNCTION__, itr);
             printf("spatial=%d channels=%d size=%d\n", total_spatial, channels, size);
             for (int idx = 0; idx < size; idx++) {
                 if (out_data_c[idx] != out_data_opt[idx]) {
@@ -551,7 +551,7 @@ void esp_nn_mul_broadcast_channel_s8_test()
             }
             goto broadcast_mul_test_cleanup;
         }
-        printf(ANSI_COLOR_GREEN"%s[%d] passed\n"ANSI_COLOR_RESET, __FUNCTION__, itr);
+        TEST_PASS("%s[%d] passed\n", __FUNCTION__, itr);
 
 broadcast_mul_test_cleanup:
         if (input1_orig) {
