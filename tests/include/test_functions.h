@@ -29,6 +29,7 @@ void esp_nn_max_pool_s8_test();
 
 void esp_nn_fully_connected_s8_test();
 void esp_nn_fully_connected_per_ch_s8_test();
+void esp_nn_fully_connected_per_ch_s8_batch_test();
 void esp_nn_fully_connected_align_s8_test();
 void esp_nn_fully_connected_perf_test();
 

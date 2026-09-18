@@ -81,3 +81,29 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
         out_data[out_c] = (int8_t) result;
     }
 }
+
+/* Portable reference for the batched per-channel FC API: loop the per-row
+ * kernel. Optimized targets override the macro with a weight-stationary impl. */
+void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t* out_shift,
+                                    const int32_t* out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches)
+{
+    for (int32_t b = 0; b < batches; b++) {
+        esp_nn_fully_connected_per_ch_s8_ansi(input_data + b * row_len, input_offset,
+                                    row_len, filter_data, filter_offset, bias,
+                                    out_data + b * out_channels, out_channels,
+                                    out_offset, out_shift, out_mult,
+                                    activation_min, activation_max);
+    }
+}

@@ -264,6 +264,21 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
                                     const int32_t activation_min,
                                     const int32_t activation_max);
 
+void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t* out_shift,
+                                    const int32_t* out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches);
+
 /**
  * @brief   Get scratch buffer size needed by softmax function
  *

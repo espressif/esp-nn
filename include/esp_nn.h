@@ -47,12 +47,19 @@ extern "C" {
 #include "esp_nn_ansi_c.h"
 #endif
 
-/* Optional per-kernel scratch APIs: an arch header that needs scratch
- * defines these itself; everything else gets the no-op ANSI versions. */
+/* Optional per-kernel APIs. An arch header that has an optimised
+ * implementation aliases the public name to it above; every other target
+ * falls back to the portable ANSI version here, so the API and its feature
+ * flag are present on all targets and consumers need only one code path. */
 #ifndef esp_nn_get_mean_scratch_size
 #define esp_nn_get_mean_scratch_size esp_nn_get_mean_scratch_size_ansi
 #define esp_nn_set_mean_scratch_buf esp_nn_set_mean_scratch_buf_ansi
 #endif
+#ifndef esp_nn_fully_connected_per_ch_s8_batch
+#define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_ansi
+#endif
+/* Feature flag: consumers can detect the batched per-channel FC API. */
+#define ESP_NN_HAS_FC_S8_BATCH 1
 
 #ifdef __cplusplus
 }
