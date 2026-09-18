@@ -242,3 +242,95 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
         }
     }
 }
+
+/* Batched per-channel FC: computes `batches` input rows against the SAME filter
+ * in a single call. Two amortizations over calling the per-row kernel `batches`
+ * times:
+ *   1. the per-channel correction prepass (input_offset*sum(filter_row) + bias)
+ *      is batch-independent on the fast path (filter_offset == 0), so it runs
+ *      ONCE instead of `batches` times — removing (batches-1) full filter walks;
+ *   2. the loop is reordered out_channel-outer / batch-inner, so each filter row
+ *      (row_len bytes) is fetched from PSRAM once per channel and reused from
+ *      dcache across all batches — weight-stationary instead of weight-streaming.
+ * Bit-identical to the per-row kernel; falls back to it when the s8 fast path is
+ * ineligible. Layout: input [batches][row_len], out_data [batches][out_channels]. */
+void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
+                                       const int32_t input_offset,
+                                       const uint16_t row_len,
+                                       const int8_t *filter_data,
+                                       const int32_t filter_offset,
+                                       const int32_t *bias,
+                                       int8_t *out_data,
+                                       const uint16_t out_channels,
+                                       const int32_t out_offset,
+                                       const int32_t *out_shift,
+                                       const int32_t *out_mult,
+                                       const int32_t activation_min,
+                                       const int32_t activation_max,
+                                       const int32_t batches)
+{
+    const bool input_aligned = (((uintptr_t)input_data & 15) == 0)
+                               && ((row_len & 15) == 0);
+    const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
+                                     && ((row_len & 15) == 0);
+
+    /* Same eligibility as the per-row fast path, except that the
+     * input_offset correction prepass is paid once for all rows here, so for
+     * batches > 1 it is amortised and the offset-free threshold applies. The
+     * dot needs one operand 16-byte aligned (input rows are the common case).
+     * Otherwise defer to the per-row kernel, which further dispatches to s16
+     * asm / ansi as needed. */
+    const int32_t gate_offset = (batches > 1) ? 0 : input_offset;
+    if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, gate_offset)
+        || (!input_aligned && !filter_rows_aligned), 0)) {
+        for (int32_t b = 0; b < batches; b++) {
+            esp_nn_fully_connected_per_ch_s8_esp32s3(
+                input_data + b * row_len, input_offset, row_len, filter_data,
+                filter_offset, bias, out_data + b * out_channels, out_channels,
+                out_offset, out_shift, out_mult, activation_min, activation_max);
+        }
+        return;
+    }
+
+    const int32_t row_len_div16 = row_len >> 4;
+    const int32_t row_len_rem = row_len & 15;
+    const int32_t simd_bytes = row_len_div16 << 4;
+
+    /* Correction prepass ONCE (batch-independent: filter_offset == 0 here). */
+    int32_t corrections[out_channels];
+    for (int ch = 0; ch < out_channels; ch++) {
+        const int8_t *f_ptr = filter_data + ch * row_len;
+        int32_t corr = 0;
+        if (input_offset != 0) {
+            corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
+        }
+        if (bias) {
+            corr += bias[ch];
+        }
+        corrections[ch] = corr;
+    }
+
+    /* out_channel outer, batch inner: f_ptr stays cache-resident across batches. */
+    for (int ch = 0; ch < out_channels; ch++) {
+        const int8_t *f_ptr = filter_data + ch * row_len;
+        const int32_t corr = corrections[ch];
+        const int32_t mult = out_mult[ch];
+        const int32_t shift = out_shift[ch];
+        for (int32_t b = 0; b < batches; b++) {
+            const int8_t *in = input_data + b * row_len;
+            /* Pass the aligned operand first; the dot is symmetric. */
+            int32_t acc = input_aligned
+                ? esp_nn_dot_s8_unaligned_esp32s3(in, f_ptr, row_len_div16)
+                : esp_nn_dot_s8_unaligned_esp32s3(f_ptr, in, row_len_div16);
+            for (int i = 0; i < row_len_rem; i++) {
+                acc += (int32_t)in[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
+            }
+            acc += corr;
+            acc = esp_nn_multiply_by_quantized_mult(acc, mult, shift);
+            acc += out_offset;
+            acc = max(acc, activation_min);
+            acc = min(acc, activation_max);
+            out_data[b * out_channels + ch] = (int8_t)acc;
+        }
+    }
+}

@@ -796,3 +796,70 @@ void esp_nn_fully_connected_perf_test()
                __FUNCTION__, advisory);
     }
 }
+
+void esp_nn_fully_connected_per_ch_s8_batch_test()
+{
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
+    /* (batches, row_len, out_ch, input_offset). row_len a multiple of 16 keeps
+     * the s8 fast path; 33 exercises the scalar tail; in_off 0 skips the
+     * correction pass. Batched output must match the per-row reference exactly. */
+    const struct { int batches, row_len, out_ch; int32_t in_off; } cfg[] = {
+        { 48, 160, 32,  5 },   /* conformer FFN-d1 shape */
+        { 48,  64, 16,  0 },   /* input_offset 0 */
+        {  8,  80,  8, -3 },
+        {  4,  33,  5,  7 },   /* non-multiple-of-16 row_len -> scalar tail */
+        {  1, 128, 12, 11 },   /* single row */
+    };
+    const int n_cfg = (int)(sizeof(cfg) / sizeof(cfg[0]));
+    const int32_t activation_min = -128, activation_max = 127;
+    const int32_t out_offset = 7, filter_offset = 0;
+
+    for (int c = 0; c < n_cfg; c++) {
+        const int B = cfg[c].batches, row_len = cfg[c].row_len, out_ch = cfg[c].out_ch;
+        const int32_t input_offset = cfg[c].in_off;
+
+        int8_t  *in_o  = ESP_NN_TEST_ALLOC(B * row_len + 16);
+        int8_t  *flt_o = ESP_NN_TEST_ALLOC(row_len * out_ch + 16);
+        int8_t  *ob_o  = ESP_NN_TEST_ALLOC(B * out_ch + 16);
+        int8_t  *or_o  = ESP_NN_TEST_ALLOC(B * out_ch + 16);
+        int32_t *out_mult  = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
+        int32_t *out_shift = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
+        if (!in_o || !flt_o || !ob_o || !or_o || !out_mult || !out_shift) {
+            TEST_SKIP("%s alloc failed\n", __FUNCTION__);
+            goto fc_batch_cleanup;
+        }
+        int8_t *input       = (int8_t *)(((uintptr_t)in_o  + 15) & ~(uintptr_t)15);
+        int8_t *filter      = (int8_t *)(((uintptr_t)flt_o + 15) & ~(uintptr_t)15);
+        int8_t *out_batched = (int8_t *)(((uintptr_t)ob_o  + 15) & ~(uintptr_t)15);
+        int8_t *out_ref     = (int8_t *)(((uintptr_t)or_o  + 15) & ~(uintptr_t)15);
+
+        for (int i = 0; i < out_ch; i++) {
+            out_mult[i]  = INT32_MAX / row_len + rand() % INT16_MAX;
+            out_shift[i] = -10 + rand() % 5;
+        }
+        for (int i = 0; i < B * row_len; i++)     input[i]  = rand() % 256 - 128;
+        for (int i = 0; i < row_len * out_ch; i++) filter[i] = rand() % 256 - 128;
+
+        /* batched: one weight-stationary pass over all rows */
+        esp_nn_fully_connected_per_ch_s8_batch(input, input_offset, row_len, filter,
+                filter_offset, NULL, out_batched, out_ch, out_offset, out_shift,
+                out_mult, activation_min, activation_max, B);
+
+        /* reference: the per-row kernel, once per row */
+        for (int b = 0; b < B; b++) {
+            esp_nn_fully_connected_per_ch_s8_ansi(input + b * row_len, input_offset,
+                    row_len, filter, filter_offset, NULL, out_ref + b * out_ch, out_ch,
+                    out_offset, out_shift, out_mult, activation_min, activation_max);
+        }
+
+        if (CHECK_EQUAL(out_ref, out_batched, B * out_ch) == false) {
+            TEST_FAIL("[%3d] failed [B %d, row_len %d, out_ch %d]\n",
+                   c, B, row_len, out_ch);
+        } else {
+            TEST_PASS("[%3d] passed [B %d, row_len %d, out_ch %d, in_off %"PRId32"]\n",
+                   c, B, row_len, out_ch, input_offset);
+        }
+    fc_batch_cleanup:
+        free(in_o); free(flt_o); free(ob_o); free(or_o); free(out_mult); free(out_shift);
+    }
+}
