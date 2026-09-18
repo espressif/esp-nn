@@ -56,6 +56,7 @@
 
 #include <stdio.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
+#include "esp_nn_conv_1x1_panel_esp32s3.h"
 #include <esp_nn_multicore.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -232,7 +233,7 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
  * layout. Per-output-channel arithmetic is independent and unchanged:
  * results are bit-identical to a single batched call.
  */
-static void esp_nn_conv_s8_mult8_1x1_oc_panel(
+void esp_nn_conv_s8_mult8_1x1_oc_panel(
         const int8_t *input, int spatial_size, uint16_t in_channels,
         int32_t input_offset, const int8_t *filter_data, const int32_t *bias,
         int8_t *out_data, uint16_t out_channels, uint16_t out_stride,

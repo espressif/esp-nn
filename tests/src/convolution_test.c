@@ -686,7 +686,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 43; itr++) {
+    for (int itr = 0; itr < 47; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -711,6 +711,29 @@ void esp_nn_conv_s8_test()
             pad_ht = 0;
             stride_wd = 1;
             stride_ht = 1;
+            break;
+        /* yolo11n's four heaviest ESP32-S3 layers (813 ms of its 1581 ms of
+         * convolution): all take the 3x3 path, which streams the whole filter
+         * per output pixel. Kept here as the benchmark for that path. */
+        case 43: // 26x26x128 -> 12x12x128 stride 2 (267 ms on S3)
+            in_wd = 26; in_ht = 26; in_channels = 128; out_channels = 128;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 44: // 12x12x128 -> 12x12x64 stride 1 SAME (229 ms)
+            in_wd = 12; in_ht = 12; in_channels = 128; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 45: // 14x14x128 -> 6x6x256 stride 2 (144 ms)
+            in_wd = 14; in_ht = 14; in_channels = 128; out_channels = 256;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 46: // 6x6x256 -> 6x6x64 stride 1 SAME (73 ms)
+            in_wd = 6; in_ht = 6; in_channels = 256; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
             break;
         case 42: // big-filter padded conv: pad 1, filter_wd * in_ch >= 16 and
                  // filter bytes > 96 KB, so the P4 dispatcher takes the dense
