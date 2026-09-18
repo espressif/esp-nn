@@ -67,7 +67,8 @@
 
 /* 3x3 optimized path — im2col per pixel, iterate OC with input in cache */
 extern int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht, int in_channels, int out_channels);
-extern int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels);
+extern int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels,
+                                           int out_wd, int out_ht);
 extern void esp_nn_conv_s8_3x3_opt(const int8_t *input,
     const uint16_t input_wd, const uint16_t input_ht,
     const uint16_t in_channels, const int32_t input_offset,
@@ -240,7 +241,7 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel(
         int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
         int32_t activation_min, int32_t activation_max, void *scratch)
 {
-    int oc_tile = (24 * 1024) / in_channels;
+    int oc_tile = ESP_NN_S3_PANEL_BYTES / in_channels;
     oc_tile &= ~7;
     if (oc_tile < 8) {
         oc_tile = 8;
@@ -513,7 +514,9 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
      * qualifies, and needs im2col + an aligned zero-padded filter copy +
      * corrections. */
     if (esp_nn_conv_s8_3x3_can_use(filter_wd, filter_ht, in_ch, out_ch)) {
-        return esp_nn_conv_s8_3x3_scratch_size(in_ch, out_ch);
+        return esp_nn_conv_s8_3x3_scratch_size(in_ch, out_ch,
+                                               output_dims->width,
+                                               output_dims->height);
     }
 
     int new_channels = (in_ch + 7) & ~7;
