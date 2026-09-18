@@ -243,6 +243,17 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel(
 {
     int oc_tile = ESP_NN_S3_PANEL_BYTES / in_channels;
     oc_tile &= ~7;
+    /* Every panel pass re-reads the staged positions. For wide windows the
+     * byte budget alone leaves a panel of one or two channels, so the
+     * re-reads cost more than the residency they buy: keep at least 16
+     * channels per panel there. Shapes whose budget already allows more are
+     * untouched, and a larger panel measured slower for them. */
+    if (oc_tile < 16) {
+        oc_tile = 16;
+    }
+    if (oc_tile > out_channels) {
+        oc_tile = out_channels;
+    }
     if (oc_tile < 8) {
         oc_tile = 8;
     }
