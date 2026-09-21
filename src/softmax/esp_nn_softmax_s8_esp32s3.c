@@ -16,8 +16,10 @@ static int32_t *scratch_buf_s3 = NULL;
 
 int32_t esp_nn_get_softmax_scratch_size_esp32s3(const int32_t width, const int32_t height)
 {
+    (void) width;
     (void) height;
-    return width * 4;
+    /* Two 256-entry per-layer LUTs (raw exp + accumulation-scaled exp). */
+    return 2 * 256 * 4 + 16;
 }
 
 void esp_nn_set_softmax_scratch_buf_esp32s3(void *buffer)
@@ -96,20 +98,33 @@ void esp_nn_softmax_s8_esp32s3(const int8_t *input_data,
     const int8_t *in_ptr = input_data;
     int8_t *out_ptr = output_data;
 
+    /* input_diff = in - max is confined to [-255, 0] and the quantization
+     * constants are per-layer, so exp has at most 256 distinct values:
+     * evaluate them once (identical arithmetic to the per-element path, so
+     * bit-exact by construction) and index by max - in. exp_sum_lut holds
+     * the accumulation-scaled value used for sum_of_exps. */
+    int32_t *exp_lut = scratch_buf_s3;
+    int32_t *exp_sum_lut = scratch_buf_s3 + 256;
+    for (int32_t d = 0; d < 256; d++) {
+        const int32_t diff = -d;
+        if (diff >= diff_min) {
+            const int32_t rescaled = SAT_HIGH_MUL(diff * mask, mult);
+            exp_lut[d] = esp_nn_exp_on_negative_values(rescaled);
+            exp_sum_lut[d] = DIV_POW2(exp_lut[d], ACCUM_BITS);
+        } else {
+            exp_lut[d] = 0;
+            exp_sum_lut[d] = 0;
+        }
+    }
+
     for (int row_idx = 0; row_idx < height; row_idx++) {
         /* Phase 1: Find max */
         int8_t max_in_row = find_max_s8(in_ptr, width);
 
-        /* Phase 2: Compute exp and accumulate sum */
+        /* Phase 2: Sum the (precomputed) exp values */
         int32_t sum_of_exps = 0;
         for (int col = 0; col < width; col++) {
-            int32_t input_diff = in_ptr[col] - max_in_row;
-            if (input_diff >= diff_min) {
-                const int32_t input_diff_rescaled = SAT_HIGH_MUL(input_diff * mask, mult);
-                const int32_t exp_raw = esp_nn_exp_on_negative_values(input_diff_rescaled);
-                scratch_buf_s3[col] = exp_raw;
-                sum_of_exps += DIV_POW2(exp_raw, ACCUM_BITS);
-            }
+            sum_of_exps += exp_sum_lut[max_in_row - in_ptr[col]];
         }
 
         /* Phase 3: Compute normalization scale */
@@ -123,7 +138,7 @@ void esp_nn_softmax_s8_esp32s3(const int8_t *input_data,
             for (int k = 0; k < 4; k++) {
                 int32_t input_diff = in_ptr[col + k] - max_in_row;
                 if (input_diff >= diff_min) {
-                    int32_t exp_raw = scratch_buf_s3[col + k];
+                    int32_t exp_raw = exp_lut[-input_diff];
                     const int32_t shifted_output = SAT_HIGH_MUL(shifted_scale, exp_raw);
                     const int32_t result = DIV_POW2(shifted_output, bits_over_unit) - 128;
                     out_ptr[col + k] = (int8_t) esp_nn_saturate8(result);
@@ -136,7 +151,7 @@ void esp_nn_softmax_s8_esp32s3(const int8_t *input_data,
         for (; col < width; col++) {
             int32_t input_diff = in_ptr[col] - max_in_row;
             if (input_diff >= diff_min) {
-                int32_t exp_raw = scratch_buf_s3[col];
+                int32_t exp_raw = exp_lut[-input_diff];
                 const int32_t shifted_output = SAT_HIGH_MUL(shifted_scale, exp_raw);
                 const int32_t result = DIV_POW2(shifted_output, bits_over_unit) - 128;
                 out_ptr[col] = (int8_t) esp_nn_saturate8(result);

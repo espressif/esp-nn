@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
+#include "esp_nn_conv_1x1_panel_esp32s3.h"
+#include <esp_nn_multicore.h>
 #include <string.h>
 #include <esp_nn_defs.h>
 #include <common_functions.h>
@@ -32,6 +34,21 @@
  * - in_channels >= 16 (SIMD worth it)
  * - in_channels % 16 == 0 (aligned for ee.vld.128)
  */
+/* Above this filter size the per-pixel path streams the whole filter from
+ * memory for every output pixel (a 3x3x128 -> 128 layer is 147 KB per pixel
+ * against a 64 KB L1), so the staged-position path below wins. Below it the
+ * filter stays cached and the extra staging is not worth its scratch. */
+#define ESP_NN_3X3_BATCH_MIN_FILTER_BYTES   (24 * 1024)
+
+/* Output positions staged per pass: the filter is then streamed once per
+ * chunk instead of once per output pixel. */
+#define ESP_NN_3X3_BATCH_POSITIONS          16
+
+static inline int esp_nn_conv_s8_3x3_use_batch(int in_channels, int out_channels)
+{
+    return (9 * in_channels * out_channels) > ESP_NN_3X3_BATCH_MIN_FILTER_BYTES;
+}
+
 int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht,
                                 int in_channels, int out_channels)
 {
@@ -52,6 +69,13 @@ int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht,
 int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels)
 {
     int window_len_aligned = (9 * in_channels + 15) & ~15;
+    if (esp_nn_conv_s8_3x3_use_batch(in_channels, out_channels)) {
+        /* Staged positions plus the 1x1 panel driver's work area. The filter
+         * is read in place, so there is no per-layer copy: this is smaller
+         * than the per-pixel layout below for every shape that reaches it. */
+        int staging = ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned;
+        return staging + esp_nn_conv_1x1_panel_scratch_size(window_len_aligned) + 32;
+    }
     int im2col = window_len_aligned;
     int filter_copy = out_channels * window_len_aligned;  /* aligned, zero-padded rows */
     int corrections = out_channels * 4;
@@ -62,6 +86,111 @@ int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels)
  * 3x3 convolution: im2col per pixel, then dot product per output channel.
  * Uses ACCX dot product (ee.vmulas.s8.accx) for the 3×3×in_ch window.
  */
+/* Build one output pixel's 3x3 window into `dst`. Out-of-bounds cells hold
+ * -input_offset so that (cell + offset) * w is zero, which is what the
+ * per-channel correction term already assumes. */
+static inline void esp_nn_3x3_build_window(
+        int8_t *dst, const int8_t *input, int in_y, int in_x,
+        int input_wd, int input_ht, int in_channels, int in_row_stride,
+        int8_t pad_val)
+{
+    for (int fy = 0; fy < 3; fy++) {
+        const int y = in_y + fy;
+        if (y < 0 || y >= input_ht) {
+            memset(dst, pad_val, 3 * in_channels);
+        } else if (in_x >= 0 && in_x + 3 <= input_wd) {
+            memcpy(dst, input + y * in_row_stride + in_x * in_channels,
+                   3 * in_channels);
+        } else {
+            for (int fx = 0; fx < 3; fx++) {
+                const int x = in_x + fx;
+                if (x < 0 || x >= input_wd) {
+                    memset(dst + fx * in_channels, pad_val, in_channels);
+                } else {
+                    memcpy(dst + fx * in_channels,
+                           input + y * in_row_stride + x * in_channels,
+                           in_channels);
+                }
+            }
+        }
+        dst += 3 * in_channels;
+    }
+}
+
+/* Run output positions [pos_begin, pos_end) of the staged path: stage the
+ * windows for a chunk of positions, then hand them to the 1x1 OC-panel
+ * driver, for which a 3x3 conv with its windows built is a 1x1 conv over
+ * 9 * in_channels (and the filter layout [oc][3][3][ic] already matches).
+ * The filter is then streamed once per chunk instead of once per pixel.
+ * Positions are contiguous in NHWC output, so a range is a disjoint slice. */
+static void esp_nn_3x3_staged_range(
+        const int8_t *input, int input_wd, int input_ht, int in_channels,
+        int32_t input_offset, int pad_wd, int pad_ht, int stride_wd,
+        int stride_ht, const int8_t *filter_data, const int32_t *bias,
+        int8_t *out_data, int out_wd, int out_channels, int32_t out_offset,
+        const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max,
+        int pos_begin, int pos_end, void *scratch)
+{
+    const int window_len_aligned = ((9 * in_channels) + 15) & ~15;
+    const int in_row_stride = input_wd * in_channels;
+    const int8_t pad_val = (int8_t)(-input_offset);
+    int8_t *staging = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
+    void *panel_scratch = staging
+            + ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned;
+
+    for (int pos0 = pos_begin; pos0 < pos_end;
+            pos0 += ESP_NN_3X3_BATCH_POSITIONS) {
+        const int n = min(ESP_NN_3X3_BATCH_POSITIONS, pos_end - pos0);
+        for (int k = 0; k < n; k++) {
+            const int pos = pos0 + k;
+            const int out_y = pos / out_wd;
+            const int out_x = pos - out_y * out_wd;
+            esp_nn_3x3_build_window(staging + k * window_len_aligned, input,
+                                    out_y * stride_ht - pad_ht,
+                                    out_x * stride_wd - pad_wd,
+                                    input_wd, input_ht, in_channels,
+                                    in_row_stride, pad_val);
+        }
+        esp_nn_conv_s8_mult8_1x1_oc_panel(
+                staging, n, (uint16_t)window_len_aligned, input_offset,
+                filter_data, bias, out_data + (int32_t)pos0 * out_channels,
+                (uint16_t)out_channels, (uint16_t)out_channels, out_offset,
+                out_shift, out_mult, activation_min, activation_max,
+                panel_scratch);
+    }
+}
+
+#if ESP_NN_DUAL_CORE_SUPPORTED
+typedef struct {
+    const int8_t *input;
+    int input_wd, input_ht, in_channels;
+    int32_t input_offset;
+    int pad_wd, pad_ht, stride_wd, stride_ht;
+    const int8_t *filter_data;
+    const int32_t *bias;
+    int8_t *out_data;
+    int out_wd, out_channels;
+    int32_t out_offset;
+    const int32_t *out_shift, *out_mult;
+    int32_t activation_min, activation_max;
+    int pos_begin, pos_end;
+    void *scratch;
+} conv3x3_staged_mt_job_t;
+
+static void conv3x3_staged_mt_worker(void *p)
+{
+    const conv3x3_staged_mt_job_t *j = (const conv3x3_staged_mt_job_t *)p;
+    esp_nn_3x3_staged_range(j->input, j->input_wd, j->input_ht, j->in_channels,
+                            j->input_offset, j->pad_wd, j->pad_ht, j->stride_wd,
+                            j->stride_ht, j->filter_data, j->bias, j->out_data,
+                            j->out_wd, j->out_channels, j->out_offset,
+                            j->out_shift, j->out_mult, j->activation_min,
+                            j->activation_max, j->pos_begin, j->pos_end,
+                            j->scratch);
+}
+#endif /* ESP_NN_DUAL_CORE_SUPPORTED */
+
 void esp_nn_conv_s8_3x3_opt(const int8_t *input,
                              const uint16_t input_wd,
                              const uint16_t input_ht,
@@ -86,6 +215,55 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
 {
     const int window_len = 9 * in_channels; /* 3×3 window */
     const int window_len_aligned = (window_len + 15) & ~15;
+
+    if (esp_nn_conv_s8_3x3_use_batch(in_channels, out_channels)) {
+        const int total_positions = (int)out_wd * out_ht;
+#if ESP_NN_DUAL_CORE_SUPPORTED
+        /* Split the position range across cores: disjoint output slices, same
+         * arithmetic. The worker stages into its own scratch. */
+        if (esp_nn_dual_core_active()
+                && total_positions >= 2 * ESP_NN_3X3_BATCH_POSITIONS) {
+            const int wneed = ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned
+                    + esp_nn_conv_1x1_panel_scratch_size(window_len_aligned) + 32;
+            void *wscr = esp_nn_dual_core_scratch(wneed);
+            const int split = ((total_positions / 2) / ESP_NN_3X3_BATCH_POSITIONS)
+                    * ESP_NN_3X3_BATCH_POSITIONS;
+            if (wscr != NULL && split > 0 && split < total_positions) {
+                conv3x3_staged_mt_job_t job = {
+                    .input = input, .input_wd = input_wd, .input_ht = input_ht,
+                    .in_channels = in_channels, .input_offset = input_offset,
+                    .pad_wd = pad_wd, .pad_ht = pad_ht,
+                    .stride_wd = stride_wd, .stride_ht = stride_ht,
+                    .filter_data = filter_data, .bias = bias,
+                    .out_data = out_data, .out_wd = out_wd,
+                    .out_channels = out_channels, .out_offset = out_offset,
+                    .out_shift = out_shift, .out_mult = out_mult,
+                    .activation_min = activation_min,
+                    .activation_max = activation_max,
+                    .pos_begin = 0, .pos_end = split, .scratch = wscr,
+                };
+                if (esp_nn_dual_core_run(conv3x3_staged_mt_worker, &job)) {
+                    esp_nn_3x3_staged_range(input, input_wd, input_ht,
+                            in_channels, input_offset, pad_wd, pad_ht,
+                            stride_wd, stride_ht, filter_data, bias, out_data,
+                            out_wd, out_channels, out_offset, out_shift,
+                            out_mult, activation_min, activation_max,
+                            split, total_positions, scratch);
+                    esp_nn_dual_core_wait();
+                    return;
+                }
+                /* worker declined (nested or same-core call): fall through */
+            }
+        }
+#endif
+        esp_nn_3x3_staged_range(input, input_wd, input_ht, in_channels,
+                                input_offset, pad_wd, pad_ht, stride_wd,
+                                stride_ht, filter_data, bias, out_data, out_wd,
+                                out_channels, out_offset, out_shift, out_mult,
+                                activation_min, activation_max,
+                                0, total_positions, scratch);
+        return;
+    }
 
     /* Scratch layout: [im2col_buf | filter_aligned | corrections] */
     int8_t *im2col_buf = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
@@ -131,32 +309,12 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
 
     for (int out_y = 0; out_y < out_ht; out_y++) {
         for (int out_x = 0; out_x < out_wd; out_x++) {
-            /* Phase 1: Build im2col for this output pixel (one-time per pixel) */
-            const int in_y = out_y * stride_ht - pad_ht;
-            const int in_x = out_x * stride_wd - pad_wd;
-            int8_t *dst = im2col_buf;
-            for (int fy = 0; fy < 3; fy++) {
-                const int y = in_y + fy;
-                if (y < 0 || y >= input_ht) {
-                    memset(dst, pad_val, 3 * in_channels);
-                } else if (in_x >= 0 && in_x + 3 <= input_wd) {
-                    /* interior: single copy (the common case) */
-                    memcpy(dst, input + y * in_row_stride + in_x * in_channels,
-                           3 * in_channels);
-                } else {
-                    for (int fx = 0; fx < 3; fx++) {
-                        const int x = in_x + fx;
-                        if (x < 0 || x >= input_wd) {
-                            memset(dst + fx * in_channels, pad_val, in_channels);
-                        } else {
-                            memcpy(dst + fx * in_channels,
-                                   input + y * in_row_stride + x * in_channels,
-                                   in_channels);
-                        }
-                    }
-                }
-                dst += 3 * in_channels;
-            }
+            /* Phase 1: build this pixel's window */
+            esp_nn_3x3_build_window(im2col_buf, input,
+                                    out_y * stride_ht - pad_ht,
+                                    out_x * stride_wd - pad_wd,
+                                    input_wd, input_ht, in_channels,
+                                    in_row_stride, pad_val);
 
             /* Phase 2: dot against each output channel's aligned filter copy */
             for (int oc = 0; oc < out_channels; oc++) {
