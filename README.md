@@ -99,15 +99,29 @@ The library contains optimised NN (Neural Network) functions for various Espress
 
   * **MobileNetV3 Small** (INT8 quantized, 224x224x3, 1000 classes)
 
-    | Chip     | CPU Freq | without ESP-NN | with ESP-NN |
-    | -------- | -------- | -------------- | ----------- |
-    | ESP32-S3 | 240MHz   | 26000ms        | 1434ms      |
-    | ESP32-P4 | 360MHz   | 11600ms        | 1050ms      |
+    | Chip     | CPU Freq | without ESP-NN | with ESP-NN | with ESP-NN, dual core |
+    | -------- | -------- | -------------- | ----------- | ---------------------- |
+    | ESP32-P4 | 400MHz   | 10980ms        | 388ms       | 253ms                  |
+    | ESP32-S3 | 240MHz   | 26679ms        | 729ms       | 690ms                  |
+
+  * **YOLO11n** (INT8 quantized, 192x192x3, 80 classes, object detection)
+
+    | Chip     | CPU Freq | without ESP-NN | with ESP-NN | with ESP-NN, dual core |
+    | -------- | -------- | -------------- | ----------- | ---------------------- |
+    | ESP32-P4 | 400MHz   | 52240ms        | 620ms       | 417ms                  |
+    | ESP32-S3 | 240MHz   | 130753ms       | 1253ms      | 1053ms                 |
 
 > **Note**:
   - The above is time taken for execution of the `invoke()` call
   - SPIRAM used for TensorArena.
   - Person detection on ESP32-S3 with internal RAM: 47ms
+  - MobileNetV3 and YOLO11n were measured with the `mobilenet_v3` and
+    `yolo_test_app` examples in
+    [esp-tflite-micro](https://github.com/espressif/esp-tflite-micro), with no
+    profiler attached; ESP32-P4 with 200MHz HEX PSRAM, ESP32-S3 with 80MHz OCT
+    PSRAM and a 64KB data cache
+  - The `dual core` column is with `esp_nn_dual_core_enable()` called once at
+    startup, which lets the heavier kernels split their work across both cores
   - `Without ESP-NN` case is when `esp-nn` is completely disabled by removing below flag from [CMakeLists.txt](CMakeLists.txt):
     ```cmake
       # enable ESP-NN optimizations by Espressif
