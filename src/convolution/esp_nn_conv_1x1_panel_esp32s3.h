@@ -8,6 +8,22 @@
 
 #include <stdint.h>
 
+#ifdef ESP_PLATFORM
+#include "sdkconfig.h"
+#endif
+
+/* The resident filter panel is sized against the data cache the image is
+ * actually built with (64 KB, 8-way, 64-byte lines by default on ESP32-S3):
+ * at most half of it, so the staged windows, the transpose scratch and the
+ * output staging that stream past the panel still have ways to live in. */
+#if defined(CONFIG_ESP32S3_DATA_CACHE_SIZE)
+#define ESP_NN_S3_DCACHE_BYTES      CONFIG_ESP32S3_DATA_CACHE_SIZE
+#else
+#define ESP_NN_S3_DCACHE_BYTES      (64 * 1024)
+#endif
+
+#define ESP_NN_S3_PANEL_BYTES       (ESP_NN_S3_DCACHE_BYTES / 2)
+
 /*
  * OC-panel driver for mult8 1x1 convolutions: a panel of filter rows stays
  * L1-resident while the batched assembly sweeps the spatial positions.
