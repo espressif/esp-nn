@@ -686,7 +686,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 47; itr++) {
+    for (int itr = 0; itr < 53; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -732,6 +732,42 @@ void esp_nn_conv_s8_test()
             break;
         case 46: // 6x6x256 -> 6x6x64 stride 1 SAME (73 ms)
             in_wd = 6; in_ht = 6; in_channels = 256; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        /* GitHub issue #36: the six CONV_2D layers of an LSTM-heavy audio
+         * model on ESP32-S3 (3x3 SAME, in_ch 1/2/32, out_ch 32/64). The
+         * reported 1.1.2 -> 1.2.6 slowdown did not reproduce on these layers;
+         * they keep the paths it was about covered. in_ch 1 takes the general
+         * path, in_ch 2 the small-window im2col path, in_ch 32 the staged 3x3
+         * path (out_ch 32 below and 64 above the vectorized filter-sum gate). */
+        case 47: // 3x3x1 -> 32
+            in_wd = 32; in_ht = 16; in_channels = 1; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 48: // 3x3x32 -> 32
+            in_wd = 32; in_ht = 16; in_channels = 32; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 49: // 3x3x32 -> 64
+            in_wd = 32; in_ht = 16; in_channels = 32; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 50: // 3x3x2 -> 32
+            in_wd = 32; in_ht = 16; in_channels = 2; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 51: // 3x3x32 -> 32, stride 2 (a strided variant of the same layer)
+            in_wd = 32; in_ht = 16; in_channels = 32; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 52: // 3x3x32 -> 64 on a wide, short map (time x frequency)
+            in_wd = 96; in_ht = 8; in_channels = 32; out_channels = 64;
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
             break;
