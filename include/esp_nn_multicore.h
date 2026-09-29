@@ -29,7 +29,10 @@ extern "C" {
  * Opt in to dual-core kernel splitting. Spawns a worker task pinned to the
  * other core; kernels that support it then split their output range in two.
  * Results are bit-identical to single-core execution (disjoint outputs, same
- * arithmetic). Call once from the core that will run inference.
+ * arithmetic). Call once from the core that will run inference, early: the
+ * worker's 8 KB stack must come from SIMD-capable memory (internal RAM, or
+ * PSRAM when CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY is set). If none is
+ * left, esp-nn stays single core; esp_nn_dual_core_active() reports which.
  */
 void esp_nn_dual_core_enable(void);
 

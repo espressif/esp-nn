@@ -27,6 +27,8 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
+#include "sdkconfig.h"
 
 /* MALLOC_CAP_SIMD (IDF >= 5.5) marks memory that SIMD loads may access:
  * L2MEM and PSRAM on ESP32-P4, not the LP/RTC RAM. On older IDFs, which
@@ -76,12 +78,31 @@ void esp_nn_dual_core_enable(void)
         return;
     }
     const BaseType_t core = (xPortGetCoreID() == 0) ? 1 : 0;
-    if (xTaskCreatePinnedToCore(esp_nn_worker_main, "esp_nn_worker", 8 * 1024,
-                                NULL, configMAX_PRIORITIES - 2, &s_worker,
-                                core) != pdPASS) {
+    /* The kernels store 128-bit vectors to the stack too, so it needs the
+     * same memory as the scratch below; a plain xTaskCreate stack can land in
+     * the ESP32-P4's LP/RTC RAM and fault on the first split kernel. SIMD alone,
+     * not with MALLOC_CAP_INTERNAL, so PSRAM can take the stack where the
+     * config allows it (checked below); internally both match the same
+     * regions. Created static, so the buffers stay put. */
+    const uint32_t stack_size = 8 * 1024;
+    StackType_t *stack = heap_caps_malloc(stack_size, MALLOC_CAP_SIMD | MALLOC_CAP_8BIT);
+#if !CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+    if (stack != NULL && esp_ptr_external_ram(stack)) {
+        heap_caps_free(stack);
+        stack = NULL;
+    }
+#endif
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (stack != NULL && tcb != NULL) {
+        s_worker = xTaskCreateStaticPinnedToCore(esp_nn_worker_main, "esp_nn_worker", stack_size,
+                                                 NULL, configMAX_PRIORITIES - 2, stack, tcb, core);
+    }
+    if (s_worker == NULL) {
+        /* No suitable memory: stay single core rather than risk the fault. */
+        heap_caps_free(stack);
+        heap_caps_free(tcb);
         vSemaphoreDelete(s_done);
         s_done = NULL;
-        s_worker = NULL;
     } else {
         s_worker_core = core;
     }

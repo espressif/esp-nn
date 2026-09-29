@@ -146,6 +146,7 @@ void app_main()
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     /* Exercise the dual-core split paths in the bit-exactness sweeps. */
     esp_nn_dual_core_enable();
+    printf("DUAL_CORE: %s\n", esp_nn_dual_core_active() ? "active" : "inactive");
 #endif
     /* s8 tests */
     ESP_LOGI(TAG, "Running s8 tests...");
