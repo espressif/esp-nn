@@ -65,10 +65,9 @@
 
 #include <common_functions.h>
 
+#include "esp_nn_conv_dispatch_esp32s3.h"
+
 /* 3x3 optimized path — im2col per pixel, iterate OC with input in cache */
-extern int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht, int in_channels, int out_channels);
-extern int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels,
-                                           int out_wd, int out_ht);
 extern void esp_nn_conv_s8_3x3_opt(const int8_t *input,
     const uint16_t input_wd, const uint16_t input_ht,
     const uint16_t in_channels, const int32_t input_offset,
@@ -523,112 +522,6 @@ static void esp_nn_conv_s8_im2col_s3(
     }
 }
 
-int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
-                                         const data_dims_t *filter_dims,
-                                         const data_dims_t *output_dims,
-                                         const conv_params_t *conv_params)
-{
-    /* Grouped conv runs each group through the standard path with repacked
-     * slices: inner requirement (per-group dims) + input slice + output
-     * staging. */
-    if (filter_dims->channels && filter_dims->channels < input_dims->channels &&
-            input_dims->channels % filter_dims->channels == 0) {
-        const int32_t groups_ = input_dims->channels / filter_dims->channels;
-        if (groups_ > 1 && output_dims->channels % groups_ == 0) {
-            data_dims_t in_g_ = *input_dims;
-            data_dims_t out_g_ = *output_dims;
-            in_g_.channels = filter_dims->channels;
-            out_g_.channels = output_dims->channels / groups_;
-            const int inner_ = esp_nn_get_conv_scratch_size_esp32s3(&in_g_, filter_dims, &out_g_, conv_params);
-            const int32_t in_slice_ = (int32_t)input_dims->width * input_dims->height * filter_dims->channels;
-            const int32_t out_slice_ = (int32_t)output_dims->width * output_dims->height * out_g_.channels;
-            return inner_ + in_slice_ + out_slice_ + 64;
-        }
-    }
-
-    const uint16_t input_wd = input_dims->width;
-    const uint16_t input_ht = input_dims->height;
-    const uint16_t in_ch = input_dims->channels;
-    const uint16_t filter_wd = filter_dims->width;
-    const uint16_t filter_ht = filter_dims->height;
-    const uint16_t out_ch = output_dims->channels;
-    const uint16_t pad_wd = conv_params->padding.width;
-    const uint16_t pad_ht = conv_params->padding.height;
-    const uint16_t stride_wd = conv_params->stride.width;
-    const uint16_t stride_ht = conv_params->stride.height;
-
-    /* Mirrors the runtime dispatch: the 3x3 path takes precedence when it
-     * qualifies, and needs im2col + an aligned zero-padded filter copy +
-     * corrections. */
-    if (esp_nn_conv_s8_3x3_can_use(filter_wd, filter_ht, in_ch, out_ch)) {
-        return esp_nn_conv_s8_3x3_scratch_size(in_ch, out_ch,
-                                               output_dims->width,
-                                               output_dims->height);
-    }
-
-    int new_channels = (in_ch + 7) & ~7;
-
-    int input_scratch = input_wd * input_ht * in_ch;
-    int filter_scratch = filter_wd * filter_ht * in_ch * out_ch;
-
-    int align_buf_size = 64; /* alignment (16) + assembly pre/post access margin (48) */
-    if ((filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0) &&
-            (stride_wd == 1 && stride_ht == 1)) {
-        /* Transpose buffer is used by both 1x1 kernels; the filter is not
-         * copied by either, so no filter term. */
-        int transpose_buf_size = 2 * (8 * new_channels);
-        if (input_wd * input_ht < 8) {
-            transpose_buf_size = 0;
-        }
-        /* Neither 1x1 kernel copies or pads the input: the SIMD path
-         * transposes into the buffer above, the fallback reads in place
-         * (any alignment, any channel count). No input term. */
-        int existing_size = transpose_buf_size + align_buf_size;
-        int batched_tail_size = 16 * in_ch + 8 * in_ch + 8 * out_ch +
-                                align_buf_size;
-        /* OC-panel driver (filter > 24 KB): asm work + staging areas */
-        int panel_size = 24 * in_ch + 16 * 1024 + align_buf_size;
-        if ((int32_t)in_ch * out_ch <= 24 * 1024) {
-            panel_size = 0;
-        }
-        return max(max(existing_size, batched_tail_size), panel_size);
-    } else {
-        int32_t filter_row_size = filter_wd * in_ch;
-        int32_t window_len = filter_wd * filter_ht * in_ch;
-
-        /* Im2col path: filter_wd * in_ch < 16 but window_len >= 16 */
-        if (filter_row_size < 16 && window_len >= 16) {
-            int32_t window_len_aligned = (window_len + 15) & ~15;
-            /* filter_sum + aligned_filter_copy + im2col_buf + alignment padding */
-            int im2col_scratch = out_ch * 4 + 16 + out_ch * window_len_aligned + 16 + window_len_aligned;
-            return im2col_scratch + align_buf_size;
-        }
-
-        new_channels = (in_ch + 15) & ~15;
-
-        // Padded-input scratch: leading (top/left) padding from TFLite plus the
-        // trailing (bottom/right) padding derived from the output extent.
-        // Must match the padding applied in esp_nn_conv_s8_esp32s3().
-        int pad_right = max(0, (output_dims->width - 1) * stride_wd + filter_wd - pad_wd - input_wd);
-        int pad_bottom = max(0, (output_dims->height - 1) * stride_ht + filter_ht - pad_ht - input_ht);
-        if (pad_wd == 0 && pad_ht == 0 && pad_right == 0 && pad_bottom == 0) {
-            input_scratch = 0;
-        } else {
-            input_scratch = (input_wd + pad_wd + pad_right) * (input_ht + pad_ht + pad_bottom) * in_ch;
-        }
-        /* At most one of the two filter copies is ever made, so max(), not
-         * the sum. */
-        int32_t aligned_filter_row_size = ((filter_row_size + 15) / 16) * 16;
-        int row_padded_copy = aligned_filter_row_size * filter_ht * out_ch;
-        int pointer_align_copy = filter_wd * filter_ht * in_ch * out_ch;
-        filter_scratch = max(row_padded_copy, pointer_align_copy);
-
-        int offset_acc_scratch = out_ch * 4;
-        return input_scratch + filter_scratch + align_buf_size + offset_acc_scratch;
-    }
-    return align_buf_size;
-}
-
 void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
 {
     scratch_buffer = (int16_t *) buf;
@@ -702,9 +595,9 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 channels % filter_dims->channels == 0) {
             in_g.channels = filter_dims->channels;
             out_g.channels = output_dims->channels / groups;
-            const int inner = esp_nn_get_conv_scratch_size_esp32s3(
+            const int inner = esp_nn_conv_scratch_size_esp32s3_impl(
                     &in_g, filter_dims, &out_g, conv_params);
-            const int total = esp_nn_get_conv_scratch_size_esp32s3(
+            const int total = esp_nn_conv_scratch_size_esp32s3_impl(
                     input_dims, filter_dims, output_dims, conv_params);
             if (esp_nn_conv_s8_grouped_repack(
                     esp_nn_conv_s8_esp32s3, input_dims, input,
