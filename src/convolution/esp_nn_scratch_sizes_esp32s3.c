@@ -5,7 +5,7 @@
  */
 
 /*
- * ESP32-S3 conv/depthwise scratch-size getters. Pure C with no target code, so
+ * ESP32-S3 scratch-size getters (conv, depthwise, softmax). Pure C with no target code, so
  * this file also builds on a host: a code generator can call the same getters
  * the kernels are written against instead of mirroring their arithmetic.
  *
@@ -36,4 +36,12 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
 {
     return esp_nn_depthwise_conv_scratch_size_esp32s3_impl(input_dims, filter_dims,
                                                            output_dims, conv_params);
+}
+
+int32_t esp_nn_get_softmax_scratch_size_esp32s3(const int32_t width, const int32_t height)
+{
+    (void) width;
+    (void) height;
+    /* Two 256-entry per-layer LUTs (raw exp + accumulation-scaled exp). */
+    return 2 * 256 * 4 + 16;
 }
