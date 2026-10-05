@@ -73,14 +73,6 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
 
-    /* Enable PIE */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
-
     /* Set up activation min/max vectors for PIE clamp */
     {
         int8_t act_min_val = (int8_t) activation_min;
@@ -354,6 +346,8 @@ void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        const dw_conv_params_t *conv_params,
                                        const quant_data_t *quant_data)
 {
+    ESP_NN_PIE_ENABLE();
+
     const uint16_t ch_mult = conv_params->ch_mult;
     const uint16_t channels = input_dims->channels;
 

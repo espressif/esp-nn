@@ -17,6 +17,7 @@
  */
 
 #include "esp_nn_multicore.h"
+#include <common_functions.h>
 
 #if ESP_NN_DUAL_CORE_SUPPORTED
 
@@ -47,21 +48,17 @@ static int s_worker_scratch_size;
 static void esp_nn_worker_main(void *unused)
 {
     (void)unused;
-#if CONFIG_IDF_TARGET_ESP32P4
-    /* The RISC-V PIE state is per core and some kernels rely on it being
-     * enabled already; enable it once for this core. */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
-#endif
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         void (*fn)(void *) = s_fn;
         void *arg = s_arg;
         if (fn) {
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+            /* Jobs run sub-kernels directly, past their public entry, and
+             * the PIE CFG is per core and unsaved across tasks: set it for
+             * every job on this core (see ESP_NN_PIE_ENABLE). */
+            ESP_NN_PIE_ENABLE();
+#endif
             fn(arg);
         }
         xSemaphoreGive(s_done);
