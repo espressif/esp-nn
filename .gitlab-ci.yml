@@ -101,8 +101,10 @@ build_idf_v5.1:
   variables:
     EXAMPLE_TARGETS: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2
 
-# esp-emu 0.41 models esp32c3/c5/c6/h2/p4/s31; the other targets (incl. the
-# RISC-V esp32c2) stay build-only. The verdict is the app's TEST_RESULT line.
+# esp-emu 0.46 models esp32c3/c5/c6/h2/p4/s31; the other targets (incl. the
+# RISC-V esp32c2) stay build-only. It boots esp32s3 too, but has no ee.* SIMD
+# yet, so the S3 kernels fault on their first vector instruction. 0.41 lacked
+# esp.movx.r.cfg (the PIE CFG read). The verdict is the app's TEST_RESULT line.
 emulate_tests:
   stage: test
   # Must be a glibc image, esp-emulator ships no musl build.
@@ -110,7 +112,7 @@ emulate_tests:
   tags:
     - build
   variables:
-    ESP_EMU_VERSION: "0.41.0"
+    ESP_EMU_VERSION: "0.46.0"
     EMU_TIMEOUT: "600"
     DEBIAN_FRONTEND: noninteractive
   # 23+ emulated runs of up to EMU_TIMEOUT each, four at a time.
