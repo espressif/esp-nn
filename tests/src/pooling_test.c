@@ -97,14 +97,13 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test(16, 16, 16, 3, 3, 1, 1, 0, 0, iter++);
 }
 
-static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
-                              uint16_t filter_wd, uint16_t filter_ht,
-                              uint16_t stride_wd, uint16_t stride_ht,
-                              uint16_t pad_wd, uint16_t pad_ht,
-                              int iter)
+static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+                                  uint16_t filter_wd, uint16_t filter_ht,
+                                  uint16_t stride_wd, uint16_t stride_ht,
+                                  uint16_t pad_wd, uint16_t pad_ht,
+                                  int32_t activation_min, int32_t activation_max,
+                                  int iter)
 {
-    const int32_t activation_min = -128;
-    const int32_t activation_max = 127;
     const uint16_t out_wd = (input_wd + 2 * pad_wd - filter_wd) / stride_wd + 1;
     const uint16_t out_ht = (input_ht + 2 * pad_ht - filter_ht) / stride_ht + 1;
     const int size = input_wd * input_ht * channels;
@@ -141,9 +140,9 @@ static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
 
     bool ret = CHECK_EQUAL(output_c, output_opt, out_size);
     if (ret == false) {
-        TEST_FAIL("max_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+        TEST_FAIL("max_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d, act %d..%d]\n",
                   iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-                  stride_wd, stride_ht, pad_wd, pad_ht);
+                  stride_wd, stride_ht, pad_wd, pad_ht, (int) activation_min, (int) activation_max);
         goto max_pool_cleanup;
     }
     TEST_PASS("max_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
@@ -154,6 +153,16 @@ max_pool_cleanup:
     if (input_orig) free(input_orig);
     if (out_c_orig) free(out_c_orig);
     if (out_opt_orig) free(out_opt_orig);
+}
+
+static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+                              uint16_t filter_wd, uint16_t filter_ht,
+                              uint16_t stride_wd, uint16_t stride_ht,
+                              uint16_t pad_wd, uint16_t pad_ht,
+                              int iter)
+{
+    run_max_pool_test_act(input_wd, input_ht, channels, filter_wd, filter_ht,
+                          stride_wd, stride_ht, pad_wd, pad_ht, -128, 127, iter);
 }
 
 void esp_nn_max_pool_s8_test()
@@ -178,4 +187,9 @@ void esp_nn_max_pool_s8_test()
     run_max_pool_test(6, 6, 128, 6, 6, 1, 1, 0, 0, iter++);
     /* No padding */
     run_max_pool_test(16, 16, 16, 3, 3, 1, 1, 0, 0, iter++);
+    /* Fused activation must be applied on every channel path */
+    run_max_pool_test_act(16, 16, 16, 3, 3, 1, 1, 1, 1, -20, 30, iter++); /* ch % 8 == 0 */
+    run_max_pool_test_act(16, 16, 12, 3, 3, 1, 1, 1, 1, -20, 30, iter++); /* ch % 8 == 4 */
+    run_max_pool_test_act(16, 16, 4, 2, 2, 2, 2, 0, 0, 0, 127, iter++);   /* ReLU, ch 4 */
+    run_max_pool_test_act(9, 7, 20, 3, 3, 2, 2, 1, 1, -128, 6, iter++);   /* ch % 8 == 4 */
 }

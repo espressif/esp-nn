@@ -378,10 +378,10 @@ esp_nn_max_pool_s8_esp32s3: # 0x4
     l32i            a8,a1,16                    # [1]  gra_spill_temp_3
     l32i            a10,a1,32                   # [3]  gra_spill_temp_7
 
-    ee.vmin.s8      q5,q1,q4            # [4]
-    ee.vmax.s8      q5,q5,q5            # [5]
+    ee.vmin.s8      q2,q1,q4            # [4]
+    ee.vmax.s8      q2,q2,q5            # [5]
     addi.n          a10,a10,4               # [6]
-    ee.movi.32.a    q5,a13,0
+    ee.movi.32.a    q2,a13,0
     s32i            a10,a1,32                   # [9]  gra_spill_temp_7
     s32i.n          a13,a8,0                # [10]  id:492
     addi.n          a8,a8,4                 # [11]
