@@ -29,10 +29,12 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
                                  const int32_t activation_max,
                                  const uint16_t channels)
 {
-    /* Enable PIE */
+    /* Enable PIE with unaligned 128-bit loads (CFG bit 1) and stores (bit 0):
+     * each output pixel's 16-channel store starts at pixel * channels, which is
+     * not 16-byte aligned unless channels is a multiple of 16. */
     asm volatile (
         "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
+        "li     x29, 0b11          \n\t"
         "esp.movx.w.cfg x29        \n\t"
         ::: "x29"
     );
