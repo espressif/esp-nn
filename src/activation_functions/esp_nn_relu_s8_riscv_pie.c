@@ -5,6 +5,7 @@
  */
 
 #include <stdint.h>
+#include <common_functions.h>
 
 /**
  * In-place ReLU6 for s8 data using ESP32-P4 PIE SIMD.
@@ -13,13 +14,7 @@
  */
 void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
 {
-    /* Enable PIE */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
+    ESP_NN_PIE_ENABLE();
 
     int i = 0;
 

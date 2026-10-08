@@ -118,12 +118,7 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t activation_max)
 {
     /* Enable PIE once for all channels */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
+    ESP_NN_PIE_ENABLE();
 
     /* SIMD path with optional corrections. Math:
      *   sum((x+io)*(w+fo)) = sum(x*w) + io*sum(w) + fo*sum(x) + row_len*io*fo
@@ -193,12 +188,7 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t activation_max)
 {
     /* Enable PIE once for all channels */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
+    ESP_NN_PIE_ENABLE();
 
     /* Tiny rows: single-pass scalar (see comment in the per-tensor variant) */
     if (row_len < 16) {

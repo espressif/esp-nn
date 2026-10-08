@@ -5,6 +5,7 @@
  */
 
 #include "softmax_common.h"
+#include <common_functions.h>
 #include <esp_nn_ansi_headers.h>
 #include <stdio.h>
 #include <limits.h>
@@ -22,13 +23,6 @@ int32_t esp_nn_get_softmax_scratch_size_riscv_pie(const int32_t width, const int
 
 void esp_nn_set_softmax_scratch_buf_riscv_pie(void *buffer)
 {
-    /* Enable PIE */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
     p4_scratch_buf = (int32_t *) buffer;
 }
 
@@ -45,6 +39,8 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
                                 const int32_t diff_min,
                                 int8_t *output_data)
 {
+    ESP_NN_PIE_ENABLE();
+
     if (p4_scratch_buf == NULL) {
         /* No scratch: compute via the reference path instead of silently
          * writing nothing. */

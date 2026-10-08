@@ -45,8 +45,38 @@ uint32_t profile_c_end()
     return total_c;
 }
 
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+/* Clear the PIE CFG unaligned-access bit (bit 1) on this core. With it clear,
+ * esp.vld.128 on P4 silently loads from addr & ~15. */
+static void clear_pie_cfg_unaligned(void *unused)
+{
+    (void)unused;
+    asm volatile (
+        "esp.movx.r.cfg x29        \n\t"
+        "andi   x29, x29, ~0b10    \n\t"
+        "esp.movx.w.cfg x29        \n\t"
+        ::: "x29"
+    );
+}
+
+/* IDF does not save CFG per task, so anything else on the core can leave it
+ * clear. Clear it on both cores before every optimized call: a kernel that
+ * relies on an earlier setup call (or the worker's start-up) to have set it
+ * then fails the bit-exact checks against the reference. */
+static void clobber_pie_cfg(void)
+{
+    clear_pie_cfg_unaligned(NULL);
+    if (esp_nn_dual_core_run(clear_pie_cfg_unaligned, NULL)) {
+        esp_nn_dual_core_wait();
+    }
+}
+#endif
+
 void profile_opt_start()
 {
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    clobber_pie_cfg();
+#endif
     /* initiate profiling */
     start_opt = esp_cpu_get_ccount();
 }

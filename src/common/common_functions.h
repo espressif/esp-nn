@@ -146,11 +146,23 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
 }
 
 #if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
-/** PIE enable macro - call once before using any esp.* instructions */
+/**
+ * Enable PIE and its unaligned 128-bit loads (CFG bit 1) and stores (bit 0).
+ *
+ * With bit 1 clear, esp.vld.128 silently loads from addr & ~15, so any kernel
+ * reading a tensor pointer it does not own (filter, input) gets wrong data.
+ * With bit 0 clear, esp.vst.128 stores to addr & ~15: max pool's per-pixel
+ * store with a channel count that is not a multiple of 16 then overwrites the
+ * previous pixel (max_pool case 15, 20 channels). IDF does not save CFG in the
+ * task's PIE context, so it is per-core state that other code may change
+ * between calls: call this at the entry of every public PIE kernel and every
+ * dual-core worker job, not in setup calls.
+ */
 #define ESP_NN_PIE_ENABLE() do { \
     asm volatile ( \
         "csrsi  0x7f2, 0b01        \n\t" \
-        "li     x29, 0b10          \n\t" \
+        "esp.movx.r.cfg x29        \n\t" \
+        "ori    x29, x29, 0b11     \n\t" \
         "esp.movx.w.cfg x29        \n\t" \
         ::: "x29" \
     ); \

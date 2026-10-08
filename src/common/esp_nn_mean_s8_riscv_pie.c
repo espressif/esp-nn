@@ -28,12 +28,7 @@ void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
     const int8_t one_val = 1;
     if (ch_16 > 0) {
         /* Enable PIE and broadcast 1 into q7 */
-        asm volatile (
-            "csrsi  0x7f2, 0b01        \n\t"
-            "li     x29, 0b10          \n\t"
-            "esp.movx.w.cfg x29        \n\t"
-            ::: "x29"
-        );
+        ESP_NN_PIE_ENABLE();
         asm volatile (
             "mv     x30, %0             \n\t"
             "esp.vldbc.8.ip q7, x30, 0  \n\t"

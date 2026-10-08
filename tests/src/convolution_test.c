@@ -686,7 +686,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 53; itr++) {
+    for (int itr = 0; itr < 55; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -770,6 +770,23 @@ void esp_nn_conv_s8_test()
             in_wd = 96; in_ht = 8; in_channels = 32; out_channels = 64;
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
+            break;
+        case 53: // 1x1, filter misaligned by 5 (see case 17), 5x5 output: 25
+                 // pixels, and each half of the dual-core row split is under
+                 // 16, so every pixel takes the per-pixel XACC path on both
+                 // cores. Case 17's 576 pixels all go through the 16-pixel
+                 // batch and never reach it.
+        case 54: // as 53 with 7x7 = 49 pixels: batched groups plus a tail
+            in_wd = itr == 53 ? 5 : 7;
+            in_ht = in_wd;
+            in_channels = 32;
+            out_channels = 32;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
             break;
         case 42: // big-filter padded conv: pad 1, filter_wd * in_ch >= 16 and
                  // filter bytes > 96 KB, so the P4 dispatcher takes the dense
@@ -1315,7 +1332,8 @@ void esp_nn_conv_s8_test()
 
         int in_size = in_wd * in_ht * in_channels;
         int filter_size = filter_wd * filter_ht * in_channels * out_channels;
-        int filter_prefix = itr == 17 ? 5 : 0;
+        const bool misalign_filter = itr == 17 || itr == 53 || itr == 54;
+        int filter_prefix = misalign_filter ? 5 : 0;
         int out_size = out_wd * out_ht * out_channels;
 
         input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
@@ -1351,7 +1369,7 @@ void esp_nn_conv_s8_test()
         /* Case 17: deliberately misalign filter by 5 bytes to test alignment handling.
          * This reproduces the bug where ee.vld.l.64.ip ignores lower address bits. */
         filter_data_orig_save = filter_data;
-        if (itr == 17) {
+        if (misalign_filter) {
             filter_data = filter_data + 5; /* misalign by 5 bytes (like YOLO's 0x3c05fe55) */
         }
 

@@ -24,7 +24,7 @@ import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
-# Targets esp-emu 0.41 models; everything else is build-only in CI.
+# Targets esp-emu 0.46 models; everything else is build-only in CI.
 EMU_TARGETS = ('esp32c3', 'esp32c5', 'esp32c6', 'esp32h2', 'esp32p4', 'esp32s31')
 
 # One rule per (target, IDF range) combination that must not be emulated.

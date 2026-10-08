@@ -274,14 +274,6 @@ static void conv_1x1_batch16(const int8_t *pixel_ptrs[16],
                       const int32_t *out_mult, const int32_t *out_shift,
                       int32_t act_min, int32_t act_max)
 {
-    /* Ensure PIE is enabled (might be lost across noinline function call) */
-    asm volatile (
-        "csrsi  0x7f2, 0b01        \n\t"
-        "li     x29, 0b10          \n\t"
-        "esp.movx.w.cfg x29        \n\t"
-        ::: "x29"
-    );
-
     /* Transpose: arrange 16 pixels' data as ch0[p0..p15], ch1[p0..p15], ... */
     int8_t transposed[16 * 16] __attribute__((aligned(16)));  /* in_ch <= 16 for this path */
     for (int c = 0; c < in_ch; c++) {
@@ -694,14 +686,6 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
     /* When in_ch < 16: use QACC batch (16 pixels at a time with broadcast filter).
      * Falls back to channel-padding for remaining pixels. */
     if (in_channels < 16) {
-        /* Enable PIE for QACC */
-        asm volatile (
-            "csrsi  0x7f2, 0b01        \n\t"
-            "li     x29, 0b10          \n\t"
-            "esp.movx.w.cfg x29        \n\t"
-            ::: "x29"
-        );
-
         int32_t total_pixels = out_wd * out_ht;
         int32_t pix = 0;
 
@@ -770,12 +754,6 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
         if (batched > 0) {
             int8_t *transposed = (int8_t *)(((uintptr_t)((int8_t *)scratch
                     + out_channels * 4 + 15)) & ~(uintptr_t)15);
-            asm volatile (
-                "csrsi  0x7f2, 0b01        \n\t"
-                "li     x29, 0b10          \n\t"
-                "esp.movx.w.cfg x29        \n\t"
-                ::: "x29"
-            );
             for (int32_t pix = 0; pix < batched; pix += 16) {
                 const int8_t *in_batch = input_data + pix * in_channels;
                 int8_t *out_batch = out_data + pix * out_channels;
@@ -1274,12 +1252,6 @@ static void esp_nn_conv_s8_im2col(
         const int32_t row_size = filter_wd * in_ch;
         int8_t *t = (int8_t *)(((uintptr_t)(im2col_buf + window_len) + 15)
                                & ~(uintptr_t)15);
-        asm volatile (
-            "csrsi  0x7f2, 0b01        \n\t"
-            "li     x29, 0b10          \n\t"
-            "esp.movx.w.cfg x29        \n\t"
-            ::: "x29"
-        );
         raster_end = (total_pixels / 16) * 16;
         for (int32_t pix = 0; pix < raster_end; pix += 16) {
             const int8_t *bases[16];
@@ -1317,12 +1289,6 @@ static void esp_nn_conv_s8_im2col(
         const int32_t row_size = filter_wd * in_ch;
         int8_t *t = (int8_t *)(((uintptr_t)(im2col_buf + window_len) + 15)
                                & ~(uintptr_t)15);
-        asm volatile (
-            "csrsi  0x7f2, 0b01        \n\t"
-            "li     x29, 0b10          \n\t"
-            "esp.movx.w.cfg x29        \n\t"
-            ::: "x29"
-        );
         for (int32_t oy = by_lo; oy <= by_hi; oy++) {
             const int32_t base_y = oy * stride_ht - pad_ht;
             for (int32_t ox = bx_lo; ox < bx_end; ox += 16) {
@@ -1756,16 +1722,6 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
 
 void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
 {
-    // We are going to use the vector extensions
-    asm volatile (
-        "csrsi 0x7f2, 0b01      \n\t" // enable `esp` vector extension
-        "li x29, 0b10           \n\t"
-        "esp.movx.w.cfg x29     \n\t"
-        :
-        :
-        : "x29"
-    );
-
     scratch_buffer = (int16_t *) buf;
 }
 
@@ -1884,6 +1840,8 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                             const conv_params_t *conv_params,
                             const quant_data_t *quant_data)
 {
+    ESP_NN_PIE_ENABLE();
+
     if (scratch_buffer == NULL) {
         printf("esp_nn_conv error! scratch_buffer not set!\n");
         return;
