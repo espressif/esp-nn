@@ -6,7 +6,7 @@
 
 /*
  * FC multi-path dispatcher for ESP32-S3.
- * - Pre-computes offset corrections per channel in C
+ * - Adds the per-channel offset correction (input_offset * filter row sum + bias) in C
  * - Dispatches to s8 MAC assembly (aligned, large row_len) or s16 assembly (fallback)
  */
 
@@ -246,9 +246,10 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
 /* Batched per-channel FC: computes `batches` input rows against the SAME filter
  * in a single call. Two amortizations over calling the per-row kernel `batches`
  * times:
- *   1. the per-channel correction prepass (input_offset*sum(filter_row) + bias)
- *      is batch-independent on the fast path (filter_offset == 0), so it runs
- *      ONCE instead of `batches` times — removing (batches-1) full filter walks;
+ *   1. the per-channel correction (input_offset*sum(filter_row) + bias) does
+ *      not depend on the batch on the fast path (filter_offset == 0), so each
+ *      filter row is summed once and the result serves every input row —
+ *      (batches-1) fewer filter walks;
  *   2. the loop is reordered out_channel-outer / batch-inner, so each filter row
  *      (row_len bytes) is fetched from PSRAM once per channel and reused from
  *      dcache across all batches — weight-stationary instead of weight-streaming.
@@ -274,12 +275,12 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
-    /* Same eligibility as the per-row fast path, except that the
-     * input_offset correction prepass is paid once for all rows here, so for
-     * batches > 1 it is amortised and the offset-free threshold applies. The
-     * dot needs one operand 16-byte aligned (input rows are the common case).
-     * Otherwise defer to the per-row kernel, which further dispatches to s16
-     * asm / ansi as needed. */
+    /* Same eligibility as the per-row fast path, except that each filter-row
+     * sum is shared by all input rows here, so for batches > 1 its cost is
+     * amortised and the offset-free threshold applies. The dot needs one
+     * operand 16-byte aligned (input rows are the common case). Otherwise
+     * defer to the per-row kernel, which further dispatches to s16 asm / ansi
+     * as needed. */
     const int32_t gate_offset = (batches > 1) ? 0 : input_offset;
     if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, gate_offset)
         || (!input_aligned && !filter_rows_aligned), 0)) {
@@ -296,8 +297,10 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
     const int32_t row_len_rem = row_len & 15;
     const int32_t simd_bytes = row_len_div16 << 4;
 
-    /* Correction prepass ONCE (batch-independent: filter_offset == 0 here). */
-    int32_t corrections[out_channels];
+    /* out_channel outer, batch inner: f_ptr stays cache-resident across batches.
+     * The correction is batch-independent (filter_offset == 0 here), so it is
+     * computed once per channel, right before the row is reused for every batch;
+     * no per-channel array on the caller's stack. */
     for (int ch = 0; ch < out_channels; ch++) {
         const int8_t *f_ptr = filter_data + ch * row_len;
         int32_t corr = 0;
@@ -307,13 +310,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
         if (bias) {
             corr += bias[ch];
         }
-        corrections[ch] = corr;
-    }
-
-    /* out_channel outer, batch inner: f_ptr stays cache-resident across batches. */
-    for (int ch = 0; ch < out_channels; ch++) {
-        const int8_t *f_ptr = filter_data + ch * row_len;
-        const int32_t corr = corrections[ch];
         const int32_t mult = out_mult[ch];
         const int32_t shift = out_shift[ch];
         for (int32_t b = 0; b < batches; b++) {
