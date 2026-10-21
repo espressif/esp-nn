@@ -10,27 +10,30 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <inttypes.h>
+#include <string.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
 
-static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
-                              uint16_t filter_wd, uint16_t filter_ht,
-                              uint16_t stride_wd, uint16_t stride_ht,
-                              uint16_t pad_wd, uint16_t pad_ht,
-                              int iter)
+static void run_avg_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+                                  uint16_t filter_wd, uint16_t filter_ht,
+                                  uint16_t stride_wd, uint16_t stride_ht,
+                                  uint16_t pad_wd, uint16_t pad_ht,
+                                  int32_t activation_min, int32_t activation_max,
+                                  int iter)
 {
-    const int32_t activation_min = -128;
-    const int32_t activation_max = 127;
     const uint16_t out_wd = (input_wd + 2 * pad_wd - filter_wd) / stride_wd + 1;
     const uint16_t out_ht = (input_ht + 2 * pad_ht - filter_ht) / stride_ht + 1;
     const int size = input_wd * input_ht * channels;
     const int out_size = out_wd * out_ht * channels;
+    /* Bytes checked after the output: enough to catch a row stride of up to
+     * max(out_wd, out_ht) * channels without the overrun reaching the heap. */
+    const int guard = out_ht * (out_wd > out_ht ? out_wd : out_ht) * channels - out_size + 512;
 
     int8_t *input = NULL, *output_c = NULL, *output_opt = NULL;
     int8_t *input_orig = malloc(size + 16);
-    int8_t *out_c_orig = malloc(out_size + 16);
-    int8_t *out_opt_orig = malloc(out_size + 16);
+    int8_t *out_c_orig = malloc(out_size + 16 + guard);
+    int8_t *out_opt_orig = malloc(out_size + 16 + guard);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         TEST_SKIP("avg_pool [%d] allocations failed\n", iter);
         goto avg_pool_cleanup;
@@ -43,6 +46,7 @@ static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 256 - 128;
     }
+    memset(output_opt + out_size, 0x5a, guard);
 
     profile_c_start();
     esp_nn_avg_pool_s8_ansi(input, input_wd, input_ht, output_c, out_wd, out_ht,
@@ -56,11 +60,18 @@ static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t cha
                        activation_min, activation_max, channels);
     profile_opt_end();
 
+    for (int i = 0; i < guard; ++i) {
+        if ((uint8_t) output_opt[out_size + i] != 0x5a) {
+            TEST_FAIL("avg_pool [%d] wrote past its output (guard byte %d) [in %dx%dx%d, out %dx%d]\n",
+                      iter, i, input_wd, input_ht, channels, out_wd, out_ht);
+            goto avg_pool_cleanup;
+        }
+    }
     bool ret = CHECK_EQUAL(output_c, output_opt, out_size);
     if (ret == false) {
-        TEST_FAIL("avg_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
+        TEST_FAIL("avg_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d, act %d..%d]\n",
                   iter, input_wd, input_ht, channels, filter_wd, filter_ht,
-                  stride_wd, stride_ht, pad_wd, pad_ht);
+                  stride_wd, stride_ht, pad_wd, pad_ht, (int) activation_min, (int) activation_max);
         goto avg_pool_cleanup;
     }
     TEST_PASS("avg_pool [%2d] passed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d]\n",
@@ -71,6 +82,16 @@ avg_pool_cleanup:
     if (input_orig) free(input_orig);
     if (out_c_orig) free(out_c_orig);
     if (out_opt_orig) free(out_opt_orig);
+}
+
+static void run_avg_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+                              uint16_t filter_wd, uint16_t filter_ht,
+                              uint16_t stride_wd, uint16_t stride_ht,
+                              uint16_t pad_wd, uint16_t pad_ht,
+                              int iter)
+{
+    run_avg_pool_test_act(input_wd, input_ht, channels, filter_wd, filter_ht,
+                          stride_wd, stride_ht, pad_wd, pad_ht, -128, 127, iter);
 }
 
 void esp_nn_avg_pool_s8_test()
@@ -95,6 +116,13 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test(6, 6, 128, 6, 6, 1, 1, 0, 0, iter++);
     /* No padding */
     run_avg_pool_test(16, 16, 16, 3, 3, 1, 1, 0, 0, iter++);
+    /* Non-square outputs: the output row stride must use the output width.
+     * Taller than wide also checks nothing is written past the output. */
+    run_avg_pool_test(16, 8, 16, 3, 3, 1, 1, 1, 1, iter++);   /* 16x8, ch % 8 == 0 */
+    run_avg_pool_test(8, 16, 16, 3, 3, 1, 1, 1, 1, iter++);   /* 8x16, ch % 8 == 0 */
+    run_avg_pool_test(16, 8, 12, 3, 3, 1, 1, 1, 1, iter++);   /* 16x8, ch % 8 == 4 */
+    run_avg_pool_test(8, 16, 12, 3, 3, 1, 1, 1, 1, iter++);   /* 8x16, ch % 8 == 4 */
+    run_avg_pool_test(5, 24, 32, 2, 2, 2, 2, 0, 0, iter++);   /* 2x12 */
 }
 
 static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
