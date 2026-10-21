@@ -1111,13 +1111,18 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(
                                         src, dst, row_len, input_offset);
                             } else if (r > 0 && r + 1 < input_ht &&
+                                       row_len >= 48 &&
                                        (((uintptr_t)dst & 15) == 0)) {
                                 /* row_len is the BYTE stride of an int8 row:
                                  * at channels % 16 != 0 alternate rows start
                                  * 8-byte aligned and the aligned converter's
                                  * 128-bit loads need 16. Interior rows have
                                  * neighbours covering the QUP window's
-                                 * over-read. Cases 21/22 cover this path. */
+                                 * over-read. Cases 21/22 cover this path.
+                                 * The converter needs size >= 48: below
+                                 * that its vector byte count goes negative
+                                 * and the scalar tail starts before dst
+                                 * (width-1, 8-channel rows; cases 35/36). */
                                 esp_nn_s8_to_s16_with_offset_row_esp32s3(
                                         src, dst, row_len, input_offset);
                             } else {

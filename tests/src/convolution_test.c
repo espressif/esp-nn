@@ -41,7 +41,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 35; itr++) {
+    for (int itr = 0; itr < 37; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -413,6 +413,31 @@ void esp_nn_depthwise_conv_s8_test()
             pad_ht = 1;
             stride_wd = 2;
             stride_ht = 2;
+            break;
+        case 35: // width 1, 8 channels: 8-byte rows on the s16 tiled path
+                 // (too large for the untiled s16 scratch), 3x1 SAME
+            input_wd = 1;
+            input_ht = 3072;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 8;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 36: // as 35 with a 1x1 filter
+            input_wd = 1;
+            input_ht = 3072;
+            filter_ht = 1;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 8;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
             break;
         case 32: // 520 channels, 8 mod 16, stride 2
             input_wd = 9;
