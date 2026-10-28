@@ -1,0 +1,2 @@
+# Selects the ANSI C reference kernels; used by the build_idf_master_ansi CI job.
+CONFIG_NN_ANSI_C=y
