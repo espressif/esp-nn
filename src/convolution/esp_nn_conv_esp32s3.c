@@ -348,6 +348,13 @@ static void conv_1x1_panel_mt_worker(void *p)
  *
  * Scratch layout: [filter_sum[out_ch] | im2col_buf[window_len_aligned]]
  */
+/* Floor division for a positive divisor (C '/' truncates towards zero). */
+static inline int32_t esp_nn_floor_div_s32(int32_t num, int32_t den)
+{
+    int32_t q = num / den;
+    return (num % den != 0 && num < 0) ? q - 1 : q;
+}
+
 __attribute__ ((noinline))
 static void esp_nn_conv_s8_im2col_s3(
         const data_dims_t *input_dims,
@@ -415,9 +422,12 @@ static void esp_nn_conv_s8_im2col_s3(
      * Interior: all filter taps fall within valid input. */
     const int32_t row_bytes = filter_wd * in_ch;
     int32_t safe_y_start = (pad_ht + stride_ht - 1) / stride_ht;
-    int32_t safe_y_end = (input_ht - filter_ht + pad_ht) / stride_ht + 1;
+    /* floor, not C truncation: the numerator is negative when an input side
+     * is smaller than the filter, and truncation would mark a row/column as
+     * interior whose taps read past the end of the input. */
+    int32_t safe_y_end = esp_nn_floor_div_s32(input_ht - filter_ht + pad_ht, stride_ht) + 1;
     int32_t safe_x_start = (pad_wd + stride_wd - 1) / stride_wd;
-    int32_t safe_x_end = (input_wd - filter_wd + pad_wd) / stride_wd + 1;
+    int32_t safe_x_end = esp_nn_floor_div_s32(input_wd - filter_wd + pad_wd, stride_wd) + 1;
     if (safe_y_start > out_ht) safe_y_start = out_ht;
     if (safe_y_end > out_ht) safe_y_end = out_ht;
     if (safe_y_end < safe_y_start) safe_y_end = safe_y_start;

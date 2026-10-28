@@ -110,7 +110,7 @@ esp_nn_avg_pool_s8_esp32s3_asm: # 0x4
 
     l16ui   a7,a1,256                   # [1]  id:671 pad_wd+0x0
     l16ui   a10,a1,260                  # [5]  id:670 pad_ht+0x0
-    l32i    a15,a1,72                   # [12]  gra_spill_temp_16
+    l32i    a15,a1,128                   # [12]  gra_spill_temp_32 (output_wd: row stride = output_wd * channels)
     movi.n  a14,0                   # [13]
     movi.n  a8,0                    # [14]
     neg     a10,a10                     # [15]
@@ -414,7 +414,7 @@ esp_nn_avg_pool_s8_esp32s3_asm: # 0x4
     l16ui   a7,a1,256                   # [1]  id:671 pad_wd+0x0
     l16ui   a13,a1,260                  # [5]  id:670 pad_ht+0x0
     s32i    a13,a1,64                   # [8]  gra_spill_temp_4
-    l32i    a8,a1,72                    # [12]  gra_spill_temp_16
+    l32i    a8,a1,128                    # [12]  gra_spill_temp_32 (output_wd: row stride = output_wd * channels)
     movi.n  a15,0                   # [13]
     movi.n  a9,0                    # [14]
     neg     a13,a13                     # [15]

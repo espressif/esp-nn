@@ -686,7 +686,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 55; itr++) {
+    for (int itr = 0; itr < 58; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -699,6 +699,27 @@ void esp_nn_conv_s8_test()
         int groups = 1;
 
         switch (itr) {
+        /* Input side smaller than the filter under TFLite SAME padding with
+         * stride 2: the leading pad is 0, so (in - filter + pad) is negative.
+         * Small in_channels sends these through the im2col path. */
+        case 55: // 2x2x3 -> 1x1, 3x3 filter
+            in_wd = 2; in_ht = 2; in_channels = 3; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            force_out_wd = 1; force_out_ht = 1;
+            break;
+        case 56: // 8x2x3 -> 4x1: only the height is smaller than the filter
+            in_wd = 8; in_ht = 2; in_channels = 3; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            force_out_wd = 4; force_out_ht = 1;
+            break;
+        case 57: // 2x8x4 -> 1x4: only the width is smaller than the filter
+            in_wd = 2; in_ht = 8; in_channels = 4; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            force_out_wd = 1; force_out_ht = 4;
+            break;
         case 29: // grouped 1x1 conv (groups=4)
             in_wd = 8;
             in_ht = 8;
