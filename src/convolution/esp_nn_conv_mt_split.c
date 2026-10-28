@@ -57,7 +57,7 @@ void esp_nn_conv_s8_ansi_mt_split(const data_dims_t *input_dims,
     const int32_t in_row_off =
             (int32_t)h0 * conv_params->stride.height - conv_params->padding.height;
 
-    if (esp_nn_dual_core_active() && out_ht >= 4 && in_row_off >= 0) {
+    if (out_ht >= 4 && in_row_off >= 0 && esp_nn_dual_core_begin()) {
         conv_ansi_mt_job_t job = {
             .input_dims = *input_dims, .input_data = input_data,
             .filter_dims = *filter_dims, .filter_data = filter_data,
@@ -79,8 +79,10 @@ void esp_nn_conv_s8_ansi_mt_split(const data_dims_t *input_dims,
                     out_data + (int32_t)h0 * output_dims->width * output_dims->channels,
                     &params1, quant_data);
             esp_nn_dual_core_wait();
+            esp_nn_dual_core_end();
             return;
         }
+        esp_nn_dual_core_end();
     }
     esp_nn_conv_s8_ansi(input_dims, input_data, filter_dims, filter_data,
                         bias, output_dims, out_data, conv_params, quant_data);

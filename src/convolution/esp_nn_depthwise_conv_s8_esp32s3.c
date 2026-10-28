@@ -496,7 +496,7 @@ static void dw3x3_run_split(const int8_t *input_padded, uint16_t padded_wd,
                             const int32_t *out_mult, int32_t activation_min,
                             int32_t activation_max)
 {
-    if (esp_nn_dual_core_active() && out_ht >= 4) {
+    if (out_ht >= 4 && esp_nn_dual_core_begin()) {
         const uint16_t h0 = out_ht / 2;
         dw3x3_mt_job_t job = {
             .input_padded = input_padded, .padded_wd = padded_wd,
@@ -518,8 +518,10 @@ static void dw3x3_run_split(const int8_t *input_padded, uint16_t padded_wd,
                     out_wd, (uint16_t)(out_ht - h0), out_offset,
                     out_shift, out_mult, activation_min, activation_max);
             esp_nn_dual_core_wait();
+            esp_nn_dual_core_end();
             return;
         }
+        esp_nn_dual_core_end();
     }
     esp_nn_depthwise_conv_s8_mult1_3x3_padded_esp32s3(
             input_padded, padded_wd, padded_ht, channels, input_offset,
@@ -574,7 +576,7 @@ static void dw_s16m8_3x3_run_split(const int16_t *input_data16,
 {
     const uint16_t h0 = out_ht / 2;
     const int32_t in_row_off = (int32_t)h0 * stride_ht - pad_ht;
-    if (esp_nn_dual_core_active() && out_ht >= 8 && in_row_off >= 0) {
+    if (out_ht >= 8 && in_row_off >= 0 && esp_nn_dual_core_begin()) {
         dw_s16m8_3x3_mt_job_t job = {
             .input_data16 = input_data16, .input_wd = input_wd,
             .input_ht = input_ht, .channels = channels, .pad_wd = pad_wd,
@@ -594,8 +596,10 @@ static void dw_s16m8_3x3_run_split(const int16_t *input_data16,
                     out_wd, (uint16_t)(out_ht - h0), out_offset, out_shift,
                     out_mult, activation_min, activation_max);
             esp_nn_dual_core_wait();
+            esp_nn_dual_core_end();
             return;
         }
+        esp_nn_dual_core_end();
     }
     esp_nn_depthwise_conv_s16_mult8_3x3_esp32s3(
             input_data16, input_wd, input_ht, channels, pad_wd, pad_ht,
@@ -991,7 +995,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                         .tile_bytes = avail - filter_size - align_len - 16,
                     };
                     int done = 0;
-                    if (esp_nn_dual_core_active() && out_ht >= 4) {
+                    if (out_ht >= 4 && esp_nn_dual_core_begin()) {
                         int want = 3 * row_bytes + 16;
                         if (want < 24 * 1024 && job.tile_bytes > want) {
                             want = (job.tile_bytes < 24 * 1024) ? job.tile_bytes : 24 * 1024;
@@ -1009,6 +1013,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                 done = 1;
                             }
                         }
+                        esp_nn_dual_core_end();
                     }
                     if (!done) {
                         dw3x3_strip_rows(&job);

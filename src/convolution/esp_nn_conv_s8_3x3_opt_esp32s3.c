@@ -224,8 +224,8 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
 #if ESP_NN_DUAL_CORE_SUPPORTED
         /* Split the position range across cores: disjoint output slices, same
          * arithmetic. The worker stages into its own scratch. */
-        if (esp_nn_dual_core_active()
-                && total_positions >= 2 * ESP_NN_3X3_BATCH_POSITIONS) {
+        if (total_positions >= 2 * ESP_NN_3X3_BATCH_POSITIONS
+                && esp_nn_dual_core_begin()) {
             const int wneed = ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned
                     + esp_nn_conv_1x1_panel_scratch_size(window_len_aligned) + 32;
             void *wscr = esp_nn_dual_core_scratch(wneed);
@@ -253,10 +253,12 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
                             out_mult, activation_min, activation_max,
                             split, total_positions, scratch);
                     esp_nn_dual_core_wait();
+                    esp_nn_dual_core_end();
                     return;
                 }
                 /* worker declined (nested or same-core call): fall through */
             }
+            esp_nn_dual_core_end();
         }
 #endif
         esp_nn_3x3_staged_range(input, input_wd, input_ht, in_channels,

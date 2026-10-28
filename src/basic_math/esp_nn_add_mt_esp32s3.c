@@ -55,7 +55,7 @@ void esp_nn_add_elementwise_s8_mt_esp32s3(const int8_t *input1_data,
                                           const int32_t activation_max,
                                           const int32_t size)
 {
-    if (esp_nn_dual_core_active() && size >= 8192) {
+    if (size >= 8192 && esp_nn_dual_core_begin()) {
         const int32_t half = (size / 2) & ~15;
         add_s8_mt_job_t job = {
             .input1_data = input1_data, .input2_data = input2_data,
@@ -75,8 +75,10 @@ void esp_nn_add_elementwise_s8_mt_esp32s3(const int8_t *input1_data,
                     out_mult, out_shift, activation_min, activation_max,
                     size - half);
             esp_nn_dual_core_wait();
+            esp_nn_dual_core_end();
             return;
         }
+        esp_nn_dual_core_end();
     }
     esp_nn_add_elementwise_s8_esp32s3(
             input1_data, input2_data, input1_offset, input2_offset,

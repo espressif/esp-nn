@@ -697,7 +697,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 /* Cores split the output channels; outputs are disjoint,
                  * arithmetic unchanged. */
 #if ESP_NN_DUAL_CORE_SUPPORTED
-                if (esp_nn_dual_core_active() && out_channels >= 32) {
+                if (out_channels >= 32 && esp_nn_dual_core_begin()) {
                     const int oc0 = ((out_channels / 2) + 7) & ~7;
                     const int wneed = 24 * channels + 16 * 1024 + 64;
                     uint8_t *wscr = (uint8_t *)esp_nn_dual_core_scratch(wneed);
@@ -722,10 +722,12 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                                     out_offset, out_shift + oc0, out_mult + oc0,
                                     activation_min, activation_max, panel_scratch);
                             esp_nn_dual_core_wait();
+                            esp_nn_dual_core_end();
                             return;
                         }
                         /* worker declined (nested or same-core call): single-core below */
                     }
+                    esp_nn_dual_core_end();
                 }
 #endif /* ESP_NN_DUAL_CORE_SUPPORTED */
                 esp_nn_conv_s8_mult8_1x1_oc_panel(

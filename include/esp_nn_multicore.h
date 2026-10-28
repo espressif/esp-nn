@@ -49,10 +49,32 @@ extern "C" {
  */
 void esp_nn_dual_core_enable(void);
 
+/**
+ * Stop the worker and free its stack, TCB, scratch and semaphores; esp-nn
+ * runs single core afterwards and esp_nn_dual_core_enable() may start it
+ * again. Waits for a split kernel in flight. Call it while no other task is
+ * running esp-nn kernels.
+ */
+void esp_nn_dual_core_disable(void);
+
 /** True once the worker task exists. */
 bool esp_nn_dual_core_active(void);
 
-/** Dispatch fn(arg) to the worker core. Pair every successful call with
+/**
+ * Claim the worker for one split kernel. Never blocks: returns false when
+ * dual core is off, the caller runs on the worker's core, or another task
+ * holds the worker; the kernel then runs single core. Several tasks may run
+ * esp-nn kernels at once; one of them at a time gets the second core. Pair
+ * every true return with esp_nn_dual_core_end(), on every path. The worker
+ * scratch (esp_nn_dual_core_scratch()) belongs to the holder.
+ */
+bool esp_nn_dual_core_begin(void);
+
+/** Release the claim taken by esp_nn_dual_core_begin(). */
+void esp_nn_dual_core_end(void);
+
+/** Dispatch fn(arg) to the worker core; the caller must hold the claim
+ * (esp_nn_dual_core_begin()). Pair every successful call with
  * esp_nn_dual_core_wait(). Returns false when the worker is not running. */
 bool esp_nn_dual_core_run(void (*fn)(void *), void *arg);
 

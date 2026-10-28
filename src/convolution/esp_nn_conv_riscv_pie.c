@@ -1774,13 +1774,14 @@ static bool conv_pie_rows_split(conv_s8_pie_fn_t fn,
     const uint16_t h0 = out_ht / 2;
     const int32_t in_row_off =
             (int32_t)h0 * conv_params->stride.height - conv_params->padding.height;
-    if (!esp_nn_dual_core_active() || out_ht < 4 || in_row_off < 0) {
+    if (out_ht < 4 || in_row_off < 0 || !esp_nn_dual_core_begin()) {
         return false;
     }
     const int scratch_size = esp_nn_get_conv_scratch_size_riscv_pie(
             input_dims, filter_dims, output_dims, conv_params);
     void *wscr = esp_nn_dual_core_scratch(scratch_size + 16);
     if (wscr == NULL) {
+        esp_nn_dual_core_end();
         return false;
     }
     conv_pie_rows_mt_job_t job = {
@@ -1791,6 +1792,7 @@ static bool conv_pie_rows_split(conv_s8_pie_fn_t fn,
     };
     job.output_dims.height = h0;
     if (!esp_nn_dual_core_run(conv_pie_rows_mt_worker, &job)) {
+        esp_nn_dual_core_end();
         return false;
     }
     {
@@ -1807,6 +1809,7 @@ static bool conv_pie_rows_split(conv_s8_pie_fn_t fn,
            &params1, quant_data, scratch);
     }
     esp_nn_dual_core_wait();
+    esp_nn_dual_core_end();
     return true;
 }
 
@@ -1888,7 +1891,7 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
             stride_wd == 1 && stride_ht == 1) {
         /* Rows are independent for a stride-1 unpadded 1x1: split them
          * across both cores (bit-identical, disjoint outputs). */
-        if (esp_nn_dual_core_active() && output_dims->height >= 4) {
+        if (output_dims->height >= 4 && esp_nn_dual_core_begin()) {
             const int scratch_size = esp_nn_get_conv_scratch_size_riscv_pie(
                     input_dims, filter_dims, output_dims, conv_params);
             void *wscr = esp_nn_dual_core_scratch(scratch_size + 16);
@@ -1914,9 +1917,11 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        out_data + off * output_dims->channels,
                                        conv_params, quant_data, scratch_buffer);
                     esp_nn_dual_core_wait();
+                    esp_nn_dual_core_end();
                     return;
                 }
             }
+            esp_nn_dual_core_end();
         }
         esp_nn_conv_s8_1x1(input_dims, input, filter_data, bias,
                            output_dims, out_data, conv_params, quant_data,

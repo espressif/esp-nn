@@ -302,10 +302,11 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
     const uint16_t h0 = out_ht / 2;
     const int32_t in_row_off =
             (int32_t)h0 * conv_params->stride.height - conv_params->padding.height;
-    if (!esp_nn_dual_core_active() || out_ht < 4 || in_row_off < 0) {
+    if (out_ht < 4 || in_row_off < 0 || !esp_nn_dual_core_begin()) {
         return false;
     }
     if (esp_nn_dual_core_scratch(input_dims->channels * sizeof(int32_t) + 16) == NULL) {
+        esp_nn_dual_core_end();
         return false;
     }
     dw_pie_mt_job_t job = {
@@ -316,6 +317,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
     };
     job.output_dims.height = h0;
     if (!esp_nn_dual_core_run(dw_pie_mt_worker, &job)) {
+        esp_nn_dual_core_end();
         return false;
     }
     {
@@ -333,6 +335,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
                 &params1, quant_data, scratch_buffer);
     }
     esp_nn_dual_core_wait();
+    esp_nn_dual_core_end();
     return true;
 }
 
