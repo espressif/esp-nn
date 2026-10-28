@@ -40,4 +40,44 @@ config NN_SKIP_NUDGE
       Leave disabled for bit-exact behavior (recommended for tests and
       for matching reference outputs).
 
+menu "Dual-core worker"
+   depends on NN_OPTIMIZED && (IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4) && !FREERTOS_UNICORE
+
+config NN_DUAL_CORE_WORKER_STACK_SIZE
+   int "Worker stack size (bytes)"
+   range 2048 65536
+   default 4096
+   help
+      Stack of the worker task that esp_nn_dual_core_enable() starts on the
+      other core. It runs one kernel slice at a time; measured peak use is
+      about 1.4 KB on ESP32-S3 and 0.9 KB on ESP32-P4, with timer interrupts
+      and other PIE tasks on the same cores.
+
+choice NN_DUAL_CORE_WORKER_STACK_PLACEMENT
+   prompt "Worker stack memory"
+   default NN_DUAL_CORE_WORKER_STACK_INTERNAL_FIRST
+   help
+      Where the worker's stack is allocated. The kernels store 128-bit
+      vectors to it, so it always comes from memory that takes them.
+
+config NN_DUAL_CORE_WORKER_STACK_INTERNAL_FIRST
+   bool "Internal RAM, PSRAM as fallback"
+   help
+      Internal SIMD-capable RAM. When none is left, PSRAM, if the
+      FreeRTOS option allowing task stacks in external memory is set
+      (IDF 5.3 or later).
+
+config NN_DUAL_CORE_WORKER_STACK_PSRAM
+   bool "PSRAM only"
+   depends on SPIRAM && (FREERTOS_TASK_CREATE_ALLOW_EXT_MEM || SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY)
+   help
+      Keeps the worker's stack out of internal RAM, for applications
+      short of it. Stack accesses then go through the cache. The worker
+      only runs esp-nn jobs, so it never runs while the flash cache is
+      disabled. If no PSRAM is left, esp-nn stays single core.
+
+endchoice
+
+endmenu
+
 endmenu

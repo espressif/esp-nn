@@ -30,9 +30,11 @@ extern "C" {
  * other core; kernels that support it then split their output range in two.
  * Results are bit-identical to single-core execution (disjoint outputs, same
  * arithmetic). Call once from the core that will run inference, early: the
- * worker's 8 KB stack must come from SIMD-capable memory (internal RAM, or
- * PSRAM when CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY is set). If none is
- * left, esp-nn stays single core; esp_nn_dual_core_active() reports which.
+ * worker's stack (CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE bytes) must come from
+ * SIMD-capable memory: internal RAM first, or with IDF >= 5.3 PSRAM when
+ * CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM allows task stacks there; only PSRAM
+ * with CONFIG_NN_DUAL_CORE_WORKER_STACK_PSRAM. If none is left, esp-nn stays
+ * single core; esp_nn_dual_core_active() reports which.
  */
 void esp_nn_dual_core_enable(void);
 

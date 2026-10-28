@@ -178,6 +178,15 @@ void app_main()
     //esp_nn_fully_connected_u8_test();
     //ESP_LOGI(TAG, "u8 tests done!\n");
 
+#ifdef CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE
+    /* Lowest free stack the dual-core worker reached over all the suites. */
+    TaskHandle_t worker = xTaskGetHandle("esp_nn_worker");
+    if (worker != NULL) {
+        printf("WORKER_STACK: min_free=%u of %u bytes\n",
+               (unsigned)uxTaskGetStackHighWaterMark(worker),
+               (unsigned)CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE);
+    }
+#endif
     printf("TEST_SUMMARY: passed=%"PRIu32", failed=%"PRIu32", skipped=%"PRIu32"\n",
         esp_nn_test_passed, esp_nn_test_failed, esp_nn_test_skipped);
     printf("TEST_RESULT: %s\n", esp_nn_test_failed == 0 ? "PASS" : "FAIL");
