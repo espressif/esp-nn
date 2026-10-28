@@ -544,7 +544,7 @@ void esp_nn_depthwise_conv_s8_test()
             memset(scratch_guard, SCRATCH_GUARD_BYTE, SCRATCH_GUARD_SZ);
             esp_nn_set_depthwise_conv_scratch_buf(scratch_buf + align_sz);
         }
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
         if (itr >= 10 && itr <= 12) {
             preferred_depthwise_scratch = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
             if (preferred_depthwise_scratch == NULL) {
@@ -626,7 +626,7 @@ void esp_nn_depthwise_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
         esp_nn_set_depthwise_conv_preferred_scratch_buf_esp32s3(NULL, 0);
 #endif
         if (input_orig) {
@@ -1488,7 +1488,7 @@ void esp_nn_conv_s8_test()
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
             esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
         }
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
         /* 27/28: batched tail; 31: OC-panel driver, both with a preferred buffer. */
         if (itr == 27 || itr == 28 || itr == 31) {
             preferred_scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 32);
@@ -1535,7 +1535,7 @@ void esp_nn_conv_s8_test()
         printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
-#if CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
         esp_nn_set_conv_preferred_scratch_buf_esp32s3(NULL, 0);
 #endif
         /* Restore original filter pointer (may have been offset for alignment test) */
