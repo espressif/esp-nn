@@ -147,7 +147,13 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
 
 #if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
 /**
- * Enable PIE and its unaligned 128-bit loads (CFG bit 1) and stores (bit 0).
+ * Enable PIE's unaligned 128-bit loads (CFG bit 1) and stores (bit 0).
+ *
+ * PIE itself is left to FreeRTOS: the first PIE instruction in a task traps,
+ * and the trap saves the previous owner's PIE registers before enabling it
+ * (IDF >= 5.3, the first release with ESP32-P4). Turning PIE on by hand
+ * (CSR 0x7f2) skips that trap, so two tasks using PIE on one core would
+ * clobber each other's registers.
  *
  * With bit 1 clear, esp.vld.128 silently loads from addr & ~15, so any kernel
  * reading a tensor pointer it does not own (filter, input) gets wrong data.
@@ -160,7 +166,6 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
  */
 #define ESP_NN_PIE_ENABLE() do { \
     asm volatile ( \
-        "csrsi  0x7f2, 0b01        \n\t" \
         "esp.movx.r.cfg x29        \n\t" \
         "ori    x29, x29, 0b11     \n\t" \
         "esp.movx.w.cfg x29        \n\t" \
