@@ -162,6 +162,10 @@ extern void esp_nn_s8_to_s16_esp32s3(const int8_t *src, int16_t *dst, const int 
 #ifndef ESP_NN_DW_S8_KX1
 #define ESP_NN_DW_S8_KX1 1
 #endif
+/* The (K,1) int8 kernel sums raw s8 x s8 products in the 20-bit QACC lanes:
+ * 32 taps of the largest product (127 * 128 = 16256) are the most that
+ * always fit in +-2^19. Taller filters take the general path. */
+#define ESP_NN_DW_S8_KX1_MAX_TAPS 32
 
 /* Everything past the sixth argument goes by pointer: see the note in
  * esp_nn_depthwise_conv_s8_kx1_esp32s3.S about stack-argument placement. */
@@ -623,7 +627,8 @@ int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims
      * For a 384x1x128 layer that is ~1.3 kB against 99 kB for the int16 path
      * it replaces. */
     if (ESP_NN_DW_S8_KX1 && (ch_mult == 1) && (input_wd == 1) &&
-            (filter_wd == 1) && (out_wd == 1) && (stride_wd == 1) &&
+            (filter_wd == 1) && (filter_ht <= ESP_NN_DW_S8_KX1_MAX_TAPS) &&
+            (out_wd == 1) && (stride_wd == 1) &&
             (pad_wd == 0) && (channels % 16 == 0)) {
         return channels * 4 + 2 * filter_ht * channels + 64;
     }
@@ -896,7 +901,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     /* Width-1 tensor with a (K,1) filter: int8 in place. Alignment is
      * arranged inside the helper, not demanded of the caller. */
     if (ESP_NN_DW_S8_KX1 && (ch_mult == 1) && (input_wd == 1) &&
-            (filter_wd == 1) &&
+            (filter_wd == 1) && (filter_ht <= ESP_NN_DW_S8_KX1_MAX_TAPS) &&
             (out_wd == 1) && (stride_wd == 1) && (pad_wd == 0) &&
             (channels % 16 == 0)) {
         esp_nn_depthwise_conv_s8_mult1_kx1(input_data, input_ht, channels,
@@ -1111,13 +1116,18 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(
                                         src, dst, row_len, input_offset);
                             } else if (r > 0 && r + 1 < input_ht &&
+                                       row_len >= 48 &&
                                        (((uintptr_t)dst & 15) == 0)) {
                                 /* row_len is the BYTE stride of an int8 row:
                                  * at channels % 16 != 0 alternate rows start
                                  * 8-byte aligned and the aligned converter's
                                  * 128-bit loads need 16. Interior rows have
                                  * neighbours covering the QUP window's
-                                 * over-read. Cases 21/22 cover this path. */
+                                 * over-read. Cases 21/22 cover this path.
+                                 * The converter needs size >= 48: below
+                                 * that its vector byte count goes negative
+                                 * and the scalar tail starts before dst
+                                 * (width-1, 8-channel rows; cases 35/36). */
                                 esp_nn_s8_to_s16_with_offset_row_esp32s3(
                                         src, dst, row_len, input_offset);
                             } else {
