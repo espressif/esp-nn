@@ -16,14 +16,16 @@
     .align  4
     .literal_position
 
-    # Program Unit: esp_nn_max_pool_s8_esp32s3
-    .type   esp_nn_max_pool_s8_esp32s3, @function
+    # Program Unit: esp_nn_max_pool_s8_esp32s3_asm
+    .type   esp_nn_max_pool_s8_esp32s3_asm, @function
     .align   4
-    .global esp_nn_max_pool_s8_esp32s3
+    .global esp_nn_max_pool_s8_esp32s3_asm
 
 // no of channels must be multiple of 4
+// the C wrapper in esp_nn_max_pool_s8_esp32s3.c falls back to the reference
+// when a buffer is not 8-byte aligned (ee.vld.l.64 / ee.vst.l.64 truncate)
 
-esp_nn_max_pool_s8_esp32s3: # 0x4
+esp_nn_max_pool_s8_esp32s3_asm: # 0x4
     # int8_min = 0
     # gra_spill_temp_0 = 4
     # gra_spill_temp_1 = 8
@@ -435,4 +437,4 @@ esp_nn_max_pool_s8_esp32s3: # 0x4
 
     retw.n                          # [0] // exit
 
-    .size   esp_nn_max_pool_s8_esp32s3, . - esp_nn_max_pool_s8_esp32s3
+    .size   esp_nn_max_pool_s8_esp32s3_asm, . - esp_nn_max_pool_s8_esp32s3_asm
