@@ -708,7 +708,8 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 59; itr++) {
+    for (int itr = 0; itr < 60; itr++) {
+        int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -746,6 +747,11 @@ void esp_nn_conv_s8_test()
             filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
             stride_wd = 2; stride_ht = 2;
             force_out_wd = 1; force_out_ht = 4;
+            break;
+        case 59: // 1x1 batched, 16 positions (tail 0), scratch 2 bytes off 16
+            in_wd = 4; in_ht = 4; in_channels = 8; out_channels = 8;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
             break;
         case 29: // grouped 1x1 conv (groups=4)
             in_wd = 8;
@@ -1527,14 +1533,21 @@ void esp_nn_conv_s8_test()
         int scratch_buf_size = esp_nn_get_conv_scratch_size(&input_dims, &filter_dims,
                                                             &output_dims, &conv_params);
         if (scratch_buf_size > 0) {
-            scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 16);
+            scratch_buf = ESP_NN_TEST_ALLOC(scratch_buf_size + 48);
             if (scratch_buf == NULL) {
                 TEST_SKIP("[%3d] scratch_buf alloc failed size %d\n",
                           itr, scratch_buf_size);
                 goto conv_s8_cleanup;
             }
             int align_sz = 16 - (((int32_t) scratch_buf) & 0xf);
-            esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
+            if (itr == 59) {
+                /* Scratch 2 bytes past a 16-byte boundary, guarded in front. */
+                scratch_front = (int8_t *) scratch_buf + align_sz;
+                memset(scratch_front, 0xA5, 18);
+                esp_nn_set_conv_scratch_buf(scratch_front + 18);
+            } else {
+                esp_nn_set_conv_scratch_buf(scratch_buf + align_sz);
+            }
         }
 #if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
         /* 27/28: batched tail; 31: OC-panel driver, both with a preferred buffer. */
@@ -1571,6 +1584,14 @@ void esp_nn_conv_s8_test()
 
         /* disable profiler */
         profile_opt_end();
+
+        for (int i = 0; scratch_front && i < 18; i++) {
+            if (scratch_front[i] != (int8_t) 0xA5) {
+                TEST_FAIL("[%3d] scratch underrun: wrote %d bytes before the"
+                          " scratch pointer\n", itr, 18 - i);
+                goto conv_s8_cleanup;
+            }
+        }
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {

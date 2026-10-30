@@ -214,17 +214,18 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
         int32_t activation_min, int32_t activation_max, void *scratch)
 {
     const int tail = spatial_size & 7;
+    /* The asm needs a 16-byte aligned buffer. The getter reserves the margin. */
+    uint8_t *work = (uint8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);
 
     if (tail < 2) {
         esp_nn_conv_s8_mult8_1x1_rows(
                 input, spatial_size, in_channels, input_offset,
                 filter_data, bias, out_data, out_channels,
                 out_offset, out_shift, out_mult, activation_min, activation_max,
-                scratch);
+                work);
         return;
     }
 
-    uint8_t *work = (uint8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);
     int8_t *tail_input = (int8_t *)(work + 16 * in_channels);
     int8_t *tail_output = tail_input + 8 * in_channels;
     const int vector_positions = spatial_size - tail;
