@@ -21,9 +21,9 @@
     .align   4
     .global esp_nn_max_pool_s8_esp32s3_asm
 
-// no of channels must be multiple of 4
-// the C wrapper in esp_nn_max_pool_s8_esp32s3.c falls back to the reference
-// when a buffer is not 8-byte aligned (ee.vld.l.64 / ee.vst.l.64 truncate)
+// Called only from esp_nn_max_pool_s8_esp32s3() in esp_nn_max_pool_s8_esp32s3.c:
+// channels % 4 == 0, buffers 8-byte aligned when channels % 8 == 0
+// (ee.vld.l.64 / ee.vst.l.64) and 4-byte aligned otherwise (ee.vldbc.32 / s32i)
 
 esp_nn_max_pool_s8_esp32s3_asm: # 0x4
     # int8_min = 0
