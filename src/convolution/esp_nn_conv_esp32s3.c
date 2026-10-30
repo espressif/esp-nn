@@ -839,7 +839,10 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
         int32_t filter_alignment_padding = 16 - (filter_row_size & 15);
         int8_t *filter_data_aligned = (int8_t *) filter_data;
         int8_t *input_padded = (int8_t *) input;
-        int8_t *scratch_data = (int8_t *) scratch_buffer;
+        /* The asm reads the filter copy and the padded input with
+         * ee.vld.128, which drops the low 4 address bits. Align the copies
+         * to 16. The getter reserves 16 bytes for this. */
+        int8_t *scratch_data = (int8_t *)(((uintptr_t) scratch_buffer + 15) & ~(uintptr_t) 15);
         int new_input_wd = input_wd, new_input_ht = input_ht;
         if (filter_alignment_padding != 16) {
             // pad filter_data
