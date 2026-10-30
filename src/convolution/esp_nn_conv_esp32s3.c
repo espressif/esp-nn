@@ -608,6 +608,11 @@ void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
+int esp_nn_conv_scratch_ready_esp32s3(void)
+{
+    return scratch_buffer != NULL && (((uintptr_t) scratch_buffer) & 15) == 0;
+}
+
 void esp_nn_set_conv_preferred_scratch_buf_esp32s3(void *buf, size_t size)
 {
     preferred_scratch_buffer = (uint8_t *)buf;

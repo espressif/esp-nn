@@ -124,6 +124,8 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
+/* Nonzero when the conv scratch buffer is set and 16-byte aligned. */
+int esp_nn_conv_scratch_ready_ansi(void);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,
@@ -263,6 +265,24 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
                                     const int32_t* out_mult,
                                     const int32_t activation_min,
                                     const int32_t activation_max);
+
+/* Returns 1 when the batch was evaluated as a 1x1 convolution.
+ * A nonzero weight zero-point, a small shape, an unaligned input or filter,
+ * or a missing conv scratch buffer returns 0 and leaves out_data untouched. */
+int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches);
 
 void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t input_offset,

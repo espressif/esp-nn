@@ -14,6 +14,8 @@
 #include <esp_nn.h>
 #include "test_utils.h"
 
+#include "esp_rom_sys.h"
+
 
 void esp_nn_fully_connected_s8_test()
 {
@@ -861,5 +863,186 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         }
     fc_batch_cleanup:
         free(in_o); free(flt_o); free(ob_o); free(or_o); free(out_mult); free(out_shift);
+    }
+}
+
+/* A weight zero-point of 0 is the same product as a 1x1 convolution. These
+ * cases check that product against the per-row reference, and print the
+ * median cycle count of the batched call. Scratch is the conv scratch buffer:
+ * the fast path uses it when the shape qualifies. The other cases stay on
+ * fully connected (nonzero weight zero-point, unaligned input, no scratch,
+ * or a tiny shape) and must still match. */
+void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
+{
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
+    const struct {
+        const char *name;
+        int batches, row_len, out_ch;
+        int32_t in_off, filt_off;
+        int misalign_input;
+        int set_scratch;
+        int with_bias;
+    } cfg[] = {
+        { "m16_k64_n64",    16,  64,  64, 128, 0, 0, 1, 1 },
+        { "m32_k64_n128",   32,  64, 128, 128, 0, 0, 1, 1 },
+        { "m4_k128_n192",    4, 128, 192, 128, 0, 0, 1, 1 },
+        { "m4_k128_n200",    4, 128, 200, 128, 0, 0, 1, 1 },
+        { "m64_k128_n256",  64, 128, 256, 128, 0, 0, 1, 1 },
+        { "m48_k160_n32",   48, 160,  32,   5, 0, 0, 1, 1 },
+        { "filt7_m16_k64_n64", 16, 64, 64, 128, 7, 0, 1, 1 },
+        { "misalign_m16_k64_n64", 16, 64, 64, 128, 0, 1, 1, 1 },
+        { "noscratch_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 1 },
+        { "tiny_m2_k32_n32", 2, 32, 32, 128, 0, 0, 1, 1 },
+    };
+    const int n_cfg = (int) (sizeof(cfg) / sizeof(cfg[0]));
+    const int32_t activation_min = -128, activation_max = 127;
+    const int32_t out_offset = 5;
+    const int reps = 5;
+
+    for (int c = 0; c < n_cfg; c++) {
+        const int B = cfg[c].batches;
+        const int row_len = cfg[c].row_len;
+        const int out_ch = cfg[c].out_ch;
+        const int prefix = cfg[c].misalign_input ? 1 : 0;
+        uint32_t seed = 2166136261u;
+        const char *np = cfg[c].name;
+        while (*np) {
+            seed ^= (uint8_t) *np++;
+            seed *= 16777619u;
+        }
+
+        int8_t *in_o = NULL, *flt_o = NULL, *ob_o = NULL, *or_o = NULL;
+        int32_t *out_mult = NULL, *out_shift = NULL, *bias = NULL;
+        void *scratch_raw = NULL;
+        int8_t *input = NULL, *filter = NULL, *out_batched = NULL, *out_ref = NULL;
+
+        in_o = ESP_NN_TEST_ALLOC((size_t) B * row_len + 32 + prefix);
+        flt_o = ESP_NN_TEST_ALLOC((size_t) row_len * out_ch + 32);
+        ob_o = ESP_NN_TEST_ALLOC((size_t) B * out_ch + 32);
+        or_o = ESP_NN_TEST_ALLOC((size_t) B * out_ch + 32);
+        out_mult = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        out_shift = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        if (cfg[c].with_bias) {
+            bias = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        }
+        if (!in_o || !flt_o || !ob_o || !or_o || !out_mult || !out_shift ||
+                (cfg[c].with_bias && !bias)) {
+            TEST_SKIP("[%s] alloc failed\n", cfg[c].name);
+            goto case_cleanup;
+        }
+        input = (int8_t *) (((uintptr_t) in_o + 15) & ~(uintptr_t) 15);
+        input += prefix;
+        filter = (int8_t *) (((uintptr_t) flt_o + 15) & ~(uintptr_t) 15);
+        out_batched = (int8_t *) (((uintptr_t) ob_o + 15) & ~(uintptr_t) 15);
+        out_ref = (int8_t *) (((uintptr_t) or_o + 15) & ~(uintptr_t) 15);
+
+        for (int i = 0; i < B * row_len; i++) {
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            input[i] = (int8_t) ((int) (seed % 256) - 128);
+        }
+        for (int i = 0; i < row_len * out_ch; i++) {
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            filter[i] = (int8_t) ((int) (seed % 256) - 128);
+        }
+        for (int i = 0; i < out_ch; i++) {
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            out_mult[i] = INT32_MAX / row_len + (int32_t) (seed % 1000);
+            out_shift[i] = -8;
+            if (bias) {
+                bias[i] = (int32_t) (seed % 21) - 10;
+            }
+        }
+
+        if (cfg[c].set_scratch) {
+            data_dims_t in_dims = { .width = 1, .height = B, .channels = row_len };
+            data_dims_t filt_dims = { .width = 1, .height = 1, .channels = row_len };
+            data_dims_t out_dims = { .width = 1, .height = B, .channels = out_ch };
+            conv_params_t conv_params = {
+                .in_offset = cfg[c].in_off,
+                .out_offset = out_offset,
+                .stride = { .width = 1, .height = 1 },
+                .padding = { .width = 0, .height = 0 },
+                .dilation = { .width = 1, .height = 1 },
+                .activation = { .min = activation_min, .max = activation_max },
+            };
+            int scratch_bytes = esp_nn_get_conv_scratch_size(&in_dims, &filt_dims,
+                                                             &out_dims, &conv_params);
+            if (scratch_bytes < 0) {
+                scratch_bytes = 0;
+            }
+#if IDF_HEAP_CAPS
+            scratch_raw = heap_caps_malloc((size_t) scratch_bytes + 32,
+                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+            if (!scratch_raw) {
+                scratch_raw = ESP_NN_TEST_ALLOC((size_t) scratch_bytes + 32);
+            }
+            if (!scratch_raw) {
+                TEST_SKIP("[%s] scratch alloc failed\n", cfg[c].name);
+                goto case_cleanup;
+            }
+            void *scratch = (void *) (((uintptr_t) scratch_raw + 15) & ~(uintptr_t) 15);
+            esp_nn_set_conv_scratch_buf(scratch);
+        } else {
+            esp_nn_set_conv_scratch_buf(NULL);
+        }
+
+        for (int b = 0; b < B; b++) {
+            esp_nn_fully_connected_per_ch_s8_ansi(
+                    input + b * row_len, cfg[c].in_off, row_len, filter,
+                    cfg[c].filt_off, bias, out_ref + b * out_ch, out_ch,
+                    out_offset, out_shift, out_mult, activation_min, activation_max);
+        }
+
+        uint32_t samples[5];
+        for (int r = 0; r < reps; r++) {
+            profile_opt_start();
+            esp_nn_fully_connected_per_ch_s8_batch(
+                    input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
+                    out_batched, out_ch, out_offset, out_shift, out_mult,
+                    activation_min, activation_max, B);
+            samples[r] = profile_opt_end();
+        }
+        for (int i = 1; i < reps; i++) {
+            uint32_t v = samples[i];
+            int j = i;
+            while (j > 0 && samples[j - 1] > v) {
+                samples[j] = samples[j - 1];
+                j--;
+            }
+            samples[j] = v;
+        }
+        const uint32_t cycles = samples[reps / 2];
+        const uint32_t ticks_per_us = esp_rom_get_cpu_ticks_per_us();
+        const uint32_t us_x100 = ticks_per_us
+                ? (uint32_t) (((uint64_t) cycles * 100ull) / ticks_per_us) : 0;
+
+        int mismatch = 0;
+        const int n_out = B * out_ch;
+        for (int i = 0; i < n_out; i++) {
+            if (out_ref[i] != out_batched[i]) {
+                mismatch++;
+            }
+        }
+        printf("FC_BATCH_1X1 name=%s cycles=%" PRIu32 " us_x100=%" PRIu32
+               " mismatch=%d\n",
+               cfg[c].name, cycles, us_x100, mismatch);
+        if (mismatch != 0) {
+            TEST_FAIL("[%s] failed, %d of %d outputs differ\n",
+                      cfg[c].name, mismatch, n_out);
+        } else {
+            TEST_PASS("[%s] passed\n", cfg[c].name);
+        }
+
+    case_cleanup:
+        esp_nn_set_conv_scratch_buf(NULL);
+        free(in_o);
+        free(flt_o);
+        free(ob_o);
+        free(or_o);
+        free(out_mult);
+        free(out_shift);
+        free(bias);
+        free(scratch_raw);
     }
 }

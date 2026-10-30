@@ -1725,6 +1725,11 @@ void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
+int esp_nn_conv_scratch_ready_riscv_pie(void)
+{
+    return scratch_buffer != NULL && (((uintptr_t) scratch_buffer) & 15) == 0;
+}
+
 typedef void (*conv_s8_pie_fn_t)(const data_dims_t *, const int8_t *,
                                  const data_dims_t *, const int8_t *,
                                  const int32_t *, const data_dims_t *,

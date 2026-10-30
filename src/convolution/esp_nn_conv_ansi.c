@@ -29,6 +29,11 @@ void esp_nn_set_conv_scratch_buf_ansi(const void *buf)
 
 }
 
+int esp_nn_conv_scratch_ready_ansi(void)
+{
+    return 0;
+}
+
 /**
  * Assumption 1: i/p channels == o/p channels
  * Assumption 2: Pointers are valid

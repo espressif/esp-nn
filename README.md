@@ -122,6 +122,17 @@ The library contains optimised NN (Neural Network) functions for various Espress
     PSRAM and a 64KB data cache
   - The `dual core` column is with `esp_nn_dual_core_enable()` called once at
     startup, which lets the heavier kernels split their work across both cores
+  - `esp_nn_fully_connected_per_ch_s8_batch` evaluates a weight zero-point of 0
+    as a 1×1 convolution when the matrix is large enough: at least 4 rows, an
+    inner dimension of at least 64 and a multiple of 8, and at least 16
+    outputs. The input and the filter must be 8-byte aligned, and
+    `esp_nn_set_conv_scratch_buf` must already hold a 16-byte-aligned buffer
+    of at least `esp_nn_get_conv_scratch_size` for that 1×1 shape (height =
+    batch, width = 1, channels = the inner dimension). The second core is the
+    one already inside that convolution, so `esp_nn_dual_core_enable()` still
+    has to have been called. A nonzero weight zero-point, an unaligned
+    pointer, a missing scratch buffer, or a smaller shape stays on the fully
+    connected kernel. The input zero-point may be nonzero either way.
   - `Without ESP-NN` case is when `esp-nn` is completely disabled by removing below flag from [CMakeLists.txt](CMakeLists.txt):
     ```cmake
       # enable ESP-NN optimizations by Espressif
