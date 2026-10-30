@@ -161,6 +161,7 @@ void app_main()
     RUN_TEST(esp_nn_fully_connected_per_ch_s8_test, "fc_per_ch_s8");
     RUN_TEST(esp_nn_fully_connected_per_ch_s8_batch_test, "fc_per_ch_s8_batch");
     RUN_TEST(esp_nn_fully_connected_align_s8_test, "fc_align_s8");
+    RUN_TEST(esp_nn_alignment_s8_test, "alignment_s8");
     RUN_TEST(esp_nn_fully_connected_perf_test, "fc_perf");
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");

@@ -65,7 +65,7 @@ PANIC_MARKERS = (
 EXPECTED_SUITES = (
     'add_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'depthwise_conv_s8', 'conv_s8',
     'relu6_s8', 'avg_pool_s8', 'max_pool_s8', 'fc_s8', 'fc_per_ch_s8',
-    'fc_per_ch_s8_batch', 'fc_align_s8', 'fc_perf', 'softmax_s8',
+    'fc_per_ch_s8_batch', 'fc_align_s8', 'alignment_s8', 'fc_perf', 'softmax_s8',
     'hard_swish_s8', 'mean_nhwc_s8',
 )
 
