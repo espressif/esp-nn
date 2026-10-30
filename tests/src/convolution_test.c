@@ -708,7 +708,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 66; itr++) {
+    for (int itr = 0; itr < 67; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -757,6 +757,12 @@ void esp_nn_conv_s8_test()
             in_wd = 6; in_ht = 6; in_channels = 6; out_channels = 8;
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
+            break;
+        case 66: // 1x1 with explicit pad 1: 4x4 -> 6x6, the border is pad only
+            in_wd = 4; in_ht = 4; in_channels = 3; out_channels = 4;
+            filter_ht = 1; filter_wd = 1; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            force_out_wd = 6; force_out_ht = 6;
             break;
         case 29: // grouped 1x1 conv (groups=4)
             in_wd = 8;
