@@ -27,6 +27,9 @@ before_script:
     # Build examples
     - for TARGET in $EXAMPLE_TARGETS; do
     - idf.py $IDF_EXTRA_FLAGS set-target $TARGET build
+    # Kernels must not size their stack from tensor shapes: -Werror=vla covers
+    # the C form, this covers the built code.
+    - if [ "$TARGET" = "esp32s3" ]; then ${CI_PROJECT_DIR}/tools/ci/check_no_dynamic_stack.sh; fi
     # set-target wipes the build dir, so merge before the next target
     - ${CI_PROJECT_DIR}/tools/ci/stage_merged_bin.sh $TARGET
     - done
