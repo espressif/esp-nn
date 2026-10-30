@@ -682,6 +682,15 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
 
+    /* The fast paths fill pad cells with (int8_t)-input_offset.
+     * For input_offset -128 that value is 128, which does not fit int8.
+     * Use the reference for it. */
+    if (input_offset < -127) {
+        esp_nn_conv_s8_ansi_mt_split(input_dims, input, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
+
     /* Grouped conv (filter_ch < input_ch): run each group through the
      * optimized path via repacked slices; reference row-split otherwise. */
     if (channels != filter_dims->channels) {

@@ -1862,6 +1862,15 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
         return;
     }
 
+    /* The fast paths fill pad cells with (int8_t)-input_offset.
+     * For input_offset -128 that value is 128, which does not fit int8.
+     * Use the reference for it. */
+    if (conv_params->in_offset < -127) {
+        esp_nn_conv_s8_ansi_mt_split(input_dims, input, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params, quant_data);
+        return;
+    }
+
     /* Grouped conv (filter_ch < input_ch) must be caught before any fast
      * path: they all assume full-depth filters. Run each group through the
      * optimized path via repacked slices (recursing into this dispatcher

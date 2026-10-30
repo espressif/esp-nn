@@ -708,7 +708,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 61; itr++) {
+    for (int itr = 0; itr < 66; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -1354,6 +1354,39 @@ void esp_nn_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             force_out_ht = 4; /* SAME: ceil(8/2); derived VALID value would be 3 */
+            break;
+        /* 61-65: in_offset -128. Then -in_offset (128) does not fit int8, so a
+         * pad cell cannot be stored as -in_offset. 61, 62, 65 are padded;
+         * 63 and 64 are the unpadded controls. */
+        case 61: // 3x3 pad 1, in_ch 8
+            in_wd = 4; in_ht = 4; in_channels = 8; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128;
+            break;
+        case 62: // 3x3 pad 1, in_ch 3
+            in_wd = 5; in_ht = 5; in_channels = 3; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128;
+            break;
+        case 63: // 3x3 no pad
+            in_wd = 4; in_ht = 4; in_channels = 8; out_channels = 8;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128;
+            break;
+        case 64: // 1x1, in_ch not a multiple of 8
+            in_wd = 4; in_ht = 4; in_channels = 12; out_channels = 8;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128;
+            break;
+        case 65: // 3x3 pad 1, filter over 96 KB
+            in_wd = 6; in_ht = 6; in_channels = 64; out_channels = 192;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128;
             break;
         default: // ch % 8 == 0
             in_wd = 8;
