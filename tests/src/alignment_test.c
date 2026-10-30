@@ -11,9 +11,10 @@
  * faulting (esp-nn#34). Every case is compared against the ANSI reference and
  * the output carries guard bands on both sides.
  *
- * Pooling is swept at 8-byte offsets only: its assembly uses ee.vld.l.64 /
- * ee.vst.l.64 with no alignment handling (unlike conv/depthwise, which align
- * copies or take a scalar path), so 0 and 8 are the supported cases today.
+ * Pooling is swept at every offset: its assembly has an 8-byte path (channels
+ * % 8 == 0) and a 4-byte path (% 8 == 4) and defers to the scalar/reference
+ * path below that, and the wrapper uses the reference for channels % 4 != 0
+ * (where the assembly used to write nothing).
  */
 
 #include <stdint.h>
@@ -32,8 +33,9 @@
 static const int ag_aligns[] = { 0, 1, 4, 8, 12 };
 #define AG_N_ALIGNS ((int)(sizeof(ag_aligns) / sizeof(ag_aligns[0])))
 
-/* Pooling's supported offsets (see the file comment). */
-static const int ag_pool_aligns[] = { 0, 8 };
+/* Pooling offsets: 0/8 take the 8-byte path (channels % 8 == 0), 4/12 the
+ * 4-byte path (% 8 == 4), and the odd ones the scalar/reference fallback. */
+static const int ag_pool_aligns[] = { 0, 1, 4, 8, 12 };
 #define AG_N_POOL_ALIGNS ((int)(sizeof(ag_pool_aligns) / sizeof(ag_pool_aligns[0])))
 
 static bool ag_equal(const int8_t *a, const int8_t *b, int size)
@@ -543,14 +545,16 @@ void esp_nn_alignment_s8_test(void)
     ag_dw_case(5, 5, 8, 8, 3, 3, 1, 1);
     ag_dw_case(5, 5, 6, 2, 3, 3, 1, 1);
 
-    /* pooling: SIMD channels (ch % 8 == 0), the ch % 8 == 4 path, and the
-     * scalar avg_pool path for channels % 4 != 0 (max_pool has no scalar
-     * path: non-multiple-of-4 channels are unsupported on S3) */
+    /* pooling: 8-byte path (ch % 8 == 0), 4-byte path (ch % 8 == 4), the
+     * scalar avg_pool path for channels % 4 != 0, and max_pool with
+     * channels % 4 != 0, which the wrapper now sends to the reference
+     * (the assembly used to write nothing) */
     ag_pool_case(true, 5, 5, 8, 3, 1, 0);
     ag_pool_case(true, 5, 5, 12, 3, 2, 1);
     ag_pool_case(true, 5, 5, 6, 3, 1, 0);
     ag_pool_case(false, 5, 5, 8, 3, 1, 0);
     ag_pool_case(false, 5, 5, 12, 3, 2, 1);
+    ag_pool_case(false, 5, 5, 6, 3, 1, 0);
 
     /* scalar-reference kernels */
     ag_mean_case(4, 4, 8);
