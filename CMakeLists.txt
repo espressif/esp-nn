@@ -53,6 +53,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/fully_connected/esp_nn_fc_s8_mac16_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_s8_esp32s3.S"
         "src/fully_connected/esp_nn_fully_connected_per_ch_s8_esp32s3.S"
+        "src/pooling/esp_nn_max_pool_s8_esp32s3.c"
         "src/pooling/esp_nn_max_pool_s8_esp32s3.S"
         "src/pooling/esp_nn_avg_pool_s8_esp32s3.c"
         "src/pooling/esp_nn_avg_pool_s8_esp32s3.S"
@@ -86,6 +87,11 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 else()
     target_compile_options(${COMPONENT_LIB} PRIVATE  -O2 -Wno-unused-function)
 endif()
+
+# Kernels run on the caller's task stack, so an array sized from a tensor
+# shape can overflow it on large shapes: any VLA in this component is a build
+# error (-Werror=vla also enables -Wvla).
+target_compile_options(${COMPONENT_LIB} PRIVATE -Werror=vla)
 
 if(CONFIG_NN_SKIP_NUDGE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SKIP_NUDGE)
