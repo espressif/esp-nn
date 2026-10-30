@@ -61,6 +61,12 @@ extern "C" {
 #ifndef esp_nn_conv_scratch_ready
 #define esp_nn_conv_scratch_ready esp_nn_conv_scratch_ready_ansi
 #endif
+#ifndef esp_nn_set_conv_scratch_buf_sized
+#define esp_nn_set_conv_scratch_buf_sized esp_nn_set_conv_scratch_buf_sized_ansi
+#endif
+#ifndef esp_nn_conv_scratch_fits
+#define esp_nn_conv_scratch_fits esp_nn_conv_scratch_fits_ansi
+#endif
 /* Feature flag: consumers can detect the batched per-channel FC API. */
 #define ESP_NN_HAS_FC_S8_BATCH 1
 

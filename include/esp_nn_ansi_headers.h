@@ -10,6 +10,8 @@
  * @file        Header definitions to include for esp_nn reference functions
  */
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 /************************** Basic math functions ****************************/
 
@@ -124,8 +126,14 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
+/* Records `buf` and its byte length. The length is what lets a later fully
+ * connected call decide whether this buffer can hold a 1x1 workspace. */
+void esp_nn_set_conv_scratch_buf_sized_ansi(const void *buf, size_t size);
 /* Nonzero when the conv scratch buffer is set and 16-byte aligned. */
 int esp_nn_conv_scratch_ready_ansi(void);
+/* Nonzero when a 16-byte-aligned scratch buffer has a recorded size of at
+ * least `bytes`. A buffer set without a length does not qualify. */
+int esp_nn_conv_scratch_fits_ansi(int bytes);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,
@@ -268,7 +276,8 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
 
 /* Returns 1 when the batch was evaluated as a 1x1 convolution.
  * A nonzero weight zero-point, a small shape, an unaligned input or filter,
- * or a missing conv scratch buffer returns 0 and leaves out_data untouched. */
+ * or a conv scratch buffer that is missing or smaller than this 1x1 shape
+ * returns 0 and leaves out_data untouched. */
 int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,

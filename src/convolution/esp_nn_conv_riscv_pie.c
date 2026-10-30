@@ -46,6 +46,7 @@
  *       of 8/16 as per function needs
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <esp_nn_defs.h>
 #include <esp_nn_ansi_headers.h>
@@ -70,6 +71,9 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                               const quant_data_t *quant_data);
 
 static int16_t *scratch_buffer = NULL;
+/* Byte length recorded by the sized setter. Zero means the length is unknown,
+ * which the fully connected dispatch treats as "do not use this buffer". */
+static size_t scratch_buffer_size = 0;
 
 /*
  * XACC dot of `rows` filter rows against strided input rows, double-buffered
@@ -1723,11 +1727,27 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
 void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
 {
     scratch_buffer = (int16_t *) buf;
+    scratch_buffer_size = 0;
+}
+
+void esp_nn_set_conv_scratch_buf_sized_riscv_pie(void *buf, size_t size)
+{
+    scratch_buffer = (int16_t *) buf;
+    scratch_buffer_size = (buf != NULL) ? size : 0;
 }
 
 int esp_nn_conv_scratch_ready_riscv_pie(void)
 {
     return scratch_buffer != NULL && (((uintptr_t) scratch_buffer) & 15) == 0;
+}
+
+int esp_nn_conv_scratch_fits_riscv_pie(int bytes)
+{
+    if (bytes < 0 || scratch_buffer == NULL) {
+        return 0;
+    }
+    return (((uintptr_t) scratch_buffer) & 15) == 0 &&
+            scratch_buffer_size >= (size_t) bytes;
 }
 
 typedef void (*conv_s8_pie_fn_t)(const data_dims_t *, const int8_t *,

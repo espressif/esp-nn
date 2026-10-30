@@ -125,6 +125,9 @@ extern void esp_nn_conv_s8_1x1(const int8_t *input,
 #endif
 
 static int16_t *scratch_buffer = NULL;
+/* Byte length recorded by the sized setter. Zero means the length is unknown,
+ * which the fully connected dispatch treats as "do not use this buffer". */
+static size_t scratch_buffer_size = 0;
 static uint8_t *preferred_scratch_buffer = NULL;
 static size_t preferred_scratch_size = 0;
 
@@ -606,11 +609,40 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
 void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
 {
     scratch_buffer = (int16_t *) buf;
+    scratch_buffer_size = 0;
+}
+
+void esp_nn_set_conv_scratch_buf_sized_esp32s3(void *buf, size_t size)
+{
+    scratch_buffer = (int16_t *) buf;
+    scratch_buffer_size = (buf != NULL) ? size : 0;
 }
 
 int esp_nn_conv_scratch_ready_esp32s3(void)
 {
     return scratch_buffer != NULL && (((uintptr_t) scratch_buffer) & 15) == 0;
+}
+
+int esp_nn_conv_scratch_fits_esp32s3(int bytes)
+{
+    if (bytes < 0) {
+        return 0;
+    }
+    const size_t need = (size_t) bytes;
+    if (scratch_buffer != NULL &&
+            (((uintptr_t) scratch_buffer) & 15) == 0 &&
+            scratch_buffer_size >= need) {
+        return 1;
+    }
+    /* The 1x1 kernel writes the preferred buffer, and leaves the ordinary
+     * scratch untouched, when the preferred buffer is aligned and covers the
+     * operation. */
+    if (preferred_scratch_buffer != NULL &&
+            (((uintptr_t) preferred_scratch_buffer) & 15) == 0 &&
+            preferred_scratch_size >= need) {
+        return 1;
+    }
+    return 0;
 }
 
 void esp_nn_set_conv_preferred_scratch_buf_esp32s3(void *buf, size_t size)

@@ -868,8 +868,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
 
 /* A weight zero-point of 0 is the same product as a 1x1 convolution. These
  * cases check that product against the per-row reference, and print the
- * median cycle count of the batched call. Scratch is the conv scratch buffer:
- * the fast path uses it when the shape qualifies. The other cases stay on
+ * median cycle count of the batched call. Scratch is the conv scratch buffer,
+ * installed with its byte length: the fast path uses it when the shape
+ * qualifies and that length covers the 1x1 workspace. The other cases stay on
  * fully connected (nonzero weight zero-point, unaligned input, no scratch,
  * or a tiny shape) and must still match. */
 void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
@@ -982,7 +983,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
                 goto case_cleanup;
             }
             void *scratch = (void *) (((uintptr_t) scratch_raw + 15) & ~(uintptr_t) 15);
-            esp_nn_set_conv_scratch_buf(scratch);
+            esp_nn_set_conv_scratch_buf_sized(scratch, (size_t) scratch_bytes);
         } else {
             esp_nn_set_conv_scratch_buf(NULL);
         }

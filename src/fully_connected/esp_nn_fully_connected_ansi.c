@@ -87,8 +87,10 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
  * height = batches, width = 1, in_ch = row_len, out_ch = out_channels.
  * The conv kernel already splits that work across both cores when
  * esp_nn_dual_core_enable() has been called. Small shapes, a nonzero weight
- * zero-point, an unaligned input or filter, and a missing scratch buffer stay
- * on the fully connected kernel. The input zero-point may be nonzero. */
+ * zero-point, an unaligned input or filter, and a scratch buffer whose
+ * recorded size is below esp_nn_get_conv_scratch_size for that 1x1 shape stay
+ * on the fully connected kernel. The input zero-point may be nonzero. A
+ * buffer installed without a length has no recorded size. */
 int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,
@@ -107,8 +109,7 @@ int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
     if (filter_offset != 0 || batches < 4 || out_channels < 16 ||
             row_len < 64 || (row_len & 7) != 0 ||
             (((uintptr_t) input_data) & 7) != 0 ||
-            (((uintptr_t) filter_data) & 7) != 0 ||
-            !esp_nn_conv_scratch_ready()) {
+            (((uintptr_t) filter_data) & 7) != 0) {
         return 0;
     }
 
@@ -129,6 +130,11 @@ int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
         .dilation = { .width = 1, .height = 1 },
         .activation = { .min = activation_min, .max = activation_max },
     };
+    const int scratch_need = esp_nn_get_conv_scratch_size(
+            &input_dims, &filter_dims, &output_dims, &conv_params);
+    if (!esp_nn_conv_scratch_fits(scratch_need)) {
+        return 0;
+    }
     quant_data_t quant = {
         .shift = (int32_t *) out_shift,
         .mult = (int32_t *) out_mult,
