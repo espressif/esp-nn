@@ -711,7 +711,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 58; itr++) {
+    for (int itr = 0; itr < 59; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -826,6 +826,20 @@ void esp_nn_conv_s8_test()
             in_wd = itr == 53 ? 5 : 7;
             in_ht = in_wd;
             in_channels = 32;
+            out_channels = 32;
+            filter_ht = 1;
+            filter_wd = 1;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 58: // 1x1, input misaligned by 1. in_channels % 8 == 0, so the
+                 // S3 fast path would otherwise use ee.vld.64, which ignores
+                 // the low 3 address bits and returns a wrong tensor.
+            in_wd = 8;
+            in_ht = 4;
+            in_channels = 64;
             out_channels = 32;
             filter_ht = 1;
             filter_wd = 1;
@@ -1380,9 +1394,11 @@ void esp_nn_conv_s8_test()
         int filter_size = filter_wd * filter_ht * in_channels * out_channels;
         const bool misalign_filter = itr == 17 || itr == 53 || itr == 54;
         int filter_prefix = misalign_filter ? 5 : 0;
+        const bool misalign_input = itr == 58;
+        int input_prefix = misalign_input ? 1 : 0;
         int out_size = out_wd * out_ht * out_channels;
 
-        input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
+        input_orig = ESP_NN_TEST_ALLOC(in_size + 16 + input_prefix);
         out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         filter_data = ESP_NN_TEST_ALLOC(filter_size + filter_prefix);
@@ -1401,6 +1417,9 @@ void esp_nn_conv_s8_test()
         int8_t *input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
         int8_t *out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         int8_t *out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+        if (misalign_input) {
+            input += 1; /* ee.vld.64 ignores the low 3 address bits */
+        }
 
         /* Generate input data between -128 -> +127 */
         for (int i = 0; i < in_size; ++i) {

@@ -675,7 +675,9 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     /* 1x1 stride-1 conv */
     if (filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0 &&
             stride_wd == 1 && stride_ht == 1) {
-        if (channels % 8 == 0) {
+        /* ee.vld.64 ignores the low 3 address bits, so an unaligned input
+         * takes the routine below that accepts any alignment. */
+        if (channels % 8 == 0 && (((uintptr_t) input) & 7) == 0) {
             int spatial_size = input_wd * input_ht;
             int filter_bytes = channels * out_channels;
             if (filter_bytes > 24 * 1024) {
@@ -746,7 +748,8 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                     out_shift, out_mult, activation_min, activation_max,
                     pointwise_scratch);
         } else {
-            /* Fallback: handles any alignment + any channel count */
+            /* Any channel count, and a multiple of 8 whose input is not
+             * 8-byte aligned. */
             esp_nn_conv_s8_1x1(input, input_wd, input_ht, channels, input_offset,
                                filter_data, bias, out_data, out_channels, out_offset,
                                out_shift, out_mult, activation_min, activation_max,
