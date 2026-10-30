@@ -708,7 +708,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 58; itr++) {
+    for (int itr = 0; itr < 59; itr++) {
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
         out_offset = 3;
@@ -721,6 +721,11 @@ void esp_nn_conv_s8_test()
         int groups = 1;
 
         switch (itr) {
+        case 58: // 1x1 with more than 65535 positions: 32773x2 = 65546 (tail 2)
+            in_wd = 32773; in_ht = 2; in_channels = 8; out_channels = 8;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
         /* Input side smaller than the filter under TFLite SAME padding with
          * stride 2: the leading pad is 0, so (in - filter + pad) is negative.
          * Small in_channels sends these through the im2col path. */
@@ -1545,6 +1550,10 @@ void esp_nn_conv_s8_test()
                     preferred_aligned + (itr == 28), scratch_buf_size);
         }
 #endif
+
+        /* Different fill per output, so unwritten bytes show as mismatches */
+        memset(out_data_c, 0x11, out_size);
+        memset(out_data_opt, 0x5a, out_size);
 
         /* enable profiler */
         profile_c_start();
