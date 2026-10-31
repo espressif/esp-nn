@@ -10,6 +10,8 @@
  * @file        Header definitions to include for esp_nn reference functions
  */
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 /************************** Basic math functions ****************************/
 
@@ -124,6 +126,20 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
+
+/**
+ * @brief       Record a convolution scratch buffer and its byte length
+ *
+ * @note        The only public function added for the batched fully connected
+ *              1x1 path. Existing function signatures are unchanged. Call it
+ *              when esp_nn_fully_connected_per_ch_s8_batch should use that
+ *              path: buf must be 16-byte aligned and size must be at least
+ *              esp_nn_get_conv_scratch_size for the 1x1 shape. A missing
+ *              buffer, a short buffer, or a buffer installed with
+ *              esp_nn_set_conv_scratch_buf leaves that call on the fully
+ *              connected kernel.
+ */
+void esp_nn_set_conv_scratch_buf_sized_ansi(const void *buf, size_t size);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,

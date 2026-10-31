@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
 
@@ -37,6 +39,7 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_riscv_pie(const void *buf);
+void esp_nn_set_conv_scratch_buf_sized_riscv_pie(const void *buf, size_t size);
 
 /********************** function defines ***************************/
 
@@ -106,6 +109,7 @@ void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf);
 
 #define esp_nn_get_conv_scratch_size esp_nn_get_conv_scratch_size_riscv_pie
 #define esp_nn_set_conv_scratch_buf esp_nn_set_conv_scratch_buf_riscv_pie
+#define esp_nn_set_conv_scratch_buf_sized esp_nn_set_conv_scratch_buf_sized_riscv_pie
 
 #define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_riscv_pie
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_riscv_pie

@@ -15,6 +15,8 @@
 #include <stdint.h>
 
 #include <common_functions.h>
+#include <esp_nn.h>
+#include "esp_nn_fc_internal.h"
 
 void esp_nn_fully_connected_s8_ansi(const int8_t *input_data,
                                     const int32_t input_offset,
@@ -82,8 +84,70 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
     }
 }
 
+/* A per-channel batch with weight zero-point 0 is a 1x1 convolution:
+ * height = batches, width = 1, in_ch = row_len, out_ch = out_channels.
+ * The second core is the one that convolution already starts, so
+ * esp_nn_dual_core_enable() still has to have been called. Small shapes, a
+ * nonzero weight zero-point, an unaligned input or filter, and a scratch
+ * buffer whose recorded size is below esp_nn_get_conv_scratch_size for that
+ * 1x1 shape stay on the fully connected kernel. The input zero-point may be
+ * nonzero. A buffer installed without a length has no recorded size. */
+int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches)
+{
+    if (filter_offset != 0 || batches < 4 || out_channels < 16 ||
+            row_len < 64 || (row_len & 7) != 0 ||
+            (((uintptr_t) input_data) & 7) != 0 ||
+            (((uintptr_t) filter_data) & 7) != 0) {
+        return 0;
+    }
+
+    const data_dims_t input_dims = {
+        .width = 1, .height = batches, .channels = row_len,
+    };
+    const data_dims_t filter_dims = {
+        .width = 1, .height = 1, .channels = row_len,
+    };
+    const data_dims_t output_dims = {
+        .width = 1, .height = batches, .channels = out_channels,
+    };
+    const conv_params_t conv_params = {
+        .in_offset = input_offset,
+        .out_offset = out_offset,
+        .stride = { .width = 1, .height = 1 },
+        .padding = { .width = 0, .height = 0 },
+        .dilation = { .width = 1, .height = 1 },
+        .activation = { .min = activation_min, .max = activation_max },
+    };
+    const int scratch_need = esp_nn_get_conv_scratch_size(
+            &input_dims, &filter_dims, &output_dims, &conv_params);
+    if (!esp_nn_conv_scratch_fits(scratch_need)) {
+        return 0;
+    }
+    quant_data_t quant = {
+        .shift = (int32_t *) out_shift,
+        .mult = (int32_t *) out_mult,
+    };
+    esp_nn_conv_s8(&input_dims, input_data, &filter_dims, filter_data, bias,
+                   &output_dims, out_data, &conv_params, &quant);
+    return 1;
+}
+
 /* Portable reference for the batched per-channel FC API: loop the per-row
- * kernel. Optimized targets override the macro with a weight-stationary impl. */
+ * kernel. Optimized targets override the macro with a weight-stationary impl.
+ * A qualifying zero-point-0 batch is the 1x1 convolution above. */
 void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,
@@ -99,6 +163,13 @@ void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t activation_max,
                                     const int32_t batches)
 {
+    if (esp_nn_fc_per_ch_s8_batch_via_conv(input_data, input_offset, row_len,
+                                           filter_data, filter_offset, bias,
+                                           out_data, out_channels, out_offset,
+                                           out_shift, out_mult, activation_min,
+                                           activation_max, batches)) {
+        return;
+    }
     for (int32_t b = 0; b < batches; b++) {
         esp_nn_fully_connected_per_ch_s8_ansi(input_data + b * row_len, input_offset,
                                     row_len, filter_data, filter_offset, bias,

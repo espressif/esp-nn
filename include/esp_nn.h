@@ -58,6 +58,9 @@ extern "C" {
 #ifndef esp_nn_fully_connected_per_ch_s8_batch
 #define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_ansi
 #endif
+#ifndef esp_nn_set_conv_scratch_buf_sized
+#define esp_nn_set_conv_scratch_buf_sized esp_nn_set_conv_scratch_buf_sized_ansi
+#endif
 /* Feature flag: consumers can detect the batched per-channel FC API. */
 #define ESP_NN_HAS_FC_S8_BATCH 1
 

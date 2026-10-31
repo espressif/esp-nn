@@ -11,9 +11,11 @@
  * that support splitting then hand half of their disjoint output range to a
  * worker task pinned on the other core and compute the rest inline. Results
  * are bit-identical to the single-core path: the split is by output
- * channels/rows only, every output element is computed by exactly one core,
- * and the ESP32-S3 cores share one data cache (no coherency management
- * needed). Each core has its own PIE state (QACC/ACCX/SAR).
+ * channels/rows only, every output element is computed by exactly one core.
+ * The ESP32-S3 cores share one data cache. ESP32-P4's SMP spinlock uses
+ * LR/SC without acquire/release bits, so a job published on one core is not
+ * ordered with the notification that wakes the other core unless this file
+ * inserts the fence. Each core has its own PIE state (QACC/ACCX/SAR).
  */
 
 #include "esp_nn_multicore.h"
@@ -45,11 +47,23 @@ static void *volatile s_arg;
 static void *s_worker_scratch;
 static int s_worker_scratch_size;
 
+/* Order the job (and the worker's outputs) with the notification that
+ * publishes them. The P4 port's LR/SC has no acquire/release bits, so it
+ * does not do this. The S3 cores share one data cache and its spinlock
+ * already emits memw. */
+static inline __attribute__((always_inline)) void esp_nn_dual_core_fence(void)
+{
+#if defined(__riscv)
+    __asm__ volatile ("fence rw, rw" ::: "memory");
+#endif
+}
+
 static void esp_nn_worker_main(void *unused)
 {
     (void)unused;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        esp_nn_dual_core_fence();
         void (*fn)(void *) = s_fn;
         void *arg = s_arg;
         if (fn) {
@@ -61,6 +75,7 @@ static void esp_nn_worker_main(void *unused)
 #endif
             fn(arg);
         }
+        esp_nn_dual_core_fence();
         xSemaphoreGive(s_done);
     }
 }
@@ -108,6 +123,7 @@ bool esp_nn_dual_core_run(void (*fn)(void *), void *arg)
     }
     s_fn = fn;
     s_arg = arg;
+    esp_nn_dual_core_fence();
     xTaskNotifyGive(s_worker);
     return true;
 }
@@ -116,6 +132,7 @@ void esp_nn_dual_core_wait(void)
 {
     if (s_worker != NULL) {
         xSemaphoreTake(s_done, portMAX_DELAY);
+        esp_nn_dual_core_fence();
     }
 }
 

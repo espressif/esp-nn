@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stddef.h>
+
 #include <esp_nn_defs.h>
 
 #include <common_functions.h>
@@ -27,6 +29,18 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf)
 {
 
+}
+
+void esp_nn_set_conv_scratch_buf_sized_ansi(const void *buf, size_t size)
+{
+    (void) buf;
+    (void) size;
+}
+
+int esp_nn_conv_scratch_fits_ansi(int bytes)
+{
+    (void) bytes;
+    return 0;
 }
 
 /**
