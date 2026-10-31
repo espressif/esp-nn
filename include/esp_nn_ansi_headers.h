@@ -126,14 +126,20 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
-/* Records `buf` and its byte length. The length is what lets a later fully
- * connected call decide whether this buffer can hold a 1x1 workspace. */
+
+/**
+ * @brief       Record a convolution scratch buffer and its byte length
+ *
+ * @note        The only public function added for the batched fully connected
+ *              1x1 path. Existing function signatures are unchanged. Call it
+ *              when esp_nn_fully_connected_per_ch_s8_batch should use that
+ *              path: buf must be 16-byte aligned and size must be at least
+ *              esp_nn_get_conv_scratch_size for the 1x1 shape. A missing
+ *              buffer, a short buffer, or a buffer installed with
+ *              esp_nn_set_conv_scratch_buf leaves that call on the fully
+ *              connected kernel.
+ */
 void esp_nn_set_conv_scratch_buf_sized_ansi(const void *buf, size_t size);
-/* Nonzero when the conv scratch buffer is set and 16-byte aligned. */
-int esp_nn_conv_scratch_ready_ansi(void);
-/* Nonzero when a 16-byte-aligned scratch buffer has a recorded size of at
- * least `bytes`. A buffer set without a length does not qualify. */
-int esp_nn_conv_scratch_fits_ansi(int bytes);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,
@@ -273,25 +279,6 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
                                     const int32_t* out_mult,
                                     const int32_t activation_min,
                                     const int32_t activation_max);
-
-/* Returns 1 when the batch was evaluated as a 1x1 convolution.
- * A nonzero weight zero-point, a small shape, an unaligned input or filter,
- * or a conv scratch buffer that is missing or smaller than this 1x1 shape
- * returns 0 and leaves out_data untouched. */
-int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
-                                    const int32_t input_offset,
-                                    const uint16_t row_len,
-                                    const int8_t *filter_data,
-                                    const int32_t filter_offset,
-                                    const int32_t *bias,
-                                    int8_t *out_data,
-                                    const uint16_t out_channels,
-                                    const int32_t out_offset,
-                                    const int32_t *out_shift,
-                                    const int32_t *out_mult,
-                                    const int32_t activation_min,
-                                    const int32_t activation_max,
-                                    const int32_t batches);
 
 void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t input_offset,

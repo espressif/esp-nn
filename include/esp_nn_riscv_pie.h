@@ -39,6 +39,7 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_riscv_pie(const void *buf);
+void esp_nn_set_conv_scratch_buf_sized_riscv_pie(const void *buf, size_t size);
 
 /********************** function defines ***************************/
 
@@ -108,12 +109,7 @@ void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf);
 
 #define esp_nn_get_conv_scratch_size esp_nn_get_conv_scratch_size_riscv_pie
 #define esp_nn_set_conv_scratch_buf esp_nn_set_conv_scratch_buf_riscv_pie
-void esp_nn_set_conv_scratch_buf_sized_riscv_pie(void *buf, size_t size);
 #define esp_nn_set_conv_scratch_buf_sized esp_nn_set_conv_scratch_buf_sized_riscv_pie
-int esp_nn_conv_scratch_ready_riscv_pie(void);
-#define esp_nn_conv_scratch_ready esp_nn_conv_scratch_ready_riscv_pie
-int esp_nn_conv_scratch_fits_riscv_pie(int bytes);
-#define esp_nn_conv_scratch_fits esp_nn_conv_scratch_fits_riscv_pie
 
 #define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_riscv_pie
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_riscv_pie

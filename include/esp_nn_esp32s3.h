@@ -129,6 +129,7 @@ int esp_nn_get_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
                                          const data_dims_t *output_dims,
                                          const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_esp32s3(const void *buf);
+void esp_nn_set_conv_scratch_buf_sized_esp32s3(const void *buf, size_t size);
 
 /**
  * @brief       Prefer a caller-owned buffer for convolution workspace
@@ -298,12 +299,7 @@ void esp_nn_mul_broadcast_channel_s8_esp32s3(const int8_t *input1,
 
 #define esp_nn_get_conv_scratch_size esp_nn_get_conv_scratch_size_esp32s3
 #define esp_nn_set_conv_scratch_buf esp_nn_set_conv_scratch_buf_esp32s3
-void esp_nn_set_conv_scratch_buf_sized_esp32s3(void *buf, size_t size);
 #define esp_nn_set_conv_scratch_buf_sized esp_nn_set_conv_scratch_buf_sized_esp32s3
-int esp_nn_conv_scratch_ready_esp32s3(void);
-#define esp_nn_conv_scratch_ready esp_nn_conv_scratch_ready_esp32s3
-int esp_nn_conv_scratch_fits_esp32s3(int bytes);
-#define esp_nn_conv_scratch_fits esp_nn_conv_scratch_fits_esp32s3
 
 #define esp_nn_get_depthwise_conv_scratch_size esp_nn_get_depthwise_conv_scratch_size_esp32s3
 #define esp_nn_set_depthwise_conv_scratch_buf esp_nn_set_depthwise_conv_scratch_buf_esp32s3

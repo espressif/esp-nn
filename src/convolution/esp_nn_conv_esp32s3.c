@@ -612,15 +612,10 @@ void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
     scratch_buffer_size = 0;
 }
 
-void esp_nn_set_conv_scratch_buf_sized_esp32s3(void *buf, size_t size)
+void esp_nn_set_conv_scratch_buf_sized_esp32s3(const void *buf, size_t size)
 {
     scratch_buffer = (int16_t *) buf;
     scratch_buffer_size = (buf != NULL) ? size : 0;
-}
-
-int esp_nn_conv_scratch_ready_esp32s3(void)
-{
-    return scratch_buffer != NULL && (((uintptr_t) scratch_buffer) & 15) == 0;
 }
 
 int esp_nn_conv_scratch_fits_esp32s3(int bytes)

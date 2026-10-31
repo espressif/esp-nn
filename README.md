@@ -122,20 +122,38 @@ The library contains optimised NN (Neural Network) functions for various Espress
     PSRAM and a 64KB data cache
   - The `dual core` column is with `esp_nn_dual_core_enable()` called once at
     startup, which lets the heavier kernels split their work across both cores
-  - `esp_nn_fully_connected_per_ch_s8_batch` evaluates a weight zero-point of 0
-    as a 1×1 convolution when the matrix is large enough: at least 4 rows, an
-    inner dimension of at least 64 and a multiple of 8, and at least 16
-    outputs. The input and the filter must be 8-byte aligned, and
-    `esp_nn_set_conv_scratch_buf_sized` must already hold a 16-byte-aligned
-    buffer whose recorded length is at least `esp_nn_get_conv_scratch_size`
-    for that 1×1 shape (height = batch, width = 1, channels = the inner
-    dimension). A buffer installed with `esp_nn_set_conv_scratch_buf` has no
-    recorded length, so the call stays on the fully connected kernel. The
-    second core is the one already inside that convolution, so
-    `esp_nn_dual_core_enable()` still has to have been called. A nonzero
-    weight zero-point, an unaligned pointer, a scratch buffer that is missing
-    or too small, or a smaller shape stays on the fully connected kernel. The
-    input zero-point may be nonzero either way.
+  - The only new public function is
+    `esp_nn_set_conv_scratch_buf_sized(buf, size)`. Every function that
+    already shipped keeps its name and its signature, including
+    `esp_nn_set_conv_scratch_buf`, `esp_nn_get_conv_scratch_size`, and
+    `esp_nn_fully_connected_per_ch_s8_batch`. Convolution keeps using the
+    original setter. Call the sized setter only when a batched per-channel
+    fully connected layer should take the 1×1 path: pass a 16-byte-aligned
+    buffer and its capacity in bytes. That capacity must be at least
+    `esp_nn_get_conv_scratch_size` for the 1×1 shape (height = batch,
+    width = 1, channels = the inner dimension).
+    `esp_nn_fully_connected_per_ch_s8_batch` then evaluates a weight
+    zero-point of 0 as that 1×1 convolution when the matrix is also large
+    enough: at least 4 rows, an inner dimension of at least 64 and a multiple
+    of 8, and at least 16 outputs, with the input and the filter 8-byte
+    aligned. Anything else stays on the fully connected kernel and produces
+    the same result as before. That includes a nonzero weight zero-point, an
+    unaligned pointer, a smaller shape, and a scratch buffer that is missing,
+    too small, or installed with `esp_nn_set_conv_scratch_buf`, which records
+    no length. The input zero-point may be nonzero either way. The second
+    core is the one already inside that convolution, so
+    `esp_nn_dual_core_enable()` still has to have been called.
+    That call is the matrix product inside a fully connected layer. A
+    converted int8 model almost always uses a weight zero-point of 0, so
+    this is the path a tiny transformer classifier takes for its attention
+    and feed-forward projections. A nonzero weight zero-point cannot be a
+    1×1 convolution. That case is uncommon, the call stays on the fully
+    connected kernel, and a later split of the matrix across both cores is
+    the better tool for it. The same later split can add multicore gains
+    for transformer and fully connected layers, and for a small generative
+    model. Prompt processing has many rows and can use the 1×1 path.
+    Generating one token is usually a single row, so it stays on the fully
+    connected kernel. Generative models on these chips are still early.
   - `Without ESP-NN` case is when `esp-nn` is completely disabled by removing below flag from [CMakeLists.txt](CMakeLists.txt):
     ```cmake
       # enable ESP-NN optimizations by Espressif
