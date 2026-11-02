@@ -27,12 +27,32 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "sdkconfig.h"
 
-/* MALLOC_CAP_SIMD (IDF >= 5.5) marks memory that SIMD loads may access:
- * L2MEM and PSRAM on ESP32-P4, not the LP/RTC RAM. On older IDFs, which
- * have no such cap, MALLOC_CAP_DMA excludes the RTC RAM on every target. */
+/* MALLOC_CAP_SIMD (IDF v5.3.3, v5.4.1, v5.5 and later) marks memory that
+ * SIMD loads may access: L2MEM and PSRAM on ESP32-P4, not the LP/RTC RAM.
+ * On older IDFs, which have no such cap, MALLOC_CAP_DMA excludes the RTC RAM
+ * on every target. */
 #ifndef MALLOC_CAP_SIMD
 #define MALLOC_CAP_SIMD MALLOC_CAP_DMA
+#endif
+
+/* Worker stack in bytes (StackType_t is one byte in IDF). */
+#ifndef CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE
+#define CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE 4096
+#endif
+#define ESP_NN_WORKER_STACK_SIZE CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE
+
+/* Above application tasks, so a dispatched slice starts at once; only the
+ * IPC task (configMAX_PRIORITIES - 1) ranks higher. */
+#define ESP_NN_WORKER_PRIORITY (configMAX_PRIORITIES - 2)
+
+/* Whether PSRAM may hold a task stack. The option was renamed in IDF 5.4;
+ * sdkconfig.h still defines the old name as an alias. */
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM || CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#define ESP_NN_WORKER_STACK_EXT_OK 1
+#else
+#define ESP_NN_WORKER_STACK_EXT_OK 0
 #endif
 
 static TaskHandle_t s_worker;
@@ -75,13 +95,42 @@ void esp_nn_dual_core_enable(void)
     if (s_done == NULL) {
         return;
     }
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* A task's first PIE instruction traps, and IDF pins the task to the core
+     * it runs on. Take that trap here, so the calling task is pinned to this
+     * core and the worker goes to the other one. */
+    ESP_NN_PIE_ENABLE();
+#endif
     const BaseType_t core = (xPortGetCoreID() == 0) ? 1 : 0;
-    if (xTaskCreatePinnedToCore(esp_nn_worker_main, "esp_nn_worker", 8 * 1024,
-                                NULL, configMAX_PRIORITIES - 2, &s_worker,
-                                core) != pdPASS) {
+    /* The kernels store 128-bit vectors to the stack too, so it needs the
+     * same memory as the scratch below; a plain xTaskCreate stack can land in
+     * the ESP32-P4's LP/RTC RAM and fault on the first split kernel. Created
+     * static, so the buffers stay put. */
+#if CONFIG_NN_DUAL_CORE_WORKER_STACK_PSRAM
+    /* PSRAM takes 128-bit accesses on both targets. No MALLOC_CAP_SIMD: on
+     * IDF before v5.3.3 and v5.4.1 it stands in for MALLOC_CAP_DMA, which
+     * PSRAM lacks. */
+    StackType_t *stack = heap_caps_malloc(ESP_NN_WORKER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    /* Internal SIMD-capable RAM first, then PSRAM where the config allows
+     * task stacks there. No MALLOC_CAP_SIMD on the PSRAM side, as in the
+     * PSRAM-only case: PSRAM takes 128-bit accesses on both targets. */
+    StackType_t *stack = heap_caps_malloc_prefer(ESP_NN_WORKER_STACK_SIZE, 1 + ESP_NN_WORKER_STACK_EXT_OK,
+                                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_SIMD | MALLOC_CAP_8BIT,
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
+    StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (stack != NULL && tcb != NULL) {
+        s_worker = xTaskCreateStaticPinnedToCore(esp_nn_worker_main, "esp_nn_worker",
+                                                 ESP_NN_WORKER_STACK_SIZE, NULL, ESP_NN_WORKER_PRIORITY,
+                                                 stack, tcb, core);
+    }
+    if (s_worker == NULL) {
+        /* No suitable memory: stay single core rather than risk the fault. */
+        heap_caps_free(stack);
+        heap_caps_free(tcb);
         vSemaphoreDelete(s_done);
         s_done = NULL;
-        s_worker = NULL;
     } else {
         s_worker_core = core;
     }

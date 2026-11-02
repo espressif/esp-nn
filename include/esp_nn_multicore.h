@@ -16,7 +16,7 @@ extern "C" {
 
 #if defined(ESP_PLATFORM)
 #include "sdkconfig.h"
-#if !defined(CONFIG_FREERTOS_UNICORE) && \
+#if !defined(CONFIG_FREERTOS_UNICORE) && defined(CONFIG_NN_OPTIMIZED) && \
     (CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4)
 #define ESP_NN_DUAL_CORE_SUPPORTED 1
 #endif
@@ -29,7 +29,23 @@ extern "C" {
  * Opt in to dual-core kernel splitting. Spawns a worker task pinned to the
  * other core; kernels that support it then split their output range in two.
  * Results are bit-identical to single-core execution (disjoint outputs, same
- * arithmetic). Call once from the core that will run inference.
+ * arithmetic). Call once from the core that will run inference, early: the
+ * worker's stack (CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE bytes) must come from
+ * SIMD-capable memory: internal RAM first, or PSRAM when
+ * CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM allows task stacks there; only PSRAM
+ * with CONFIG_NN_DUAL_CORE_WORKER_STACK_PSRAM. If none is left, esp-nn stays
+ * single core; esp_nn_dual_core_active() reports which.
+ *
+ * On ESP32-P4:
+ * - This call pins the calling task to the core it runs on (the first PIE
+ *   instruction in a task does that), and the worker goes to the other core.
+ *   Run inference from this task, or from another task pinned to this core.
+ * - Every task that runs esp-nn kernels needs its stack in SIMD-capable
+ *   memory, not LP RAM, like the worker: the kernels and IDF's PIE context
+ *   save store 128-bit vectors to it. For example, create it with
+ *   xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SIMD | MALLOC_CAP_8BIT)
+ *   (MALLOC_CAP_SIMD needs IDF v5.3.3, v5.4.1 or v5.5; use MALLOC_CAP_DMA
+ *   before).
  */
 void esp_nn_dual_core_enable(void);
 
