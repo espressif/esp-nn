@@ -9,7 +9,8 @@ set(COMPONENT_SRCS "src/test_utils.c"
                    "src/relu_test.c"
                    "src/softmax_test.c"
                    "src/hard_swish_test.c"
-                   "src/mean_test.c")
+                   "src/mean_test.c"
+                   "src/multicore_test.c")
 
 set(COMPONENT_REQUIRES )
 set(COMPONENT_PRIV_REQUIRES esp-nn)

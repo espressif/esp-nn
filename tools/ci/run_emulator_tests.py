@@ -66,7 +66,7 @@ EXPECTED_SUITES = (
     'add_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'depthwise_conv_s8', 'conv_s8',
     'relu6_s8', 'avg_pool_s8', 'max_pool_s8', 'fc_s8', 'fc_per_ch_s8',
     'fc_per_ch_s8_batch', 'fc_align_s8', 'alignment_s8', 'fc_perf', 'softmax_s8',
-    'hard_swish_s8', 'mean_nhwc_s8',
+    'hard_swish_s8', 'mean_nhwc_s8', 'dual_core',
 )
 
 # Each of these is printed once per boot (the ROM banner and the reset-reason
@@ -89,6 +89,11 @@ SUMMARY_RE = re.compile(r'^TEST_SUMMARY: passed=(?P<passed>\d+), '
                         r'failed=(?P<failed>\d+)(?:, skipped=(?P<skipped>\d+))?')
 RESULT_RE = re.compile(r'^TEST_RESULT: (?P<result>\w+)')
 
+# The dual_core suite has nothing to check without the worker: single-core
+# chips, the ANSI C build, and targets without dual-core support. It must
+# verify cases only when the app reports the worker as active.
+DUAL_CORE_RE = re.compile(r'^DUAL_CORE: active')
+
 # Cycle columns are emulator instruction counts (deterministic, good for
 # regression diffs, not device performance); `source` says so in every row.
 CSV_FIELDS = ('idf_version', 'target', 'kernel', 'passed', 'failed', 'skipped',
@@ -108,6 +113,7 @@ class Run:
         self.passed = 0
         self.empty_suites = []      # suites that verified nothing (passed=0)
         self.seen_suites = set()    # suites that reported a TEST: verdict
+        self.dual_core_active = False
         self.failed = 0
         self.skipped = 0
         self.result = None
@@ -189,18 +195,24 @@ def parse_line(run, line):
                 run.result = 'REBOOT'
                 run.reason = 'the app reset and started over (reboot loop)'
                 return True
+    if DUAL_CORE_RE.match(line):
+        run.dual_core_active = True
+        return False
+
     match = TEST_RE.match(line)
     if match:
-        row = run.row(match.group('kernel'))
-        run.seen_suites.add(match.group('kernel'))
+        kernel = match.group('kernel')
+        row = run.row(kernel)
+        run.seen_suites.add(kernel)
         row['passed'] = match.group('passed')
         row['failed'] = match.group('failed')
         row['skipped'] = match.group('skipped') or ''
-        if not int(match.group('passed')) and not int(match.group('failed')):
+        if (not int(match.group('passed')) and not int(match.group('failed'))
+                and (kernel != 'dual_core' or run.dual_core_active)):
             # A suite that verified nothing lowers coverage without failing
             # anything, whether its cases bailed before a verdict or were all
             # skipped (out of memory). Make that visible and fatal.
-            run.empty_suites.append(match.group('kernel'))
+            run.empty_suites.append(kernel)
         return False
 
     match = PROFILE_RE.match(line)
