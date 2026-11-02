@@ -131,12 +131,14 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test_act(6, 6, 20, 2, 2, 1, 1, 2, 2, 5, 30, iter++);     /* clamped to 5 */
 }
 
-static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+/* in_off and out_off put the input and outputs that many bytes past a
+ * 16-byte boundary. */
+static void run_max_pool_test_buf(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
                                   uint16_t filter_wd, uint16_t filter_ht,
                                   uint16_t stride_wd, uint16_t stride_ht,
                                   uint16_t pad_wd, uint16_t pad_ht,
                                   int32_t activation_min, int32_t activation_max,
-                                  int iter)
+                                  int in_off, int out_off, int iter)
 {
     const uint16_t out_wd = (input_wd + 2 * pad_wd - filter_wd) / stride_wd + 1;
     const uint16_t out_ht = (input_ht + 2 * pad_ht - filter_ht) / stride_ht + 1;
@@ -144,17 +146,17 @@ static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t
     const int out_size = out_wd * out_ht * channels;
 
     int8_t *input = NULL, *output_c = NULL, *output_opt = NULL;
-    int8_t *input_orig = malloc(size + 16);
-    int8_t *out_c_orig = malloc(out_size + 16);
-    int8_t *out_opt_orig = malloc(out_size + 16);
+    int8_t *input_orig = malloc(size + 32);
+    int8_t *out_c_orig = malloc(out_size + 32);
+    int8_t *out_opt_orig = malloc(out_size + 32);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         TEST_SKIP("max_pool [%d] allocations failed\n", iter);
         goto max_pool_cleanup;
     }
 
-    input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
-    output_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
-    output_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+    input = (int8_t *) ((((uint32_t) input_orig + 15) & ~15) + in_off);
+    output_c = (int8_t *) ((((uint32_t) out_c_orig + 15) & ~15) + out_off);
+    output_opt = (int8_t *) ((((uint32_t) out_opt_orig + 15) & ~15) + out_off);
 
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 256 - 128;
@@ -187,6 +189,18 @@ max_pool_cleanup:
     if (input_orig) free(input_orig);
     if (out_c_orig) free(out_c_orig);
     if (out_opt_orig) free(out_opt_orig);
+}
+
+static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
+                                  uint16_t filter_wd, uint16_t filter_ht,
+                                  uint16_t stride_wd, uint16_t stride_ht,
+                                  uint16_t pad_wd, uint16_t pad_ht,
+                                  int32_t activation_min, int32_t activation_max,
+                                  int iter)
+{
+    run_max_pool_test_buf(input_wd, input_ht, channels, filter_wd, filter_ht,
+                          stride_wd, stride_ht, pad_wd, pad_ht,
+                          activation_min, activation_max, 0, 0, iter);
 }
 
 static void run_max_pool_test(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
@@ -232,4 +246,14 @@ void esp_nn_max_pool_s8_test()
     run_max_pool_test(6, 5, 12, 2, 2, 1, 1, 2, 2, iter++);                /* ch % 8 == 4 */
     run_max_pool_test(1, 8, 16, 1, 2, 3, 1, 1, 0, iter++);                /* one column */
     run_max_pool_test_act(6, 6, 16, 2, 2, 1, 1, 2, 2, -20, 30, iter++);
+    /* 2x2 with 16-lane funnel-shift loads: channels % 8 == 4, >= 20 */
+    run_max_pool_test(12, 12, 20, 2, 2, 2, 2, 0, 0, iter++);
+    run_max_pool_test(9, 9, 28, 2, 2, 1, 1, 0, 0, iter++);
+    /* channels % 16 == 0 below 16-byte alignment: 64-bit fallbacks */
+    run_max_pool_test_buf(12, 12, 16, 2, 2, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
+    run_max_pool_test_buf(12, 12, 32, 2, 2, 2, 2, 0, 0, -128, 127, 0, 8, iter++);
+    run_max_pool_test_buf(10, 10, 16, 3, 3, 1, 1, 1, 1, -128, 127, 8, 0, iter++);
+    run_max_pool_test_buf(10, 10, 48, 3, 3, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
+    /* activation limits outside int8 take the reference */
+    run_max_pool_test_act(8, 8, 16, 2, 2, 2, 2, 0, 0, -200, 200, iter++);
 }
