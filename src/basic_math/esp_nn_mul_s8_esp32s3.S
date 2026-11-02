@@ -1,4 +1,4 @@
-// Copyright 2021-2023 Espressif Systems (Shanghai) PTE LTD
+// Copyright 2021-2026 Espressif Systems (Shanghai) PTE LTD
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,282 +12,252 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "s3_mul/esp_nn_mul_s8_esp32s3_macros.inc"
+
+    // Frame size, and the stack arguments above it
+    .set MUL_S8_FRAME, 336
+    .set ARG_OUT_MULT, MUL_S8_FRAME + 0
+    .set ARG_OUT_SHIFT, MUL_S8_FRAME + 4
+    .set ARG_ACT_MIN, MUL_S8_FRAME + 8
+    .set ARG_ACT_MAX, MUL_S8_FRAME + 12
+    .set ARG_SIZE, MUL_S8_FRAME + 16
+
     .text
     .align  4
     .literal_position
     .literal    .LC0_26_123, 1073741824 // `1 << 30`
 
-    # Program Unit: esp_nn_mul_elementwise_s8_esp32s3
     .type   esp_nn_mul_elementwise_s8_esp32s3, @function
     .align   4
     .global esp_nn_mul_elementwise_s8_esp32s3
 
-esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
-    # to_add = 0
-    # gra_spill_temp_0 = 4
-    # gra_spill_temp_1 = 8
-    # gra_spill_temp_2 = 12
-    # gra_spill_temp_3 = 16
-    # gra_spill_temp_4 = 20
-    # gra_spill_temp_5 = 24
-    # gra_spill_temp_6 = 28
-    # gra_spill_temp_7 = 32
-    # gra_spill_temp_8 = 36
-    # gra_spill_temp_<> = 40
-    # gra_spill_temp_<> = 44
-    # gra_spill_temp_<> = 48
-    # gra_spill_temp_13 = 64
+// void esp_nn_mul_elementwise_s8_esp32s3(
+//     const int8_t *input1_data,      // a2
+//     const int8_t *input2_data,      // a3
+//     const int32_t input1_offset,    // a4
+//     const int32_t input2_offset,    // a5
+//     int8_t *output,                 // a6
+//     const int32_t out_offset,       // a7
+//     const int32_t out_mult,         // ARG_OUT_MULT
+//     const int32_t out_shift,        // ARG_OUT_SHIFT
+//     const int32_t activation_min,   // ARG_ACT_MIN
+//     const int32_t activation_max,   // ARG_ACT_MAX
+//     const int32_t size);            // ARG_SIZE
 
- // registers:
- // a2: const int8_t *input1_data
- // a3: const int8_t *input2_data
- // a4: const int32_t input1_offset
- // a5: const int32_t input2_offset
- // a6: int8_t *output
- // a7: const int32_t out_offset
+// Stack frame layout (entry a1, MUL_S8_FRAME):
+//  4: input2 (saved)
+//  8: output (saved)
+// 16: input1 (saved)
+// 20: right_shift
+// 24: input1_offset (saved)
+// 28: input2_offset (saved)
+// 40: out_offset (from a7)
+// 44: scalar scratch for the macros
+// 48..271: vector constants, see s3_mul/esp_nn_mul_s8_esp32s3_macros.inc
+// 272..319: free, for new slots without moving the stack arguments
+// 320..335: windowed-ABI base save area
 
- // on stack:
- // 120: const int32_t out_mult
- // 124: const int32_t out_shift
- // 128: const int32_t activation_min
- // 132: const int32_t activation_max
- // 136: const int32_t size
+esp_nn_mul_elementwise_s8_esp32s3:
 
-    entry   a1,120                      #
-    s32i.n  a4,a1,24                # [0]  gra_spill_temp_5, input1_offset
-    s32i.n  a5,a1,28                # [1]  gra_spill_temp_12, input2_offset
+    entry   a1, MUL_S8_FRAME
+    s32i.n  a4,a1,24                // input1_offset
+    s32i.n  a5,a1,28                // input2_offset
 
-    s32i.n  a3,a1,4                     # [5]  gra_spill_temp_0, input2
-    mov.n   a10,a3                      # [6]
-    l32i    a3,a1,136                   # [18]  id:361 size+0x0
-    mov.n   a9,a6                       # [2] // out_addr
-    blti    a3,1,.exit            # [0] // exit
+    s32i.n  a3,a1,4                 // input2
+    mov.n   a10,a3                  // input2 pointer
+    l32i    a3,a1,ARG_SIZE
+    mov.n   a9,a6                   // out_addr
+    blti    a3,1,.exit              // exit
 
-    s32i.n  a2,a1,16                    # [9]  gra_spill_temp_3, input1
-    s32i    a7,a1,40                    # [4]  id:358 out_offset+0x0
-    movi.n  a11,0                       # [3]
-    mov.n   a12,a2                      # [10]
-    s32i    a4,a1,44                # [13]  id:356 input1_offset+0x0
-    s32i    a5,a1,48                # [14]  id:357 input2_offset+0x0
-    movi.n  a2,1                    # [15]
+    s32i.n  a2,a1,16                // input1
+    s32i    a7,a1,40                // out_offset
+    movi.n  a11,0
+    mov.n   a12,a2
+    movi.n  a5,0                        // 1 while the leftover loop runs the unaligned head
 
-    l32i    a15,a1,124                  # [3]  id:362 out_shift+0x0
-    l32i    a13,a1,120                  # [4]  id:363 out_mult+0x0
-    s32i.n  a6,a1,8                 # [1]  gra_spill_temp_1, out_addr
-    max     a14,a15,a11                 # [11] left_shift
-    sub     a4,a14,a15              # right_shift
-    s32i.n  a4,a1,20                # [9]  gra_spill_temp_4
+    l32i    a15,a1,ARG_OUT_SHIFT
+    l32i    a13,a1,ARG_OUT_MULT
+    s32i.n  a6,a1,8                 // out_addr
+    max     a14,a15,a11             // left_shift
+    sub     a4,a14,a15              // right_shift
+    s32i.n  a4,a1,20
     // a4 is the SRDHM nudge (1 << 30) from here on. It must be loaded before
-    // the two early branches below: .process_leftover reads it, and entering
-    // there directly (size < 8, or an input not 16-byte aligned) used to see
-    // right_shift in a4 instead, i.e. floor() in place of round-to-nearest.
+    // the two early branches below: .process_leftover reads it when entered
+    // directly (size < 8, or an input not 16-byte aligned).
     l32r    a4,.LC0_26_123
 
-    blti    a3,8,.process_leftover             # [20]
+    blti    a3,8,.process_leftover
+    bgei    a15,1,.Llshift
+    // A right_shift above 16 always gives 0. Run it as mult = 0 and
+    // right_shift = 15 (see s3_mul/esp_nn_mul_s8_esp32s3_macros.inc).
+    // The scalar leftover keeps the real right_shift from a1+20. With
+    // mult = 0 it also gives 0.
+    l32i.n  a8,a1,20
+    movi.n  a6,16
+    bge     a6,a8,1f
+    movi.n  a8,15
+    movi.n  a13,0
+1:
+    MUL_S8_SETUP a8, a6, a2
+    addi    a15,a8,14                   // right_shift + 14
+    srli    a2,a3,3
 
-    // skip to leftover routine if inputs are unaligned
+    // The 64-bit vector loads and stores need 8-byte aligned buffers
     or          a6,a12,a10
-    extui       a6,a6,0,4
-    bnez        a6,.process_leftover
+    or          a6,a6,a9
+    extui       a6,a6,0,3
+    beqz        a8,.Lrs0
+    bnez        a6,.Lunaligned
 
-    // `size > 8`, s3 optimisation path...
-    ee.zero.q   q1                      # [0]
-    addi    a4,a1,44                # [7]
-    addi    a8,a1,48                    # [8]
-    ee.vldbc.16 q0,a4               # [17]  id:359 input1_offset
-    ee.vldbc.16 q7,a8               # [16]  id:360 input2_offset
-    l32r    a4,.LC0_26_123              # [12]
-    movi    a8, 8
-    st.qr   q0,a1,64                    # [19]  gra_spill_temp_13
-    s32i.n  a8,a1,12                # [6]  gra_spill_temp_2
+    MUL_S8_CONST_PTR a14
+    // Right shifts 1..15 take the QACC step, which is about 20 instructions
+    // shorter. Its setup pays off from 64 elements.
+    bgeui   a3,64,.Lmul8_try_q
+.Lmul8_k15:
+    loopgtz a2,.Lmul8_end
+    MUL_S8_STEP8 a12, a10, a9, a15, a13, a2, a3, a4, a5, a6, a7, a8, a11, cp=a14
+.Lmul8_end:
+    j       .Lmul8_done
 
-.Lt_0_7682: # 0x60
-    s32i            a9,a1,36                    # [1]  gra_spill_temp_8, out_addr
-    ld.qr           q4,a1,64                    # [2]  gra_spill_temp_13, input1_offset
-    ee.vld.l.64.ip  q2,a12,8        # [4]  id:367, input1_ptr
-    movi.n          a7,16                   # [3]
-    ee.vld.h.64.ip  q2,a10,8        # [5]  id:368, input2_ptr
-    wsr.sar         a7                      # [6]
-    ee.vcmp.lt.s8   q5,q2,q1            # [7]
-    ee.vzip.8       q2,q5               # [8]
-    ee.vadds.s16    q5,q5,q7            # [9] input2_offset
-    ee.vadds.s16    q4,q2,q4            # [10] input1_offset
-    ee.vmul.s16     q3,q4,q5            # [11]
-    wsr.sar         a11                         # [12]
-    ee.vmul.s16     q2,q4,q5            # [13]
+.Lmul8_try_q:
+    addi    a7,a8,-1
+    movi.n  a6,15
+    bgeu    a7,a6,.Lmul8_k15
+    MUL_S8_SETUP_Q a8, a13, a14, a6, a7
+    movi.n  a5,14
+    addi    a6,a8,3
+    loopgtz a2,.Lmul8_q_end
+    MUL_S8_STEP8_Q a12, a10, a9, a5, a6, a14
+.Lmul8_q_end:
+    j       .Lmul8_done
 
-    wsr.sar         a14                     # [14] left_shift
-    ee.vzip.16      q2,q3               # [15]
-    ee.vsl.32       q6,q2                   # [16] left_shift
-    ssai            31                          # [17]
+    // right_shift = 0 needs its own loop, see MUL_S8_STEP8. Unaligned
+    // buffers take the scalar path.
+.Lrs0:
+    bnez    a6,.Lscalar
+    movi.n  a15,16
+    MUL_S8_CONST_PTR a14
+    loopgtz a2,.Lmul8_rs0_end
+    MUL_S8_STEP8 a12, a10, a9, a15, a13, a2, a3, a4, a5, a6, a7, a8, a11, 1, a14
+.Lmul8_rs0_end:
+    j       .Lmul8_done
+.Lscalar:                               // a4 still holds the SRDHM nudge
+    j       .process_leftover
 
-    ee.movi.32.a    q6,a3,2             # [18]
-    ee.movi.32.a    q6,a8,3             # [26]
+    // Unaligned buffers, right shift 1..15 and size >= 64: a scalar head
+    // makes the output 8-byte aligned, then the QACC step reads the inputs
+    // with ee.src.q. Other unaligned cases take the scalar path.
+    // The 64 matches the aligned path. Below it, the head and the QACC setup
+    // cost more than the steps save.
+.Lunaligned:
+    addi    a7,a8,-1
+    movi.n  a6,15
+    bgeu    a7,a6,.Lscalar
+    bltui   a3,64,.Lscalar
+    neg     a3,a9
+    extui   a3,a3,0,3                   // head size
+    movi.n  a5,1                        // come back to .Lunaligned_q
+    j       .process_leftover
+.Lunaligned_q:
+    l32i.n  a12,a1,16
+    l32i.n  a10,a1,4
+    l32i.n  a9,a1,8
+    add.n   a12,a12,a11
+    add.n   a10,a10,a11
+    add.n   a9,a9,a11
+    l32i    a2,a1,ARG_SIZE
+    sub     a2,a2,a11
+    srli    a2,a2,3
+    addi    a8,a15,-14                  // right_shift, 15 if it was above 16
+    MUL_S8_SETUP_Q a8, a13, a14, a6, a7
+    movi.n  a5,14
+    addi    a6,a8,3
+    movi.n  a7,8
+    loopgtz a2,.Lmul8_qu_end
+    MUL_S8_STEP8_Q a12, a10, a9, a5, a6, a14, a7, a8
+.Lmul8_qu_end:
+    slli    a2,a2,3
+    add.n   a11,a11,a2                  // elements done
+    movi.n  a5,0
+    movi.n  a14,0
+    l32r    a4,.LC0_26_123
+    l32i    a3,a1,ARG_SIZE
+    j       .process_leftover
 
-    mulsh           a6,a13,a3                   # [19]
-    mull            a3,a13,a3                   # [20]
-    mulsh           a7,a13,a8                   # [27]
-    add.n           a3,a4,a3                    # [22]
-    saltu           a2,a3,a4                    # [23]
-    add.n           a2,a2,a6                    # [24]
-    src             a2,a2,a3                    # [25]
+    // Left shifts 1..11 take the QACC step with right_shift 0 (see
+    // MUL_S8_SETUP_Q), for 8-byte aligned buffers and 64 elements or more.
+    // Other left shifts take the scalar path.
+.Llshift:
+    bgei    a15,12,.process_leftover
+    bltui   a3,64,.process_leftover
+    or      a6,a12,a10
+    or      a6,a6,a9
+    extui   a6,a6,0,3
+    bnez    a6,.process_leftover
+    movi.n  a8,0                        // right_shift
+    MUL_S8_SETUP a8, a6, a2
+    srli    a2,a3,3
+    MUL_S8_SETUP_Q a8, a13, a14, a6, a7, a15
+    movi.n  a5,14
+    movi.n  a6,3                        // final shift 3 + right_shift
+    loopgtz a2,.Lmul8_ls_end
+    MUL_S8_STEP8_Q a12, a10, a9, a5, a6, a14
+.Lmul8_ls_end:
+    mov.n   a14,a15                     // the leftover keeps the left shift
+    j       .Lmul8_tail
 
-    mull            a6,a13,a8                   # [28]
-    add.n           a6,a4,a6                    # [30]
-    saltu           a9,a6,a4                    # [31]
-    add.n           a9,a9,a7                    # [32]
-    src             a9,a9,a6                    # [33]
-    ee.movi.32.q    q2,a2,2             # [53]
-    ee.movi.32.q    q2,a9,3             # [54]
+.Lmul8_done:
+    movi.n  a14,0                       // left_shift, 0 on the vector path
+.Lmul8_tail:
+    movi.n  a5,0
+    l32r    a4,.LC0_26_123              // SRDHM nudge for the leftover
 
-    ee.movi.32.a    q6,a6,1             # [34]
-    mulsh           a7,a13,a6                   # [35]
-    mull            a6,a13,a6                   # [36]
-    add.n           a6,a4,a6                    # [38]
-    saltu           a3,a6,a4                    # [39]
-    add.n           a3,a3,a7                    # [16]
-    src             a3,a3,a6                    # [41]
-    ee.movi.32.a    q6,a2,0             # [42]
-    mulsh           a8,a13,a2                   # [43]
-    mull            a7,a13,a2                   # [4]
-    add.n           a7,a4,a7                    # [46]
-    saltu           a6,a7,a4                    # [47]
-    add.n           a6,a6,a8                    # [24]
-    src             a6,a6,a7                    # [49]
-    ee.movi.32.q    q2,a3,1             # [28]
-    ee.movi.32.q    q2,a6,0             # [50]
-
-    wsr.sar         a14                     # [10]
-    ee.vsl.32       q4,q3                   # [11]
-    ee.movi.32.a    q4,a2,2             # [13]
-    mulsh           a3,a13,a2                   # [14]
-    mull            a2,a13,a2                   # [15]
-    ssai            31                          # [12]
-    add.n           a2,a4,a2                    # [17]
-    saltu           a5,a2,a4                # [18]
-    add.n           a5,a5,a3                # [19]
-    src             a5,a5,a2                    # [20]
-    ee.movi.32.a    q4,a3,3             # [21]
-    mulsh           a6,a13,a3                   # [22]
-    mull            a3,a13,a3                   # [23]
-    add.n           a3,a4,a3                    # [25]
-    saltu           a8,a3,a4                    # [26]
-    add.n           a8,a8,a6                    # [27]
-    src             a8,a8,a3                    # [28]
-    ee.movi.32.q    q0,a5,2             # [24]
-    ee.movi.32.q    q0,a8,3             # [51]
-
-    ee.movi.32.a    q4,a7,1             # [29]
-    mulsh           a6,a13,a7                   # [30]
-    mull            a3,a13,a7                   # [31]
-    add.n           a3,a4,a3                    # [33]
-    saltu           a2,a3,a4                    # [34]
-    add.n           a2,a2,a6                    # [35]
-    src             a2,a2,a3                    # [36]
-    ee.movi.32.a    q4,a6,0             # [37]
-    mulsh           a7,a13,a6                   # [38]
-    mull            a6,a13,a6                   # [39]
-    add.n           a6,a4,a6                    # [41]
-    saltu           a3,a6,a4                    # [42]
-    add.n           a3,a3,a7                    # [43]
-    src             a3,a3,a6                    # [4]
-    ee.movi.32.q    q0,a2,1             # [47]
-    ee.movi.32.q    q0,a3,0             # [46]
-
-    l32i.n          a5,a1,20                # [0]  gra_spill_temp_4, right_shift
-    movi.n          a7,1                    # [51]
-
-    blti            a5,1,.skip_div_by_pow_of_2
-// divide by power of 2
-    ee.vcmp.lt.s32  q5,q2,q1        # [56]
-    ee.vcmp.lt.s32  q6,q0,q1        # [28]
-
-    addi.n          a8,a5,-1                # [1]
-    ssl             a8                          # [2]
-    sll             a7,a7                       # [3]
-    s32i.n          a7,a1,0                 # [4]  to_add
-    ee.vldbc.32     q4,a1               # [5]  id:376 to_add
-
-    wsr.sar         a5                      # [6]
-    ee.vadds.s32    q5,q4,q5            # [7]
-    ee.vadds.s32    q5,q2,q5            # [8]
-    ee.vsr.32       q2,q5                   # [9]
-
-    wsr.sar         a5                      # [5]
-    ee.vadds.s32    q5,q4,q6            # [9]
-    ee.vadds.s32    q5,q0,q5            # [11]
-    ee.vsr.32       q0,q5                   # [12]
-.skip_div_by_pow_of_2:
-
-// add offset, apply activation
-    addi            a8,a1,132                   # [54]
-    ee.vldbc.32     q4,a8               # [55]  id:385 activation_max
-    addi            a5,a1,40                    # [8]
-    ee.vldbc.32     q6,a5               # [10]  id:384 out_offset
-    addi            a7,a1,128                   # [4]
-    ee.vadds.s32    q0,q0,q6            # [13] // add out_offset
-    ee.vadds.s32    q2,q2,q6            # [14] // add out_offset
-    ee.vldbc.32     q6,a7               # [16]  id:386 activation_min
-    ee.vmin.s32     q0,q0,q4            # [17]
-    ee.vmin.s32     q2,q2,q4            # [15]
-    ee.vmax.s32     q0,q0,q6            # [18]
-    ee.vmax.s32     q2,q2,q6            # [19]
-
-// pack and store
-    ee.vunzip.16    q2,q0               # [20]
-    ee.vunzip.8     q2,q0               # [21]
-    l32i.n          a7,a1,12 // count
-    l32i            a9,a1,36                    # [55]  gra_spill_temp_8
-    l32i.n          a3,a1,136               # [1] , size
-    ee.vst.l.64.ip  q2,a9,8         # [22]  id:387
-    addi            a7,a7,8
-    s32i.n          a7,a1,12 // increment count
-    bge             a3,a7,.Lt_0_7682
-
-    addi            a11,a7,-8
-    bge             a11,a3,.exit  # [3] // exit
+    l32i    a3,a1,ARG_SIZE                   // size
+    movi.n  a11,-8
+    and     a11,a3,a11                  // elements done
+    bge     a11,a3,.exit
 
 .process_leftover:
-    sub     a8,a3,a11                   # [1]
-    loopgtz a8,.LBB33_esp_nn_mul_elementwise_s8_esp32s3     # [9]
+    sub     a8,a3,a11
+    loopgtz a8,.LBB33_esp_nn_mul_elementwise_s8_esp32s3
 
-    ssl     a14                         # [0] left_shift
-    l32i.n  a8,a1,24                # [1]  gra_spill_temp_5, input1_offset
-    l32i.n  a10,a1,4                # [2]  gra_spill_temp_0, input2
-    l32i.n  a12,a1,16               # [3]  gra_spill_temp_3, input1
-    add.n   a10,a11,a10                 # [4], input2
-    add.n   a12,a11,a12                 # [5], input1
-    l8ui    a12,a12,0                   # [6]  id:390
-    l8ui    a10,a10,0                   # [7]  id:391
-    sext    a12,a12,7                   # [8]
-    add.n   a12,a12,a8                  # [9]
-    l32i.n  a8,a1,28                # [10]  gra_spill_temp_12, input2_offset
-    sext    a10,a10,7                   # [11]
-    add.n   a10,a10,a8                  # [12]
-    mull    a10,a12,a10                 # [13] // multiplication result
+    ssl     a14                     // left_shift
+    l32i.n  a8,a1,24                // input1_offset
+    l32i.n  a10,a1,4                // input2
+    l32i.n  a12,a1,16               // input1
+    add.n   a10,a11,a10             // input2
+    add.n   a12,a11,a12             // input1
+    l8ui    a12,a12,0
+    l8ui    a10,a10,0
+    sext    a12,a12,7
+    add.n   a12,a12,a8
+    l32i.n  a8,a1,28                // input2_offset
+    sext    a10,a10,7
+    add.n   a10,a10,a8
+    mull    a10,a12,a10             // multiplication result
 
 // multiply by quantised mult
-    l32i.n  a9,a1,20                # [0]  gra_spill_temp_4, load right_shift
+    l32i.n  a9,a1,20                // load right_shift
 
-    sll     a10,a10                     # [15] // left shift
+    sll     a10,a10                 // left shift
 
-    mulsh   a3,a10,a13                  # [1]
-    mull    a8,a10,a13                  # [6]
-    ssai    31                          # [0]
-    add.n   a6,a8,a4                    # [8]
-    saltu   a8,a6,a8                    # [9]
-    add.n   a8,a8,a3                    # [10]
-    src     a3,a8,a6                    # [19] // result
+    mulsh   a3,a10,a13
+    mull    a8,a10,a13
+    ssai    31
+    add.n   a6,a8,a4
+    saltu   a8,a6,a8
+    add.n   a8,a8,a3
+    src     a3,a8,a6                // result
 
     blti    a9, 1, .skip_div_by_pow_of_2_remains
 // divide by power of 2
     // calculate to_add = `1 << (exponent - 1)`
     addi    a6,a9,-1
-    ssl     a6                          # [23]
+    ssl     a6
     movi    a7,1
     sll     a7,a7                       // to_add
 
-    extui   a8,a3,31,1                  # [24], sign
+    extui   a8,a3,31,1              // sign
     // Round half away from zero, as esp_nn_div_by_power_of_two does:
     // (x + half) >> e for x >= 0, (x + half - 1) >> e for x < 0. The
     // vector path adds the (0 / -1) compare mask; here the sign bit must
@@ -295,27 +265,28 @@ esp_nn_mul_elementwise_s8_esp32s3:  # 0x4
     sub     a3,a3,a8            // subtract sign
     add     a3,a3,a7            // add to_add
 
-    ssr     a9                          # [20] load right_shift
+    ssr     a9                      // load right_shift
     sra     a3,a3               // right shift
 .skip_div_by_pow_of_2_remains:
 
-    l32i.n  a6,a1,40                    # [32], out_offset
-    l32i.n  a8,a1,132                   # [35], act_max
-    l32i.n  a7,a1,128                   # [36], act_min
+    l32i.n  a6,a1,40                // out_offset
+    l32i  a8,a1,ARG_ACT_MAX         // act_max
+    l32i  a7,a1,ARG_ACT_MIN         // act_min
 
 // add offset and apply activation
-    add.n   a3,a3,a6                    # [34], offset added
-    min     a8,a8,a3                    # [37]
-    l32i.n  a3,a1,8                 # [38]  gra_spill_temp_1, load base out_addr
-    max     a8,a8,a7                    # [39]
+    add.n   a3,a3,a6                // offset added
+    min     a8,a8,a3
+    l32i.n  a3,a1,8                 // load base out_addr
+    max     a8,a8,a7
 
 // store
-    add.n   a3,a11,a3                   # [16], add index from `a11`
-    s8i     a8,a3,0                     # [41]  id:392 // store
-    addi.n  a11,a11,1               # [42]  // inc index
+    add.n   a3,a11,a3               // add index from `a11`
+    s8i     a8,a3,0                 // store
+    addi.n  a11,a11,1               // inc index
 
-.LBB33_esp_nn_mul_elementwise_s8_esp32s3:   # 0x2ed
+.LBB33_esp_nn_mul_elementwise_s8_esp32s3:// 0x2ed
+    bnez    a5,.Lunaligned_q
 .exit:
-    retw.n                          # [0]
+    retw.n
 
     .size   esp_nn_mul_elementwise_s8_esp32s3, . - esp_nn_mul_elementwise_s8_esp32s3
