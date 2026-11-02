@@ -122,11 +122,10 @@ The library contains optimised NN (Neural Network) functions for various Espress
     PSRAM and a 64KB data cache
   - The `dual core` column is with `esp_nn_dual_core_enable()` called once at
     startup, which lets the heavier kernels split their work across both cores
-  - `Without ESP-NN` case is when `esp-nn` is completely disabled by removing below flag from [CMakeLists.txt](CMakeLists.txt):
-    ```cmake
-      # enable ESP-NN optimizations by Espressif
-      target_compile_options(${COMPONENT_LIB} PRIVATE -DESP_NN)
-    ```
+  - `Without ESP-NN` is esp-tflite-micro with esp-nn turned off, so it runs the
+    TFLite Micro reference kernels. Turn off "Use ESP-NN optimized kernels" in
+    `idf.py menuconfig` (under `ESP TFLite-Micro`), or set
+    `CONFIG_ESP_TFLITE_MICRO_USE_ESP_NN=n` in `sdkconfig`.
 
 
 ## Configuration
@@ -150,4 +149,4 @@ Please check [CONTRIBUTING.md](CONTRIBUTING.md) for further information if you'd
 
 ## Copyrights and License
 
-All original source code in this repository is Copyright (C) 2020-2021 Espressif Systems. This source code is licensed under the Apache License 2.0 as described in the file LICENSE.
+All original source code in this repository is Copyright (C) 2020-2026 Espressif Systems. This source code is licensed under the Apache License 2.0 as described in the file LICENSE.
