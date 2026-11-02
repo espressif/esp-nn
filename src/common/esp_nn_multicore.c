@@ -21,6 +21,7 @@
 
 #if ESP_NN_DUAL_CORE_SUPPORTED
 
+#include <assert.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -163,8 +164,8 @@ void esp_nn_dual_core_disable(void)
     if (s_worker == NULL) {
         return;
     }
-    /* Wait out a split kernel in flight; later ones fail begin() and run
-     * single core. */
+    /* No other task may be in esp-nn here (see the header), so the claim is
+     * free and this take does not wait. */
     xSemaphoreTake(s_claim, portMAX_DELAY);
     TaskHandle_t worker = s_worker;
     s_worker = NULL;
@@ -225,7 +226,11 @@ void esp_nn_dual_core_end(void)
 
 bool esp_nn_dual_core_run(void (*fn)(void *), void *arg)
 {
-    if (s_worker == NULL || xSemaphoreGetMutexHolder(s_claim) != xTaskGetCurrentTaskHandle()) {
+    if (s_worker == NULL) {
+        return false;
+    }
+    if (xSemaphoreGetMutexHolder(s_claim) != xTaskGetCurrentTaskHandle()) {
+        assert(!"esp_nn_dual_core_run() without esp_nn_dual_core_begin()");
         return false;
     }
     s_fn = fn;
