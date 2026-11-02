@@ -34,7 +34,7 @@ before_script:
     - ${CI_PROJECT_DIR}/tools/ci/stage_merged_bin.sh $TARGET
     - done
 
-.build_template:
+.build_base:
   stage: build
   image: espressif/idf:latest
   tags:
@@ -47,6 +47,9 @@ before_script:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
     - when: on_success
+
+.build_template:
+  extends: .build_base
   script:
     - cd ${CI_PROJECT_DIR}/test_app
     # build examples
@@ -113,6 +116,25 @@ build_idf_v5.1:
   image: espressif/idf:release-v5.1
   variables:
     EXAMPLE_TARGETS: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2
+
+# bench_app measures cycles on hardware. CI only keeps it building, on the
+# targets with optimized kernels and the IDF releases that build all of them.
+# ESP32-S31 is a preview target, on IDF master only.
+build_bench_app:
+  extends: .build_base
+  image: espressif/idf:${BENCH_IDF_IMAGE}
+  parallel:
+    matrix:
+      - BENCH_IDF_IMAGE: [release-v5.5, release-v6.0]
+        BENCH_TARGETS: "esp32s3 esp32p4"
+      - BENCH_IDF_IMAGE: latest
+        BENCH_TARGETS: "esp32s3 esp32p4 esp32s31"
+        BENCH_IDF_FLAGS: "--preview"
+  script:
+    - cd ${CI_PROJECT_DIR}/bench_app
+    - for TARGET in $BENCH_TARGETS; do
+    - idf.py $BENCH_IDF_FLAGS set-target $TARGET build
+    - done
 
 # esp-emu 0.46 models esp32c3/c5/c6/h2/p4/s31; the other targets (incl. the
 # RISC-V esp32c2) stay build-only. It boots esp32s3 too, but has no ee.* SIMD
