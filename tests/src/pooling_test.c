@@ -220,4 +220,10 @@ void esp_nn_max_pool_s8_test()
     run_max_pool_test_act(16, 16, 12, 3, 3, 1, 1, 1, 1, -20, 30, iter++); /* ch % 8 == 4 */
     run_max_pool_test_act(16, 16, 4, 2, 2, 2, 2, 0, 0, 0, 127, iter++);   /* ReLU, ch 4 */
     run_max_pool_test_act(9, 7, 20, 3, 3, 2, 2, 1, 1, -128, 6, iter++);   /* ch % 8 == 4 */
+    /* Padding as wide as the filter: the first and last windows of each row
+     * and column miss the input, and the output is the clamped INT8_MIN. */
+    run_max_pool_test(6, 6, 16, 2, 2, 1, 1, 2, 2, iter++);                /* banded rows */
+    run_max_pool_test(6, 5, 12, 2, 2, 1, 1, 2, 2, iter++);                /* ch % 8 == 4 */
+    run_max_pool_test(1, 8, 16, 1, 2, 3, 1, 1, 0, iter++);                /* one column */
+    run_max_pool_test_act(6, 6, 16, 2, 2, 1, 1, 2, 2, -20, 30, iter++);
 }
