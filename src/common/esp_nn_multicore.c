@@ -29,9 +29,10 @@
 #include "esp_heap_caps.h"
 #include "sdkconfig.h"
 
-/* MALLOC_CAP_SIMD (IDF >= 5.3) marks memory that SIMD loads may access:
- * L2MEM and PSRAM on ESP32-P4, not the LP/RTC RAM. On older IDFs, which
- * have no such cap, MALLOC_CAP_DMA excludes the RTC RAM on every target. */
+/* MALLOC_CAP_SIMD (IDF v5.3.3, v5.4.1, v5.5 and later) marks memory that
+ * SIMD loads may access: L2MEM and PSRAM on ESP32-P4, not the LP/RTC RAM.
+ * On older IDFs, which have no such cap, MALLOC_CAP_DMA excludes the RTC RAM
+ * on every target. */
 #ifndef MALLOC_CAP_SIMD
 #define MALLOC_CAP_SIMD MALLOC_CAP_DMA
 #endif
@@ -94,6 +95,12 @@ void esp_nn_dual_core_enable(void)
     if (s_done == NULL) {
         return;
     }
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* A task's first PIE instruction traps, and IDF pins the task to the core
+     * it runs on. Take that trap here, so the calling task is pinned to this
+     * core and the worker goes to the other one. */
+    ESP_NN_PIE_ENABLE();
+#endif
     const BaseType_t core = (xPortGetCoreID() == 0) ? 1 : 0;
     /* The kernels store 128-bit vectors to the stack too, so it needs the
      * same memory as the scratch below; a plain xTaskCreate stack can land in
@@ -101,15 +108,16 @@ void esp_nn_dual_core_enable(void)
      * static, so the buffers stay put. */
 #if CONFIG_NN_DUAL_CORE_WORKER_STACK_PSRAM
     /* PSRAM takes 128-bit accesses on both targets. No MALLOC_CAP_SIMD: on
-     * IDF < 5.3 it stands in for MALLOC_CAP_DMA, which PSRAM lacks. */
+     * IDF before v5.3.3 and v5.4.1 it stands in for MALLOC_CAP_DMA, which
+     * PSRAM lacks. */
     StackType_t *stack = heap_caps_malloc(ESP_NN_WORKER_STACK_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
     /* Internal SIMD-capable RAM first, then PSRAM where the config allows
-     * task stacks there (IDF >= 5.3; the MALLOC_CAP_DMA fallback has no
-     * PSRAM). */
+     * task stacks there. No MALLOC_CAP_SIMD on the PSRAM side, as in the
+     * PSRAM-only case: PSRAM takes 128-bit accesses on both targets. */
     StackType_t *stack = heap_caps_malloc_prefer(ESP_NN_WORKER_STACK_SIZE, 1 + ESP_NN_WORKER_STACK_EXT_OK,
                                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_SIMD | MALLOC_CAP_8BIT,
-                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_SIMD | MALLOC_CAP_8BIT);
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
     StaticTask_t *tcb = heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (stack != NULL && tcb != NULL) {

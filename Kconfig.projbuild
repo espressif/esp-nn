@@ -64,8 +64,7 @@ config NN_DUAL_CORE_WORKER_STACK_INTERNAL_FIRST
    bool "Internal RAM, PSRAM as fallback"
    help
       Internal SIMD-capable RAM. When none is left, PSRAM, if the
-      FreeRTOS option allowing task stacks in external memory is set
-      (IDF 5.3 or later).
+      FreeRTOS option allowing task stacks in external memory is set.
 
 config NN_DUAL_CORE_WORKER_STACK_PSRAM
    bool "PSRAM only"
