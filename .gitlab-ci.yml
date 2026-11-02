@@ -68,6 +68,16 @@ build_idf_master:
     # esp32s31 is a preview target on IDF master
     IDF_EXTRA_FLAGS: "--preview"
 
+# The ANSI C configuration (NN_ANSI_C), so test_app code that needs the
+# optimized headers cannot slip in unguarded. The staging slug comes from the
+# job name (master_ansi), so the emulator stage runs these images as well.
+build_idf_master_ansi:
+  extends: .build_template
+  image: espressif/idf:latest
+  variables:
+    EXAMPLE_TARGETS: esp32 esp32s3 esp32c3 esp32c5 esp32p4 esp32s31
+    IDF_EXTRA_FLAGS: "--preview -D SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ci.ansi"
+
 build_idf_v6.0:
   extends: .build_template
   image: espressif/idf:release-v6.0
