@@ -885,14 +885,13 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t activation_max = conv_params->activation.max;
     const uint16_t ch_mult = conv_params->ch_mult;
 
-    /* The vector paths load the input 16 bytes and store the output 8 bytes
-     * at a time. Use the reference for misaligned buffers. */
-    if ((((uintptr_t)input_data & 15) | ((uintptr_t)out_data & 7)) != 0) {
-        esp_nn_depthwise_conv_s8_ansi(input_dims, input_data, filter_dims,
-                                      filter_data, bias, output_dims, out_data,
-                                      conv_params, quant_data);
-        return;
-    }
+    /* Some paths need aligned caller buffers. The whole-buffer s8-to-s16
+     * converter and the s8 3x3 kernels load the input 16 bytes at a time,
+     * and the s8 3x3 and s16 kernels store the output 8 bytes at a time.
+     * Those paths use the reference for misaligned buffers. The others copy
+     * through scratch or align the data themselves. */
+    const bool in_aligned = (((uintptr_t)input_data) & 15) == 0;
+    const bool out_aligned = (((uintptr_t)out_data) & 7) == 0;
 
     if (scratch_buffer == NULL) {
         printf("esp_nn_depthwise_conv error! scratch_buffer not set!\n");
@@ -930,6 +929,9 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     if ((ch_mult == 1) && (channels % 8 == 0)) {
         if ((filter_wd == 3) && (filter_ht == 3)) {
             if (channels % 16 == 0) {
+                if (!in_aligned || !out_aligned) {
+                    goto reference;
+                }
                 /* process in 8 bits with s8 padded assembly. Leading padding
                  * comes from the caller; trailing padding is whatever the
                  * output extent still needs, so TFLite's asymmetric "SAME"
@@ -1086,6 +1088,9 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                 }
             } else {
                 /* ch < 12 (e.g., ch=8), 3x3: use s16 mult1 3x3 path */
+                if (!in_aligned || !out_aligned) {
+                    goto reference;
+                }
                 esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
                 esp_nn_depthwise_conv_s16_mult1_3x3_esp32s3(input_data16, input_wd, input_ht, channels,
@@ -1096,11 +1101,16 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         } else { // all other ch_mult == 1, channels % 8 == 0
             /* Tiled s16 processing: convert filter once, process input in row strips
              * to keep working set within DCache (64KB) */
+            if (!out_aligned) {
+                goto reference;
+            }
             esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
 
-            /* Check if full conversion fits comfortably in cache */
+            /* Check if full conversion fits comfortably in cache. The row
+             * tiles below handle a misaligned input; the full conversion
+             * does not. */
             int total_s16_size = 2 * (filter_size + input_size);
-            if (total_s16_size <= 48 * 1024) {
+            if (total_s16_size <= 48 * 1024 && in_aligned) {
                 /* Small enough — full conversion is fine */
                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
                 esp_nn_depthwise_conv_s16_mult1_esp32s3(input_data16, input_wd, input_ht, channels,
@@ -1241,6 +1251,9 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         }
     } else if (ch_mult % 8 == 0) {
         // Channel multiplier is optimized multiple - use direct s16 functions
+        if (!in_aligned || !out_aligned) {
+            goto reference;
+        }
         esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
         esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
         if (filter_wd == 3 && filter_ht == 3) {
@@ -1257,6 +1270,9 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                                                     out_mult, activation_min, activation_max);
         }
     } else if (ch_mult % 4 == 0) {
+        if (!in_aligned || !out_aligned) {
+            goto reference;
+        }
         esp_nn_s8_to_s16_esp32s3(filter_data, filter_data16, filter_size);
         esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
         esp_nn_depthwise_conv_s16_mult4_esp32s3(input_data16, input_wd, input_ht, channels,
@@ -1268,4 +1284,10 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         esp_nn_depthwise_conv_s8_opt(input_dims, input_data, filter_dims, filter_data, bias,
                                      output_dims, out_data, conv_params, quant_data);
     }
+    return;
+
+reference:
+    esp_nn_depthwise_conv_s8_ansi(input_dims, input_data, filter_dims,
+                                  filter_data, bias, output_dims, out_data,
+                                  conv_params, quant_data);
 }
