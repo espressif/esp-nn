@@ -268,7 +268,7 @@ void esp_nn_mul_elementwise_s8_test()
     int8_t *out_c_orig = NULL;
     int8_t *out_opt_orig = NULL;
 
-    for (int itr = 0; itr < 10; itr++) {
+    for (int itr = 0; itr < 12; itr++) {
         switch (itr) {
         case 0: // all zeros
             input1_offset = 0;
@@ -297,6 +297,15 @@ void esp_nn_mul_elementwise_s8_test()
             output_offset = -127;
             output_mult = MULT_MAX;
             output_shift = 0;
+        break;
+        case 10: // left shift: the S3 vector path takes it for 8-byte aligned buffers
+        case 11: // right shift above 16
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = (itr == 10) ? 3 : -20;
+            size = 4096;
         break;
         default:  // practical random input
             input1_offset = rand() % 256 - 127; // range [-127, 128]
@@ -417,7 +426,7 @@ void esp_nn_mul_broadcast_channel_s8_test()
     int32_t activation_min = -128;
     int32_t activation_max = 127;
 
-    for (int itr = 0; itr < 10; itr++) {
+    for (int itr = 0; itr < 12; itr++) {
         switch (itr) {
         case 0: // all zeros
             input1_offset = 0;
@@ -462,6 +471,16 @@ void esp_nn_mul_broadcast_channel_s8_test()
             output_mult = 1705397815;
             output_shift = -3;
             total_spatial = 49;
+            channels = 96;
+        break;
+        case 10: // left shift: the S3 vector path takes it for channels % 8 == 0
+        case 11: // right shift above 16
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = (itr == 10) ? 3 : -20;
+            total_spatial = 64;
             channels = 96;
         break;
         default: // random
