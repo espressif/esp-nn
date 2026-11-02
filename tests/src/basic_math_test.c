@@ -268,7 +268,7 @@ void esp_nn_mul_elementwise_s8_test()
     int8_t *out_c_orig = NULL;
     int8_t *out_opt_orig = NULL;
 
-    for (int itr = 0; itr < 12; itr++) {
+    for (int itr = 0; itr < 14; itr++) {
         switch (itr) {
         case 0: // all zeros
             input1_offset = 0;
@@ -297,6 +297,17 @@ void esp_nn_mul_elementwise_s8_test()
             output_offset = -127;
             output_mult = MULT_MAX;
             output_shift = 0;
+        break;
+        case 12: // narrowed activation (fused ReLU-like), right shift 0: s32 clamp
+        case 13: // narrowed activation, right shift 5: s16 clamp
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = (itr == 12) ? 0 : -5;
+            activation_min = -20;
+            activation_max = 60;
+            size = 4096 + 5;
         break;
         case 10: // left shift: the S3 vector path takes it for 8-byte aligned buffers
         case 11: // right shift above 16
@@ -426,7 +437,7 @@ void esp_nn_mul_broadcast_channel_s8_test()
     int32_t activation_min = -128;
     int32_t activation_max = 127;
 
-    for (int itr = 0; itr < 12; itr++) {
+    for (int itr = 0; itr < 14; itr++) {
         switch (itr) {
         case 0: // all zeros
             input1_offset = 0;
@@ -482,6 +493,18 @@ void esp_nn_mul_broadcast_channel_s8_test()
             output_shift = (itr == 10) ? 3 : -20;
             total_spatial = 64;
             channels = 96;
+        break;
+        case 12: // narrowed activation, right shift 0, PIE rows
+        case 13: // narrowed activation, right shift 5, PIE rows
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = (itr == 12) ? 0 : -5;
+            activation_min = -20;
+            activation_max = 60;
+            total_spatial = 37;
+            channels = 40;
         break;
         default: // random
             input1_offset = rand() % 256 - 127;
