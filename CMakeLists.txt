@@ -87,6 +87,11 @@ else()
     target_compile_options(${COMPONENT_LIB} PRIVATE  -O2 -Wno-unused-function)
 endif()
 
+# Kernels run on the caller's task stack, so an array sized from a tensor
+# shape can overflow it on large shapes: any VLA in this component is a build
+# error (-Werror=vla also enables -Wvla).
+target_compile_options(${COMPONENT_LIB} PRIVATE -Werror=vla)
+
 if(CONFIG_NN_SKIP_NUDGE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SKIP_NUDGE)
 endif()

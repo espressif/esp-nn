@@ -800,15 +800,29 @@ void esp_nn_fully_connected_perf_test()
 void esp_nn_fully_connected_per_ch_s8_batch_test()
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    /* (batches, row_len, out_ch, input_offset). row_len a multiple of 16 keeps
-     * the s8 fast path; 33 exercises the scalar tail; in_off 0 skips the
-     * correction pass. Batched output must match the per-row reference exactly. */
-    const struct { int batches, row_len, out_ch; int32_t in_off; } cfg[] = {
-        { 48, 160, 32,  5 },   /* conformer FFN-d1 shape */
-        { 48,  64, 16,  0 },   /* input_offset 0 */
-        {  8,  80,  8, -3 },
-        {  4,  33,  5,  7 },   /* non-multiple-of-16 row_len -> scalar tail */
-        {  1, 128, 12, 11 },   /* single row */
+    /* (batches, row_len, out_ch, input_offset, input misalign, filter misalign).
+     * row_len a multiple of 16 keeps the s8 fast path; 33 exercises the scalar
+     * tail and, since its rows then start at differing offsets, mixed row
+     * alignments; in_off 0 skips the correction.  Batching is only eligible
+     * when the fast path is, so a misaligned input (or filter) must
+     * transparently fall back to the per-row kernel instead of reading
+     * garbage.  Batched output must match the per-row ANSI reference. */
+    const struct {
+        int batches, row_len, out_ch;
+        int32_t in_off;
+        int in_align, f_align;
+    } cfg[] = {
+        { 48, 160, 32,  5, 0,  0 },   /* conformer FFN-d1 shape */
+        { 48,  64, 16,  0, 0,  0 },   /* input_offset 0 */
+        {  8,  80,  8, -3, 0,  0 },
+        {  4,  33,  5,  7, 0,  0 },   /* non-multiple-of-16 row_len -> scalar tail */
+        {  1, 128, 12, 11, 0,  0 },   /* single row */
+        {  4,  64,  8,  5, 8,  4 },   /* neither operand 16-aligned: per-row s16 fallback */
+        {  4,  64,  8, -3, 4,  4 },   /* input 4-mod-8: per-row ANSI fallback */
+        {  4,  64,  8,  5, 0,  4 },   /* fast path, unaligned filter rows */
+        {  4,  64,  8, -3, 8,  0 },   /* fast path, filter supplied as aligned operand */
+        {  4,  64, 128,  5, 8, 12 },  /* wide out_ch + both misaligned (fallback) */
+        {  4,  64, 128,  5, 0,  0 },  /* wide out_ch fast path: the VLA shape */
     };
     const int n_cfg = (int)(sizeof(cfg) / sizeof(cfg[0]));
     const int32_t activation_min = -128, activation_max = 127;
@@ -817,9 +831,11 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
     for (int c = 0; c < n_cfg; c++) {
         const int B = cfg[c].batches, row_len = cfg[c].row_len, out_ch = cfg[c].out_ch;
         const int32_t input_offset = cfg[c].in_off;
+        const int in_align = cfg[c].in_align;
+        const int f_align  = cfg[c].f_align;
 
-        int8_t  *in_o  = ESP_NN_TEST_ALLOC(B * row_len + 16);
-        int8_t  *flt_o = ESP_NN_TEST_ALLOC(row_len * out_ch + 16);
+        int8_t  *in_o  = ESP_NN_TEST_ALLOC(B * row_len + 32);          /* + align/misalign */
+        int8_t  *flt_o = ESP_NN_TEST_ALLOC(row_len * out_ch + 32);
         int8_t  *ob_o  = ESP_NN_TEST_ALLOC(B * out_ch + 16);
         int8_t  *or_o  = ESP_NN_TEST_ALLOC(B * out_ch + 16);
         int32_t *out_mult  = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
@@ -828,8 +844,8 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
             TEST_SKIP("%s alloc failed\n", __FUNCTION__);
             goto fc_batch_cleanup;
         }
-        int8_t *input       = (int8_t *)(((uintptr_t)in_o  + 15) & ~(uintptr_t)15);
-        int8_t *filter      = (int8_t *)(((uintptr_t)flt_o + 15) & ~(uintptr_t)15);
+        int8_t *input       = (int8_t *)((((uintptr_t)in_o  + 15) & ~(uintptr_t)15) + in_align);
+        int8_t *filter      = (int8_t *)((((uintptr_t)flt_o + 15) & ~(uintptr_t)15) + f_align);
         int8_t *out_batched = (int8_t *)(((uintptr_t)ob_o  + 15) & ~(uintptr_t)15);
         int8_t *out_ref     = (int8_t *)(((uintptr_t)or_o  + 15) & ~(uintptr_t)15);
 
@@ -853,11 +869,11 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         }
 
         if (CHECK_EQUAL(out_ref, out_batched, B * out_ch) == false) {
-            TEST_FAIL("[%3d] failed [B %d, row_len %d, out_ch %d]\n",
-                   c, B, row_len, out_ch);
+            TEST_FAIL("[%3d] failed [B %d, row_len %d, out_ch %d, in_align %d, f_align %d]\n",
+                   c, B, row_len, out_ch, in_align, f_align);
         } else {
-            TEST_PASS("[%3d] passed [B %d, row_len %d, out_ch %d, in_off %"PRId32"]\n",
-                   c, B, row_len, out_ch, input_offset);
+            TEST_PASS("[%3d] passed [B %d, row_len %d, out_ch %d, in_off %"PRId32", in_align %d, f_align %d]\n",
+                   c, B, row_len, out_ch, input_offset, in_align, f_align);
         }
     fc_batch_cleanup:
         free(in_o); free(flt_o); free(ob_o); free(or_o); free(out_mult); free(out_shift);

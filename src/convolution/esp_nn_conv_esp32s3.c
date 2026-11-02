@@ -675,7 +675,10 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
     /* 1x1 stride-1 conv */
     if (filter_wd == 1 && filter_ht == 1 && pad_wd == 0 && pad_ht == 0 &&
             stride_wd == 1 && stride_ht == 1) {
-        if (channels % 8 == 0) {
+        /* The mult8 asm loads the input and stores the output 8 bytes at a
+         * time, so both must be 8-byte aligned. */
+        if (channels % 8 == 0 &&
+                (((uintptr_t)input | (uintptr_t)out_data) & 7) == 0) {
             int spatial_size = input_wd * input_ht;
             int filter_bytes = channels * out_channels;
             if (filter_bytes > 24 * 1024) {

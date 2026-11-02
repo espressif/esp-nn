@@ -8,6 +8,7 @@
 #include <esp_nn_defs.h>
 
 #include <common_functions.h>
+#include <esp_nn_ansi_headers.h>
 #include <esp_nn_multicore.h>
 
 static int16_t *scratch_buffer = NULL;
@@ -879,6 +880,15 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
     const uint16_t ch_mult = conv_params->ch_mult;
+
+    /* The vector paths load the input 16 bytes and store the output 8 bytes
+     * at a time. Use the reference for misaligned buffers. */
+    if ((((uintptr_t)input_data & 15) | ((uintptr_t)out_data & 7)) != 0) {
+        esp_nn_depthwise_conv_s8_ansi(input_dims, input_data, filter_dims,
+                                      filter_data, bias, output_dims, out_data,
+                                      conv_params, quant_data);
+        return;
+    }
 
     if (scratch_buffer == NULL) {
         printf("esp_nn_depthwise_conv error! scratch_buffer not set!\n");
