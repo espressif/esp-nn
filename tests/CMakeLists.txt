@@ -16,4 +16,7 @@ set(COMPONENT_PRIV_REQUIRES esp-nn)
 
 register_component()
 
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../src/fully_connected")
+
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-unused-function)
