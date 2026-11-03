@@ -167,6 +167,7 @@ void app_main()
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");
     RUN_TEST(esp_nn_mean_nhwc_s8_test, "mean_nhwc_s8");
+    RUN_TEST(esp_nn_pie_context_test, "pie_context");
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */
