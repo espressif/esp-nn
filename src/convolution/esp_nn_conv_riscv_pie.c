@@ -96,13 +96,18 @@ static int32_t conv_dot_rows_pie(const int8_t *in, const int8_t *filt,
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
             "beqz   %[c32], 2f                      \n\t"
-            /* zero-overhead loop; end label ON last body insn */
+            /* zero-overhead loop; end label ON last body insn
+             * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+            ESP_NN_HWLP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
+            "nop                                    \n\t"
+            "1:                                     \n\t"
+            "nop                                    \n\t"
+            ESP_NN_HWLP_END
             "2:                                     \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
@@ -162,13 +167,18 @@ int32_t pie_dot_s8(const int8_t *a, const int8_t *b, int32_t len)
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
             "beqz   %[c32], 2f                      \n\t"
-            /* zero-overhead loop; end label ON last body insn */
+            /* zero-overhead loop; end label ON last body insn
+             * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+            ESP_NN_HWLP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
+            "nop                                    \n\t"
+            "1:                                     \n\t"
+            "nop                                    \n\t"
+            ESP_NN_HWLP_END
             "2:                                     \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
@@ -378,12 +388,17 @@ static void qacc16_mac_continue(const int8_t *trans, const int8_t *filt,
         "esp.vld.128.ip  q2, x30, 16         \n\t"
         "esp.vldbc.8.xp  q3, x31, t3         \n\t"
         "beqz   %[cpair], 2f                 \n\t"
+        /* P4 placement rules: see ESP_NN_HWLP_BEGIN */
+        ESP_NN_HWLP_BEGIN
         "esp.lp.setup 0, %[cpair], 1f        \n\t"
         "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t"
         "esp.vldbc.8.xp  q1, x31, t3         \n\t"
         "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-        "1:                                  \n\t"
         "esp.vldbc.8.xp  q3, x31, t3         \n\t"
+        "nop                                 \n\t"
+        "1:                                  \n\t"
+        "nop                                 \n\t"
+        ESP_NN_HWLP_END
         "2:                                  \n\t"
         "esp.vmulas.s8.qacc q0, q1           \n\t"
         "esp.vmulas.s8.qacc q2, q3           \n\t"
@@ -813,11 +828,18 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                     "esp.vld.128.ip  q1, x31, 16    \n\t"
 
                     "beqz %[c16], 2f                \n\t"
-                    /* zero-overhead loop; end label ON last body insn */
+                    /* zero-overhead loop; end label ON last body insn
+                     * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+                    ESP_NN_HWLP_BEGIN
                     "esp.lp.setup 0, %[c16], 1f     \n\t"
                     "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                    "1:                             \n\t"
                     "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    "nop                            \n\t"
+                    "nop                            \n\t"
+                    "nop                            \n\t"
+                    "1:                             \n\t"
+                    "nop                            \n\t"
+                    ESP_NN_HWLP_END
                     "2:                             \n\t"
 
                     // move input_ptr, filter_ptr and conv_out
@@ -999,11 +1021,18 @@ static void esp_nn_conv_s8_padded(
                             "esp.vld.128.ip  q0, x30, 16    \n\t"
                             "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                            /* zero-overhead loop; end label ON last body insn */
+                            /* zero-overhead loop; end label ON last body insn
+                             * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+                            ESP_NN_HWLP_BEGIN
                             "esp.lp.setup 0, %[c16], 1f     \n\t"
                             "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                            "1:                             \n\t"
                             "esp.vld.128.ip  q1, x31, 16    \n\t"
+                            "nop                            \n\t"
+                            "nop                            \n\t"
+                            "nop                            \n\t"
+                            "1:                             \n\t"
+                            "nop                            \n\t"
+                            ESP_NN_HWLP_END
 
                             // move input_ptr and filter_ptr
                             "mv %[inp], x30                 \n\t"
