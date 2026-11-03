@@ -47,7 +47,9 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
             "esp.vld.128.ip  q3, x31, 16            \n\t"
 
             "beqz   %[c32], 2f                      \n\t"
-            /* Zero-overhead hardware loop; end label sits ON the last insn */
+            /* Zero-overhead hardware loop; end label sits ON the last insn
+             * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+            ESP_NN_HWLP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             /* MAC pair 1 + load next input[0:16] */
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
@@ -55,9 +57,12 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             /* MAC pair 2 + load next input[16:32] */
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
             /* Load next filter[16:32] */
             "esp.vld.128.ip  q3, x31, 16            \n\t"
+            "nop                                    \n\t"
+            "1:                                     \n\t"
+            "nop                                    \n\t"
+            ESP_NN_HWLP_END
 
             "2:                                     \n\t"
             /* Drain pipeline: final two MACs */
