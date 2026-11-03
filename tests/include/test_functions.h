@@ -41,6 +41,9 @@ void esp_nn_softmax_s8_test();
 void esp_nn_hard_swish_s8_test();
 void esp_nn_mean_nhwc_s8_test();
 
+/* two PIE tasks on one core (ESP32-P4) */
+void esp_nn_pie_context_test(void);
+
 /* uint8_t ops tests */
 void esp_nn_add_elementwise_u8_test();
 
