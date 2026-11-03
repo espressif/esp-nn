@@ -185,7 +185,34 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
         : "x30", "memory" \
     ); \
 } while(0)
-#endif /* CONFIG_IDF_TARGET_ESP32P4 - PIE_ENABLE and QACC_EXTRACT */
+
+/**
+ * ESP32-P4 hardware-loop (esp.lp.setup) placement rules, as listed by
+ * Espressif in esp-idf issue #19025 and in esp-idf
+ * components/freertos/test_apps/freertos/port/test_hwlp_routines.S:
+ *   1. the first loop instruction is 4-byte aligned;
+ *   2. the last loop instruction is 4-byte aligned and not compressed;
+ *   3. the loop body is at least 24 bytes (six 32-bit instructions);
+ *   4. the last loop instruction is not an FPU / PIE instruction.
+ * When an interrupt lands on the entry / exit boundary of a loop that breaks
+ * them, the loop counter is corrupted (wrong trip count, runaway pointers).
+ *
+ * Every hardware loop here is written as
+ *     ESP_NN_HWLP_BEGIN "esp.lp.setup 0, cnt, 1f" <body> [nop ...] "1: <last>" ESP_NN_HWLP_END
+ * BEGIN aligns esp.lp.setup and turns RVC off up to END, so the body is all
+ * 32-bit instructions and its first / last instructions stay 4-byte aligned.
+ * Short bodies are padded with 32-bit nops; when the real last instruction is
+ * a PIE one, a nop becomes the last instruction (label 1 sits on it).
+ *
+ * Do not add a second .balign inside the loop to align the last instruction:
+ * linker relaxation can shrink the R_RISCV_ALIGN padding it leaves, while the
+ * loop end (R_RISCV_ESP_LP_OFFSET_12) is resolved from the unrelaxed layout,
+ * so the hardware loop end lands 2 bytes past label 1. With RVC off for the
+ * whole body, the last instruction is aligned without it.
+ */
+#define ESP_NN_HWLP_BEGIN   ".balign 4\n\t.option push\n\t.option norvc\n\t"
+#define ESP_NN_HWLP_END     ".option pop\n\t"
+#endif /* CONFIG_IDF_TARGET_ESP32P4 - PIE_ENABLE, QACC_EXTRACT and HWLP rules */
 
 /**
  * 2-wide interleaved requant macro for ESP32-P4 RISC-V.
