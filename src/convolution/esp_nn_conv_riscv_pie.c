@@ -46,6 +46,7 @@
  *       of 8/16 as per function needs
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <esp_nn_defs.h>
 #include <esp_nn_ansi_headers.h>
@@ -1723,6 +1724,23 @@ int esp_nn_get_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
 void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
 {
     scratch_buffer = (int16_t *) buf;
+}
+
+void esp_nn_conv_scratch_borrow_riscv_pie(void *buf, void **scratch,
+                                          void **preferred, size_t *preferred_size)
+{
+    (void) preferred;
+    (void) preferred_size;
+    *scratch = scratch_buffer;
+    scratch_buffer = (int16_t *) buf;
+}
+
+void esp_nn_conv_scratch_restore_riscv_pie(void *scratch, void *preferred,
+                                           size_t preferred_size)
+{
+    (void) preferred;
+    (void) preferred_size;
+    scratch_buffer = (int16_t *) scratch;
 }
 
 typedef void (*conv_s8_pie_fn_t)(const data_dims_t *, const int8_t *,

@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
 

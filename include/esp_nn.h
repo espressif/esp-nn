@@ -60,6 +60,8 @@ extern "C" {
 #endif
 /* Feature flag: consumers can detect the batched per-channel FC API. */
 #define ESP_NN_HAS_FC_S8_BATCH 1
+/* Feature flag: esp_nn_set_fc_scratch_buf and esp_nn_get_fc_batch_scratch_size. */
+#define ESP_NN_HAS_FC_SCRATCH_BUF 1
 
 #ifdef __cplusplus
 }

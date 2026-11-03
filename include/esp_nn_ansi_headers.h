@@ -10,6 +10,8 @@
  * @file        Header definitions to include for esp_nn reference functions
  */
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 /************************** Basic math functions ****************************/
 
@@ -124,6 +126,35 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
+
+/**
+ * @brief       Bytes of scratch for one batched fully connected 1x1 call
+ *
+ * @note        The same value as esp_nn_get_conv_scratch_size for height =
+ *              batches, width = 1, in_ch = row_len, out_ch = out_ch.
+ *              ANSI and the generic targets return 0. A non-positive batch
+ *              count, a batch above UINT16_MAX, or a zero row or output
+ *              count returns 0.
+ */
+int esp_nn_get_fc_batch_scratch_size(int32_t batches, uint16_t row_len,
+                                     uint16_t out_ch);
+
+/**
+ * @brief       Record a fully connected scratch buffer and its byte length
+ *
+ * @note        Call it immediately before
+ *              esp_nn_fully_connected_per_ch_s8_batch when that call should
+ *              use the 1x1 path. A buffer that no batch call uses stays
+ *              registered. buf must be 16-byte aligned and size must be at
+ *              least esp_nn_get_fc_batch_scratch_size for the same batches,
+ *              row length, and output channels. The batched call clears the
+ *              pointer and the length before it returns. A missing buffer,
+ *              a short buffer, or a buffer installed only with
+ *              esp_nn_set_conv_scratch_buf leaves that call on the fully
+ *              connected kernel. This pointer is not the convolution scratch
+ *              pointer.
+ */
+void esp_nn_set_fc_scratch_buf(const void *buf, size_t size);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,

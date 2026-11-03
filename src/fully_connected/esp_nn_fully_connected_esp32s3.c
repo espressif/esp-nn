@@ -15,6 +15,7 @@
 #include <string.h>
 #include <common_functions.h>
 #include <esp_nn_ansi_headers.h>
+#include "esp_nn_fc_internal.h"
 #include "../common/esp_nn_filter_sum_esp32s3.h"
 
 /* Original s16 assembly (renamed) */
@@ -270,6 +271,19 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
                                        const int32_t activation_max,
                                        const int32_t batches)
 {
+    /* Weight zero-point 0 on a shape the per-chip gate accepts is the 1x1
+     * convolution when a fully connected scratch buffer was registered.
+     * Anything else stays in this kernel. The registration is cleared on
+     * every return. */
+    if (esp_nn_fc_per_ch_s8_batch_via_conv(input_data, input_offset, row_len,
+                                           filter_data, filter_offset, bias,
+                                           out_data, out_channels, out_offset,
+                                           out_shift, out_mult, activation_min,
+                                           activation_max, batches)) {
+        esp_nn_fc_scratch_clear();
+        return;
+    }
+
     const bool input_aligned = (((uintptr_t)input_data & 15) == 0)
                                && ((row_len & 15) == 0);
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
@@ -290,6 +304,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
                 filter_offset, bias, out_data + b * out_channels, out_channels,
                 out_offset, out_shift, out_mult, activation_min, activation_max);
         }
+        esp_nn_fc_scratch_clear();
         return;
     }
 
@@ -329,4 +344,5 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
             out_data[b * out_channels + ch] = (int8_t)acc;
         }
     }
+    esp_nn_fc_scratch_clear();
 }
