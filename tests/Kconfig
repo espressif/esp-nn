@@ -1,0 +1,20 @@
+menu "ESP-NN tests"
+   depends on IDF_TARGET_ESP32P4
+
+config NN_TEST_PIE_CONTEXT_SECONDS
+   int "Two-task PIE context test duration (seconds)"
+   range 0 3600
+   default 10
+   help
+      How long esp_nn_pie_context_test() runs two PIE tasks on one core.
+      0 skips the test.
+
+config NN_TEST_PIE_CONTEXT_IRQ_US
+   int "Extra timer interrupt period during the PIE context test (us)"
+   range 0 100000
+   default 10
+   help
+      Period of a GPTimer interrupt on the core under test, so interrupts
+      also land inside the hardware loops. 0 turns it off; the task time
+      slicing (tick interrupt) still preempts the tasks.
+endmenu
