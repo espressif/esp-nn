@@ -51,12 +51,18 @@ void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
             "esp.zero.qacc                   \n\t"
             /* Accumulate loop: stride = channels between spatial positions */
             "mv     x30, %[base]            \n\t"
-            /* zero-overhead loop; end label ON last body insn */
+            /* zero-overhead loop; end label ON last body insn
+             * (P4 placement rules: see ESP_NN_HWLP_BEGIN) */
+            ESP_NN_HWLP_BEGIN
             "esp.lp.setup 0, %[cnt], 1f     \n\t"
             "esp.vld.128.ip  q0, x30, 0     \n\t"
             "esp.vmulas.s8.qacc q0, q7      \n\t"
+            "nop                            \n\t"
+            "nop                            \n\t"
+            "nop                            \n\t"
             "1:                             \n\t"
             "add    x30, x30, %[stride]     \n\t"
+            ESP_NN_HWLP_END
             :
             : [one] "r"(&one_val), [base] "r"(base_ptr),
               [cnt] "r"(num_elements), [stride] "r"((int32_t)channels)
