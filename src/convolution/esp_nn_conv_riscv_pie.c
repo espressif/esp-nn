@@ -97,13 +97,14 @@ static int32_t conv_dot_rows_pie(const int8_t *in, const int8_t *filt,
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
             "beqz   %[c32], 2f                      \n\t"
-            /* zero-overhead loop; end label ON last body insn */
+            /* for (k = 0; k < c32; k++) xacc += dot(in + 32 * k, flt + 32 * k, 32); */
+            ESP_NN_HWLOOP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
-            "esp.vld.128.ip  q3, x31, 16            \n\t"
+            ESP_NN_HWLOOP_LAST("esp.vld.128.ip  q3, x31, 16", 1)
+            ESP_NN_HWLOOP_END
             "2:                                     \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
@@ -163,13 +164,14 @@ int32_t pie_dot_s8(const int8_t *a, const int8_t *b, int32_t len)
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vld.128.ip  q3, x31, 16            \n\t"
             "beqz   %[c32], 2f                      \n\t"
-            /* zero-overhead loop; end label ON last body insn */
+            /* for (k = 0; k < c32; k++) xacc += dot(a + 32 * k, b + 32 * k, 32); */
+            ESP_NN_HWLOOP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
-            "esp.vld.128.ip  q3, x31, 16            \n\t"
+            ESP_NN_HWLOOP_LAST("esp.vld.128.ip  q3, x31, 16", 1)
+            ESP_NN_HWLOOP_END
             "2:                                     \n\t"
             "esp.vmulas.s8.xacc  q0, q1             \n\t"
             "esp.vmulas.s8.xacc  q2, q3             \n\t"
@@ -379,12 +381,14 @@ static void qacc16_mac_continue(const int8_t *trans, const int8_t *filt,
         "esp.vld.128.ip  q2, x30, 16         \n\t"
         "esp.vldbc.8.xp  q3, x31, t3         \n\t"
         "beqz   %[cpair], 2f                 \n\t"
+        /* for (k = 0; k < 2 * cpair; k++) qacc += trans[16 * k..] * filt[k]; */
+        ESP_NN_HWLOOP_BEGIN
         "esp.lp.setup 0, %[cpair], 1f        \n\t"
         "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t"
         "esp.vldbc.8.xp  q1, x31, t3         \n\t"
         "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-        "1:                                  \n\t"
-        "esp.vldbc.8.xp  q3, x31, t3         \n\t"
+        ESP_NN_HWLOOP_LAST("esp.vldbc.8.xp  q3, x31, t3", 1)
+        ESP_NN_HWLOOP_END
         "2:                                  \n\t"
         "esp.vmulas.s8.qacc q0, q1           \n\t"
         "esp.vmulas.s8.qacc q2, q3           \n\t"
@@ -814,14 +818,26 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                     "esp.vld.128.ip  q1, x31, 16    \n\t"
 
                     "beqz %[c16], 2f                \n\t"
-                    /* zero-overhead loop; end label ON last body insn */
+                    /* for (k = 0; k < c16; k++) xacc += dot(in + 16 * k, flt + 16 * k, 16); */
+#if ESP_NN_HWLOOP_PADDED
+                    /* The padded hardware loop runs 6 instructions per
+                     * iteration here, this software loop 4. */
+                    "mv   x28, %[c16]               \n\t"
+                    "1:                             \n\t"
+                    "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
+                    "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    "addi x28, x28, -1              \n\t"
+                    "bnez x28, 1b                   \n\t"
+#else
+                    ESP_NN_HWLOOP_BEGIN
                     "esp.lp.setup 0, %[c16], 1f     \n\t"
                     "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                    "1:                             \n\t"
-                    "esp.vld.128.ip  q1, x31, 16    \n\t"
+                    ESP_NN_HWLOOP_LAST("esp.vld.128.ip  q1, x31, 16", 3)
+                    ESP_NN_HWLOOP_END
+#endif
                     "2:                             \n\t"
 
-                    // move input_ptr, filter_ptr and conv_out
+                    /* input_ptr = x30; filter_ptr = x31; conv_out = xacc; */
                     "mv %[inp], x30                 \n\t"
                     "mv %[flt], x31                 \n\t"
                     "esp.vmulas.s8.xacc  q0, q1     \n\t"
@@ -831,7 +847,7 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
 
                     : [inp] "+r" (input_ptr), [flt] "+r" (filter_ptr), [out] "=r" (conv_out)
                     : [c16] "r"(c16)
-                    : "x29", "x30", "x31"
+                    : "x28", "x29", "x30", "x31"
                 );
                 in_ch_idx = in_channels & ~15;
 skip_asm:
@@ -1000,13 +1016,14 @@ static void esp_nn_conv_s8_padded(
                             "esp.vld.128.ip  q0, x30, 16    \n\t"
                             "esp.vld.128.ip  q1, x31, 16    \n\t"
 
-                            /* zero-overhead loop; end label ON last body insn */
+                            /* for (k = 0; k < c16; k++) xacc += dot(in + 16 * k, flt + 16 * k, 16); */
+                            ESP_NN_HWLOOP_BEGIN
                             "esp.lp.setup 0, %[c16], 1f     \n\t"
                             "esp.vmulas.s8.xacc.ld.ip  q0, x30, 16, q0, q1   \n\t"
-                            "1:                             \n\t"
-                            "esp.vld.128.ip  q1, x31, 16    \n\t"
+                            ESP_NN_HWLOOP_LAST("esp.vld.128.ip  q1, x31, 16", 3)
+                            ESP_NN_HWLOOP_END
 
-                            // move input_ptr and filter_ptr
+                            /* input_data_ptr = x30; filter_data_ptr = x31; */
                             "mv %[inp], x30                 \n\t"
                             "mv %[flt], x31                 \n\t"
                             "esp.vmulas.s8.xacc  q0, q1     \n\t"
@@ -1031,7 +1048,7 @@ static void esp_nn_conv_s8_padded(
                             "bnez s7, 1b                    \n\t"
                             "2:                             \n\t"
 
-                            // move input_ptr and filter_ptr
+                            /* input_data_ptr = x30; filter_data_ptr = x31; */
                             "mv %[inp], x30                 \n\t"
                             "mv %[flt], x31                 \n\t"
                             "esp.vmulas.s8.xacc  q0, q1     \n\t"

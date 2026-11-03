@@ -90,11 +90,12 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
                 "esp.vld.128.ip q0, x30, 16      \n\t"  /* load first 16, advance */
                 "addi   %[cnt], %[cnt], -1       \n\t"  /* one group already loaded */
                 "beqz   %[cnt], 2f               \n\t"
-                /* zero-overhead loop; end label ON last body insn */
+                /* for (k = 0; k < cnt; k++, p += 16) q0 = max(q0, p[0..15]); */
+                ESP_NN_HWLOOP_BEGIN
                 "esp.lp.setup 0, %[cnt], 1f      \n\t"
                 "esp.vld.128.ip q1, x30, 16      \n\t"  /* load next 16, advance */
-                "1:                              \n\t"
-                "esp.vmax.s8    q0, q0, q1       \n\t"  /* running max */
+                ESP_NN_HWLOOP_LAST("esp.vmax.s8    q0, q0, q1", 3)  /* running max */
+                ESP_NN_HWLOOP_END
                 "2:                              \n\t"
                 /* esp.max.s8.a GPR operand must be x26-x31 (required on S31) */
                 "esp.max.s8.a   q0, x29          \n\t"  /* horizontal reduce */
