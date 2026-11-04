@@ -55,7 +55,7 @@ void esp_nn_mul_elementwise_s8_mt(const int8_t *input1_data,
                                   const int32_t activation_max,
                                   const int32_t size)
 {
-    if (esp_nn_dual_core_active() && size >= 8192) {
+    if (size >= 8192 && esp_nn_dual_core_begin()) {
         const int32_t half = (size / 2) & ~15;
         mul_s8_mt_job_t job = {
             .input1_data = input1_data, .input2_data = input2_data,
@@ -70,8 +70,10 @@ void esp_nn_mul_elementwise_s8_mt(const int8_t *input1_data,
                           out_offset, out_mult, out_shift,
                           activation_min, activation_max, size - half);
             esp_nn_dual_core_wait();
+            esp_nn_dual_core_end();
             return;
         }
+        esp_nn_dual_core_end();
     }
     MUL_S8_TARGET(input1_data, input2_data, input1_offset, input2_offset,
                   output, out_offset, out_mult, out_shift,

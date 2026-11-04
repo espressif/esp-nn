@@ -66,8 +66,11 @@ static void clear_pie_cfg_unaligned(void *unused)
 static void clobber_pie_cfg(void)
 {
     clear_pie_cfg_unaligned(NULL);
-    if (esp_nn_dual_core_run(clear_pie_cfg_unaligned, NULL)) {
-        esp_nn_dual_core_wait();
+    if (esp_nn_dual_core_begin()) {
+        if (esp_nn_dual_core_run(clear_pie_cfg_unaligned, NULL)) {
+            esp_nn_dual_core_wait();
+        }
+        esp_nn_dual_core_end();
     }
 }
 #endif
@@ -167,6 +170,8 @@ void app_main()
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");
     RUN_TEST(esp_nn_mean_nhwc_s8_test, "mean_nhwc_s8");
+    /* Last: it disables and re-enables the worker. */
+    RUN_TEST(esp_nn_dual_core_test, "dual_core");
     ESP_LOGI(TAG, "s8 tests done!\n");
 
     /* u8 tests */
