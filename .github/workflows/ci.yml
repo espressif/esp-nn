@@ -1,0 +1,124 @@
+name: CI
+
+# Builds test_app for every supported ESP-IDF release and target, then runs the
+# emulated targets in esp-emulator. Mirrors the GitLab pipeline in
+# .gitlab-ci.yml, so pull requests get the same checks.
+#
+# Runs on `pull_request`, never `pull_request_target`: code from a fork runs
+# with a read-only token and no secrets. Workflow runs from outside
+# contributors wait for a maintainer's approval.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (IDF ${{ matrix.idf }})
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - idf: master
+            image: latest
+            targets: esp32 esp32s3 esp32c3 esp32c5 esp32p4 esp32s31
+            # esp32s31 is a preview target on IDF master
+            extra_flags: --preview
+          - idf: v6.0
+            image: release-v6.0
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32c5 esp32h2 esp32p4
+          - idf: v5.5
+            image: release-v5.5
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32c5 esp32h2 esp32p4
+          - idf: v5.4
+            image: release-v5.4
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2 esp32p4
+          - idf: v5.3
+            image: release-v5.3
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2 esp32p4
+          - idf: v5.2
+            image: release-v5.2
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2
+          - idf: v5.1
+            image: release-v5.1
+            targets: esp32 esp32s2 esp32s3 esp32c2 esp32c3 esp32c6 esp32h2
+    env:
+      PEDANTIC_FLAGS: "-Werror -Wno-error=cpp -Werror=unused-variable -Werror=unused-but-set-variable -Werror=unused-function"
+      IDF_SLUG: ${{ matrix.idf }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test_app
+        shell: bash
+        working-directory: test_app
+        run: |
+          . "${IDF_PATH}/export.sh"
+          # The tools/ci scripts find the repo through CI_PROJECT_DIR. In a
+          # container job only $GITHUB_WORKSPACE has the container path.
+          export CI_PROJECT_DIR="${GITHUB_WORKSPACE}"
+          export EXTRA_CFLAGS="${PEDANTIC_FLAGS}" EXTRA_CXXFLAGS="${PEDANTIC_FLAGS}"
+          for target in ${{ matrix.targets }}; do
+            idf.py ${{ matrix.extra_flags }} set-target "${target}" build
+            # Kernels must not size their stack from tensor shapes.
+            if [ "${target}" = "esp32s3" ]; then
+              ../tools/ci/check_no_dynamic_stack.sh
+            fi
+            # set-target wipes the build dir, so stage the image first.
+            ../tools/ci/stage_merged_bin.sh "${target}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-${{ matrix.idf }}
+          path: test_app/ci_bins/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  emulate:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ESP_EMU_VERSION: "0.46.0"
+      EMU_TIMEOUT: "600"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bins-*
+          path: test_app/ci_bins/
+          merge-multiple: true
+
+      - name: Install esp-emulator
+        run: |
+          mkdir -p "${HOME}/.local/bin"
+          curl -fsSL https://raw.githubusercontent.com/espressif/esp-emulator/main/install.sh \
+            | sh -s -- --version "${ESP_EMU_VERSION}" --bin-dir "${HOME}/.local/bin" --quiet
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Run test_app in esp-emulator
+        run: |
+          python3 tools/ci/run_emulator_tests.py \
+            --bins-dir test_app/ci_bins \
+            --out-dir test_results \
+            --timeout "${EMU_TIMEOUT}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test_results/
+          retention-days: 7
