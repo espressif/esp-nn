@@ -685,7 +685,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                     required <= preferred_scratch_size) {
                 pointwise_scratch = preferred_scratch_buffer;
             }
-            /* Full asm path. Requires mult8 channels + 8-byte aligned filter */
+            /* Full asm path: mult8 channels, any filter alignment */
             esp_nn_conv_s8_mult8_1x1_batched_tail(
                     input, spatial_size, channels, input_offset,
                     filter_data, bias, out_data, out_channels, out_offset,
