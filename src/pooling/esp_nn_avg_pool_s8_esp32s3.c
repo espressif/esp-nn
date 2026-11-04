@@ -47,8 +47,15 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
                              const int32_t activation_max,
                              const uint16_t channels)
 {
-    /* Use existing assembly for channels % 4 == 0 */
-    if (channels % 4 == 0) {
+    /* The assembly has two vector paths with different requirements:
+     *   channels % 8 == 0: ee.vld.l.64 / ee.vst.l.64, 8-byte buffers
+     *   channels % 8 == 4: ee.vldbc.32 / s32i,       4-byte buffers
+     * Neither has USAR/QUP compensation, so a buffer below that alignment is
+     * processed lane-shifted. Pick the scalar path in that case; the channel
+     * count alone no longer selects the assembly. */
+    const uintptr_t bufs = (uintptr_t) input | (uintptr_t) output;
+    const uintptr_t need = (channels % 8 == 0) ? 7u : 3u;
+    if (channels % 4 == 0 && (bufs & need) == 0) {
         esp_nn_avg_pool_s8_esp32s3_asm(input, input_wd, input_ht, output,
                                         output_wd, output_ht, stride_wd, stride_ht,
                                         filter_wd, filter_ht, pad_wd, pad_ht,
