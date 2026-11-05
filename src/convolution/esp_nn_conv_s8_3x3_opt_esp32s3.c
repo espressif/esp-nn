@@ -19,6 +19,7 @@
  * - Input loaded once vs 128× in the general asm
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
 #include "esp_nn_conv_1x1_panel_esp32s3.h"
@@ -78,13 +79,16 @@ static inline void esp_nn_3x3_copy_filter_row(int8_t *dst, const int8_t *src,
  * driver, for which a 3x3 conv with its windows built is a 1x1 conv over
  * 9 * in_channels (and the filter layout [oc][3][3][ic] already matches).
  * The filter is then streamed once per chunk instead of once per pixel.
- * Positions are contiguous in NHWC output, so a range is a disjoint slice. */
-static void esp_nn_3x3_staged_range(
+ * Positions are contiguous in NHWC output, so a range is a disjoint slice.
+ * It writes out_channels channels at out_stride bytes per position. The
+ * chunk size and work area come from the full layer, out_stride channels,
+ * which the scratch was sized for. */
+static void esp_nn_3x3_staged_range_ex(
         const int8_t *input, int input_wd, int input_ht, int in_channels,
         int32_t input_offset, int pad_wd, int pad_ht, int stride_wd,
         int stride_ht, const int8_t *filter_data, const int32_t *bias,
-        int8_t *out_data, int out_wd, int out_channels, int32_t out_offset,
-        const int32_t *out_shift, const int32_t *out_mult,
+        int8_t *out_data, int out_wd, int out_channels, int out_stride,
+        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
         int32_t activation_min, int32_t activation_max,
         int pos_begin, int pos_end, void *scratch)
 {
@@ -96,7 +100,7 @@ static void esp_nn_3x3_staged_range(
     int8_t *staging = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
 
     for (int pos0 = pos_begin; pos0 < pos_end;) {
-        const int n = min(esp_nn_3x3_batch_positions(in_channels, out_channels),
+        const int n = min(esp_nn_3x3_batch_positions(in_channels, out_stride),
                           pos_end - pos0);
         for (int k = 0; k < n; k++) {
             const int pos = pos0 + k;
@@ -108,20 +112,40 @@ static void esp_nn_3x3_staged_range(
                                     input_wd, input_ht, in_channels,
                                     in_row_stride, pad_val);
         }
-        const int batch = esp_nn_3x3_batch_positions(in_channels, out_channels);
+        const int batch = esp_nn_3x3_batch_positions(in_channels, out_stride);
         esp_nn_conv_s8_mult8_1x1_oc_panel_ex(
                 staging, n, (uint16_t)window_len_aligned, input_offset,
-                filter_data, bias, out_data + (int32_t)pos0 * out_channels,
-                (uint16_t)out_channels, (uint16_t)out_channels, out_offset,
+                filter_data, bias, out_data + (int32_t)pos0 * out_stride,
+                (uint16_t)out_channels, (uint16_t)out_stride, out_offset,
                 out_shift, out_mult, activation_min, activation_max,
                 staging + batch * window_len_aligned,
-                esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels),
+                esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_stride),
                 pos0 != pos_begin);
         pos0 += n;
     }
 }
 
+static inline void esp_nn_3x3_staged_range(
+        const int8_t *input, int input_wd, int input_ht, int in_channels,
+        int32_t input_offset, int pad_wd, int pad_ht, int stride_wd,
+        int stride_ht, const int8_t *filter_data, const int32_t *bias,
+        int8_t *out_data, int out_wd, int out_channels, int32_t out_offset,
+        const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max,
+        int pos_begin, int pos_end, void *scratch)
+{
+    esp_nn_3x3_staged_range_ex(input, input_wd, input_ht, in_channels,
+            input_offset, pad_wd, pad_ht, stride_wd, stride_ht, filter_data,
+            bias, out_data, out_wd, out_channels, out_channels, out_offset,
+            out_shift, out_mult, activation_min, activation_max, pos_begin,
+            pos_end, scratch);
+}
+
 #if ESP_NN_DUAL_CORE_SUPPORTED
+/* The worker's range of the staged path: positions [pos_begin, pos_end) of
+ * out_channels channels, out_stride apart. The claim
+ * (esp_nn_dual_core_begin()) makes this slot single-owner, and keeps the
+ * job off the caller's stack. */
 typedef struct {
     const int8_t *input;
     int input_wd, input_ht, in_channels;
@@ -130,7 +154,7 @@ typedef struct {
     const int8_t *filter_data;
     const int32_t *bias;
     int8_t *out_data;
-    int out_wd, out_channels;
+    int out_wd, out_channels, out_stride;
     int32_t out_offset;
     const int32_t *out_shift, *out_mult;
     int32_t activation_min, activation_max;
@@ -138,16 +162,17 @@ typedef struct {
     void *scratch;
 } conv3x3_staged_mt_job_t;
 
-static void conv3x3_staged_mt_worker(void *p)
+static conv3x3_staged_mt_job_t s_staged_job;
+
+static void conv3x3_staged_mt_job(void *p)
 {
     const conv3x3_staged_mt_job_t *j = (const conv3x3_staged_mt_job_t *)p;
-    esp_nn_3x3_staged_range(j->input, j->input_wd, j->input_ht, j->in_channels,
-                            j->input_offset, j->pad_wd, j->pad_ht, j->stride_wd,
-                            j->stride_ht, j->filter_data, j->bias, j->out_data,
-                            j->out_wd, j->out_channels, j->out_offset,
-                            j->out_shift, j->out_mult, j->activation_min,
-                            j->activation_max, j->pos_begin, j->pos_end,
-                            j->scratch);
+    esp_nn_3x3_staged_range_ex(j->input, j->input_wd, j->input_ht,
+            j->in_channels, j->input_offset, j->pad_wd, j->pad_ht,
+            j->stride_wd, j->stride_ht, j->filter_data, j->bias, j->out_data,
+            j->out_wd, j->out_channels, j->out_stride, j->out_offset,
+            j->out_shift, j->out_mult, j->activation_min, j->activation_max,
+            j->pos_begin, j->pos_end, j->scratch);
 }
 #endif /* ESP_NN_DUAL_CORE_SUPPORTED */
 
@@ -202,42 +227,59 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
             scratch = fcopy + out_channels * window_len_aligned;
         }
 #if ESP_NN_DUAL_CORE_SUPPORTED
-        /* Split the position range across cores: disjoint output slices, same
-         * arithmetic. The worker stages into its own scratch. */
+        /* Two chunks of positions or more: the cores split the positions,
+         * disjoint output slices with the same arithmetic. Under two chunks
+         * they split the output channels, and each stages the same windows.
+         * The worker stages into its own scratch. */
         const int batch = esp_nn_3x3_batch_positions(in_channels, out_channels);
-        if (total_positions >= 2 * batch && esp_nn_dual_core_begin()) {
+        const bool by_positions = total_positions >= 2 * batch;
+        if ((by_positions || out_channels >= 16) && esp_nn_dual_core_begin()) {
+            bool done = false;
             const int wneed = batch * window_len_aligned + 32
                     + esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels);
             void *wscr = esp_nn_dual_core_scratch(wneed);
-            const int split = ((total_positions / 2) / batch) * batch;
-            if (wscr != NULL && split > 0 && split < total_positions) {
-                conv3x3_staged_mt_job_t job = {
+            if (wscr != NULL) {
+                /* The worker takes positions [0, split) or output channels
+                 * [0, oc0). This core takes the rest. */
+                int split = total_positions;
+                int oc0 = 0;
+                if (by_positions) {
+                    split = ((total_positions / 2) / batch) * batch;
+                } else {
+                    oc0 = (out_channels / 2) & ~7;
+                }
+                s_staged_job = (conv3x3_staged_mt_job_t) {
                     .input = input, .input_wd = input_wd, .input_ht = input_ht,
                     .in_channels = in_channels, .input_offset = input_offset,
                     .pad_wd = pad_wd, .pad_ht = pad_ht,
                     .stride_wd = stride_wd, .stride_ht = stride_ht,
                     .filter_data = filter_data, .bias = bias,
                     .out_data = out_data, .out_wd = out_wd,
-                    .out_channels = out_channels, .out_offset = out_offset,
-                    .out_shift = out_shift, .out_mult = out_mult,
-                    .activation_min = activation_min,
+                    .out_channels = by_positions ? out_channels : oc0,
+                    .out_stride = out_channels,
+                    .out_offset = out_offset, .out_shift = out_shift,
+                    .out_mult = out_mult, .activation_min = activation_min,
                     .activation_max = activation_max,
                     .pos_begin = 0, .pos_end = split, .scratch = wscr,
                 };
-                if (esp_nn_dual_core_run(conv3x3_staged_mt_worker, &job)) {
-                    esp_nn_3x3_staged_range(input, input_wd, input_ht,
+                if (esp_nn_dual_core_run(conv3x3_staged_mt_job, &s_staged_job)) {
+                    esp_nn_3x3_staged_range_ex(input, input_wd, input_ht,
                             in_channels, input_offset, pad_wd, pad_ht,
-                            stride_wd, stride_ht, filter_data, bias, out_data,
-                            out_wd, out_channels, out_offset, out_shift,
-                            out_mult, activation_min, activation_max,
-                            split, total_positions, scratch);
+                            stride_wd, stride_ht,
+                            filter_data + oc0 * window_len_aligned,
+                            bias ? bias + oc0 : NULL, out_data + oc0, out_wd,
+                            out_channels - oc0, out_channels, out_offset,
+                            out_shift + oc0, out_mult + oc0, activation_min,
+                            activation_max, by_positions ? split : 0,
+                            total_positions, scratch);
                     esp_nn_dual_core_wait();
-                    esp_nn_dual_core_end();
-                    return;
+                    done = true;
                 }
-                /* worker declined (nested or same-core call): fall through */
             }
             esp_nn_dual_core_end();
+            if (done) {
+                return;
+            }
         }
 #endif
         esp_nn_3x3_staged_range(input, input_wd, input_ht, in_channels,
