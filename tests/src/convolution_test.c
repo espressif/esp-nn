@@ -1219,7 +1219,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 74; itr++) {
+    for (int itr = 0; itr < 81; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -1946,6 +1946,46 @@ void esp_nn_conv_s8_test()
             break;
         case 73: // small-map 3x3, fast and exact requant per channel
             in_wd = 6; in_ht = 6; in_channels = 256; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        /* 74-80: dual-core splits on ESP32-S3. The test app enables dual core,
+         * so these take the split with uneven halves and tails. */
+        case 74: // 1x1 batched: 63 positions split 24 / 39 (tail 7)
+            in_wd = 7; in_ht = 9; in_channels = 32; out_channels = 48;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 75: // 1x1 ACCX over 96 channels: 121 positions split 56 / 65
+            in_wd = 11; in_ht = 11; in_channels = 128; out_channels = 64;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 76: // staged 3x3 under two chunks: output channels split 16 / 24
+            in_wd = 6; in_ht = 6; in_channels = 64; out_channels = 40;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 77: // small-map 3x3: output channels split 32 / 40
+            in_wd = 6; in_ht = 6; in_channels = 256; out_channels = 72;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 78: // im2col: 143 positions split 64 / 79, mid-row, padded edges
+            in_wd = 13; in_ht = 11; in_channels = 3; out_channels = 16;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 79: // staged 3x3, large filter: 81 positions split 32 / 49
+                 // (chunks of 32, so the second half ends in a tail of 17).
+                 // in_channels % 32 != 0 keeps it off the small-map path.
+            in_wd = 9; in_ht = 9; in_channels = 112; out_channels = 88;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 80: // staged 3x3 under two chunks, zero-padded filter copy
+                 // (in_channels % 16 == 8): output channels split 16 / 16
+            in_wd = 6; in_ht = 6; in_channels = 24; out_channels = 32;
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
             break;
