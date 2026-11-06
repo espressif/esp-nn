@@ -21,7 +21,6 @@
 
 void esp_nn_depthwise_conv_s8_test()
 {
-    uint32_t total_c = 0, total_opt = 0;
     int8_t *input = NULL, *filter_data = NULL;
     int8_t *out_data_c = NULL, *out_data_opt = NULL;
     int32_t *bias = NULL;
@@ -598,7 +597,7 @@ void esp_nn_depthwise_conv_s8_test()
         esp_nn_depthwise_conv_s8_ansi(&input_dims, input, &filter_dims, filter_arg,
                                       bias_arg, &output_dims, out_data_c, &conv_params, &quant_data);
 
-        total_c = profile_c_end();
+        profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
@@ -606,7 +605,7 @@ void esp_nn_depthwise_conv_s8_test()
                                  bias_arg, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
-        total_opt = profile_opt_end();
+        profile_opt_end();
 
         /* scan whole guard: extent, not just first hit */
         int overflow = 0;
@@ -645,10 +644,9 @@ void esp_nn_depthwise_conv_s8_test()
             goto dc_s8_cleanup;
         }
         TEST_PASS("[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
-                  " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]",
+                  " out: (%3d,%3d), filter: (%d, %d,%3d), ch_mult %d]\n",
                   itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd,
                   out_ht, filter_wd, filter_ht, channels, ch_mult);
-        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     dc_s8_cleanup:
 #if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED
@@ -689,7 +687,6 @@ void esp_nn_depthwise_conv_s8_test()
 
 void esp_nn_conv_s8_test()
 {
-    uint32_t total_c = 0, total_opt = 0;
     int32_t input_offset = 5; /* some number in [-128, 127] */
     int32_t activation_min = -125;
     int32_t activation_max = 122;
@@ -1556,7 +1553,7 @@ void esp_nn_conv_s8_test()
         esp_nn_conv_s8_ansi(&input_dims, input, &filter_dims, filter_data,
                             test_bias, &output_dims, out_data_c, &conv_params, &quant_data);
 
-        total_c = profile_c_end();
+        profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
@@ -1564,7 +1561,7 @@ void esp_nn_conv_s8_test()
                        test_bias, &output_dims, out_data_opt, &conv_params, &quant_data);
 
         /* disable profiler */
-        total_opt = profile_opt_end();
+        profile_opt_end();
 
         bool ret = CHECK_EQUAL(out_data_c, out_data_opt, out_size);
         if (ret == false) {
@@ -1575,10 +1572,9 @@ void esp_nn_conv_s8_test()
             goto conv_s8_cleanup;
         }
         TEST_PASS("[%3d] passed [pad: (%d, %d), stride: (%d, %d)"
-                  " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]",
+                  " out: (%3d,%3d,%3d), filter: (%d, %d,%3d)]\n",
                   itr, pad_wd, pad_ht, stride_wd, stride_ht, out_wd, out_ht,
                   out_channels, filter_wd, filter_ht, in_channels);
-        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     conv_s8_cleanup:
 #if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_NN_OPTIMIZED

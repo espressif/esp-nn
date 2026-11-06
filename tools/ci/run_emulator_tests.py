@@ -7,8 +7,8 @@
 
 Reads the merged flash images staged by tools/ci/stage_merged_bin.sh, runs each
 one, and takes the verdict from the TEST_RESULT line the test app prints. Writes
-a profile CSV per run plus a combined CSV, and keeps the full log of a run that
-failed.
+a per-suite CSV per run plus a combined CSV, and keeps the full log of a run
+that failed.
 """
 
 import argparse
@@ -65,8 +65,8 @@ PANIC_MARKERS = (
 EXPECTED_SUITES = (
     'add_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'depthwise_conv_s8', 'conv_s8',
     'relu6_s8', 'avg_pool_s8', 'max_pool_s8', 'fc_s8', 'fc_per_ch_s8',
-    'fc_per_ch_s8_batch', 'fc_align_s8', 'alignment_s8', 'fc_perf', 'softmax_s8',
-    'hard_swish_s8', 'mean_nhwc_s8', 'dual_core',
+    'fc_per_ch_s8_batch', 'fc_per_ch_s8_batch_1x1', 'fc_align_s8', 'alignment_s8',
+    'fc_large_s8', 'softmax_s8', 'hard_swish_s8', 'mean_nhwc_s8', 'dual_core',
 )
 
 # Each of these is printed once per boot (the ROM banner and the reset-reason
@@ -76,15 +76,13 @@ EXPECTED_SUITES = (
 # counted separately because a single boot prints both.
 BOOT_RES = (re.compile(r'^ESP-ROM:'), re.compile(r'^rst:0x[0-9a-fA-F]+[ ,(]'))
 
-# Stamped into every report row so a profile can be tied to the emulator
-# that produced it.
+# Stamped into every report row so a result can be tied to the emulator that
+# produced it.
 EMU_SOURCE = 'esp-emu ' + os.environ.get('ESP_EMU_VERSION', 'unknown')
 
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 TEST_RE = re.compile(r'^TEST: (?P<kernel>[^,]+), passed=(?P<passed>\d+), '
                      r'failed=(?P<failed>\d+)(?:, skipped=(?P<skipped>\d+))?')
-PROFILE_RE = re.compile(r'^PROFILE: (?P<kernel>[^,]+), ansi=(?P<ansi>\d+), '
-                        r'opt=(?P<opt>\d+), speedup=(?P<speedup>[0-9.]+)x')
 SUMMARY_RE = re.compile(r'^TEST_SUMMARY: passed=(?P<passed>\d+), '
                         r'failed=(?P<failed>\d+)(?:, skipped=(?P<skipped>\d+))?')
 RESULT_RE = re.compile(r'^TEST_RESULT: (?P<result>\w+)')
@@ -94,10 +92,8 @@ RESULT_RE = re.compile(r'^TEST_RESULT: (?P<result>\w+)')
 # verify cases only when the app reports the worker as active.
 DUAL_CORE_RE = re.compile(r'^DUAL_CORE: active')
 
-# Cycle columns are emulator instruction counts (deterministic, good for
-# regression diffs, not device performance); `source` says so in every row.
 CSV_FIELDS = ('idf_version', 'target', 'kernel', 'passed', 'failed', 'skipped',
-              'emu_ansi_cycles', 'emu_opt_cycles', 'emu_ratio', 'source')
+              'source')
 
 PRINT_LOCK = threading.Lock()
 
@@ -126,8 +122,7 @@ class Run:
             self.kernels[kernel] = {'idf_version': self.idf_version,
                                     'target': self.target, 'kernel': kernel,
                                     'passed': '', 'failed': '', 'skipped': '',
-                                    'emu_ansi_cycles': '', 'emu_opt_cycles': '',
-                                    'emu_ratio': '', 'source': EMU_SOURCE}
+                                    'source': EMU_SOURCE}
             self.order.append(kernel)
         return self.kernels[kernel]
 
@@ -136,9 +131,8 @@ class Run:
 
     @property
     def missing_suites(self):
-        # A PROFILE: line alone does not count: the suite has to report a
-        # verdict, so a deleted RUN_TEST line (or a suite that died mid-way)
-        # is caught.
+        # The suite has to report a verdict, so a deleted RUN_TEST line (or a
+        # suite that died mid-way) is caught.
         return [s for s in EXPECTED_SUITES if s not in self.seen_suites]
 
     @property
@@ -215,14 +209,6 @@ def parse_line(run, line):
             run.empty_suites.append(kernel)
         return False
 
-    match = PROFILE_RE.match(line)
-    if match:
-        row = run.row(match.group('kernel'))
-        row['emu_ansi_cycles'] = match.group('ansi')
-        row['emu_opt_cycles'] = match.group('opt')
-        row['emu_ratio'] = match.group('speedup')
-        return False
-
     match = SUMMARY_RE.match(line)
     if match:
         run.passed = int(match.group('passed'))
@@ -287,16 +273,16 @@ def run_one(emu, run, timeout):
 
 
 def write_reports(runs, out_dir):
-    profiles_dir = os.path.join(out_dir, 'profiles')
-    os.makedirs(profiles_dir, exist_ok=True)
+    suites_dir = os.path.join(out_dir, 'suites')
+    os.makedirs(suites_dir, exist_ok=True)
 
-    with open(os.path.join(out_dir, 'profiles.csv'), 'w', newline='') as handle:
+    with open(os.path.join(out_dir, 'suites.csv'), 'w', newline='') as handle:
         combined = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         combined.writeheader()
         for run in runs:
             combined.writerows(run.rows())
             name = '%s-%s.csv' % (run.idf_version, run.target)
-            with open(os.path.join(profiles_dir, name), 'w', newline='') as per_run:
+            with open(os.path.join(suites_dir, name), 'w', newline='') as per_run:
                 writer = csv.DictWriter(per_run, fieldnames=CSV_FIELDS)
                 writer.writeheader()
                 writer.writerows(run.rows())

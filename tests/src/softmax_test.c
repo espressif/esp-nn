@@ -77,36 +77,47 @@ softmax_cleanup:
     if (scratch_buf_orig) free(scratch_buf_orig);
 }
 
+/* TFLite's prepare for input scale 1/16, beta 1: multiplier 2^30, left shift
+ * 23, diff_min -248. The exp argument spans [-15.5, 0]. */
+#define SM_MULT     (1 << 30)
+#define SM_SHIFT    23
+#define SM_DIFF_MIN -248
+
 void esp_nn_softmax_s8_test()
 {
     int iter = 0;
     /* Original test case */
-    run_softmax_test(8, 32, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(8, 32, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Small output classes (person_detection: 2, micro_speech: 4) */
-    run_softmax_test(1, 2, INT32_MAX / 2, 7, -128, iter++);
-    run_softmax_test(1, 4, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(1, 2, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    run_softmax_test(1, 4, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Single element (degenerate) */
-    run_softmax_test(1, 1, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(1, 1, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Medium width */
-    run_softmax_test(1, 10, INT32_MAX / 2, 7, -128, iter++);
-    run_softmax_test(4, 10, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(1, 10, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    run_softmax_test(4, 10, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Large width (ImageNet-class) */
-    run_softmax_test(1, 1000, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(1, 1000, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Large height */
-    run_softmax_test(64, 32, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(64, 32, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* Varying diff_min */
-    run_softmax_test(8, 32, INT32_MAX / 2, 7, -64, iter++);
-    run_softmax_test(8, 32, INT32_MAX / 2, 7, -32, iter++);
-    run_softmax_test(8, 32, INT32_MAX / 2, 7, 0, iter++);
-    /* Varying multiplier and shift */
+    run_softmax_test(8, 32, SM_MULT, SM_SHIFT, -64, iter++);
+    run_softmax_test(8, 32, SM_MULT, SM_SHIFT, -32, iter++);
+    run_softmax_test(8, 32, SM_MULT, SM_SHIFT, 0, iter++);
+    /* Other TFLite scalings: input scale 1/256 (every element included) and
+     * 0.1 (a multiplier that is not a power of two). */
+    run_softmax_test(8, 32, 1 << 30, 19, -3968, iter++);
+    run_softmax_test(8, 32, 1717986918, 23, -248, iter++);
+    /* Small multiplier and shift: exp arguments close to 0 */
+    run_softmax_test(8, 32, INT32_MAX / 2, 7, -128, iter++);
     run_softmax_test(8, 32, INT32_MAX / 4, 5, -128, iter++);
     run_softmax_test(8, 32, INT32_MAX, 10, -128, iter++);
     /* Odd width (non-aligned) */
-    run_softmax_test(8, 17, INT32_MAX / 2, 7, -128, iter++);
-    run_softmax_test(8, 3, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(8, 17, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    run_softmax_test(8, 3, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     /* SIMD-width rows whose stride is not a multiple of 16: rows 1+ start
      * unaligned (yolo11n op140 is 36-wide) - regression for the S3
      * find-max, which must not issue unaligned ee.vld.128 loads. */
-    run_softmax_test(8, 36, INT32_MAX / 2, 7, -128, iter++);
-    run_softmax_test(4, 1000, INT32_MAX / 2, 7, -128, iter++);
+    run_softmax_test(8, 36, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    run_softmax_test(4, 1000, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
 }

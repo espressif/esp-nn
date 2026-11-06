@@ -1,0 +1,9 @@
+#
+# esp-nn
+#
+CONFIG_NN_OPTIMIZED=y
+
+# Long kernels run with interrupts off; the task watchdog only gets in the way.
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=1000

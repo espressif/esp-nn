@@ -37,6 +37,12 @@ test_app/sdkconfig.old
 test_app/dependencies.lock
 test_app/ci_bins/
 
+# Bench app files
+bench_app/build*
+bench_app/sdkconfig
+bench_app/sdkconfig.old
+bench_app/dependencies.lock
+
 # CI test stage output
 test_results/
 

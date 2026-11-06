@@ -1,7 +1,7 @@
 name: CI
 
 # Builds test_app for every supported ESP-IDF release and target, then runs the
-# emulated targets in esp-emulator. Mirrors the GitLab pipeline in
+# emulated targets in esp-emulator. Also builds bench_app. Mirrors the GitLab pipeline in
 # .gitlab-ci.yml, so pull requests get the same checks.
 #
 # Runs on `pull_request`, never `pull_request_target`: code from a fork runs
@@ -85,6 +85,40 @@ jobs:
           path: test_app/ci_bins/
           if-no-files-found: ignore
           retention-days: 1
+
+  # bench_app measures cycles on hardware. CI only keeps it building.
+  bench_app:
+    name: bench_app (IDF ${{ matrix.idf }})
+    runs-on: ubuntu-latest
+    container: espressif/idf:${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - idf: master
+            image: latest
+            targets: esp32s3 esp32p4 esp32s31
+            extra_flags: --preview
+          - idf: v6.0
+            image: release-v6.0
+            targets: esp32s3 esp32p4
+          - idf: v5.5
+            image: release-v5.5
+            targets: esp32s3 esp32p4
+    env:
+      PEDANTIC_FLAGS: "-Werror -Wno-error=cpp -Werror=unused-variable -Werror=unused-but-set-variable -Werror=unused-function"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build bench_app
+        shell: bash
+        working-directory: bench_app
+        run: |
+          . "${IDF_PATH}/export.sh"
+          export EXTRA_CFLAGS="${PEDANTIC_FLAGS}" EXTRA_CXXFLAGS="${PEDANTIC_FLAGS}"
+          for target in ${{ matrix.targets }}; do
+            idf.py ${{ matrix.extra_flags }} set-target "${target}" build
+          done
 
   emulate:
     needs: build

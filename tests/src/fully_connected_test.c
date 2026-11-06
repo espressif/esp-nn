@@ -16,12 +16,9 @@
 #include "esp_nn_fc_internal.h"
 #include "test_utils.h"
 
-#include "esp_rom_sys.h"
-
 
 void esp_nn_fully_connected_s8_test()
 {
-    uint32_t total_c = 0, total_opt = 0;
     /* prepare data */
     uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
     const int32_t max_out_ch = 16;
@@ -120,7 +117,7 @@ void esp_nn_fully_connected_s8_test()
                                     NULL, output_c, out_channels, out_offset, out_shift, out_mult,
                                     activation_min, activation_max);
 
-        total_c = profile_c_end();
+        profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
@@ -129,7 +126,7 @@ void esp_nn_fully_connected_s8_test()
                                 activation_min, activation_max);
 
         /* disable profiler */
-        total_opt = profile_opt_end();
+        profile_opt_end();
 
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
@@ -148,9 +145,8 @@ void esp_nn_fully_connected_s8_test()
 #endif
             goto fc_s8_cleanup;
         }
-        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]",
+        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]\n",
                   itr, row_len, out_channels, input_offset);
-        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
     }
 
 fc_s8_cleanup:
@@ -170,7 +166,6 @@ fc_s8_cleanup:
 
 void esp_nn_fully_connected_per_ch_s8_test()
 {
-    uint32_t total_c = 0, total_opt = 0;
     /* prepare data */
     uint16_t row_len = 256 + 8 + 7; /* odd len to test unaligned+left-over */
     const int32_t max_out_ch = 16;
@@ -277,7 +272,7 @@ void esp_nn_fully_connected_per_ch_s8_test()
                                     NULL, output_c, out_channels, out_offset, out_shift, out_mult,
                                     activation_min, activation_max);
 
-        total_c = profile_c_end();
+        profile_c_end();
         profile_opt_start();
 
         /* Optimized function */
@@ -286,16 +281,15 @@ void esp_nn_fully_connected_per_ch_s8_test()
                                 activation_min, activation_max);
 
         /* disable profiler */
-        total_opt = profile_opt_end();
+        profile_opt_end();
 
         bool ret = CHECK_EQUAL(output_c, output_opt, out_channels);
         if (ret == false) {
             TEST_FAIL("[%3d] failed\n", itr);
             goto fully_connected_per_ch_cleanup;
         }
-        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]",
+        TEST_PASS("[%3d] passed [row_len %"PRIu16", out_ch %"PRIu16", in_off %4"PRId32"]\n",
                   itr, row_len, out_channels, input_offset);
-        printf("\tcycles: c %8"PRIu32", opt %8"PRIu32"\n", total_c, total_opt);
 
     fully_connected_per_ch_cleanup:
         if (out_shift) {
@@ -623,181 +617,76 @@ fc_align_cleanup:
 }
 
 /**
- * Performance and bit-exactness guard for esp-nn#36.
- *
- * That regression was a scalar O(out_channels * row_len) filter-sum added to the
- * FC fast path: every correctness test passed while the kernel got ~4x slower,
- * so nothing caught it. A fixed cycles-per-MAC ceiling is a poor tripwire here
- * because the achievable rate varies hugely with shape (a 20x128 layer costs
- * ~6.8 cyc/MAC even on the fused assembly). Instead this measures both paths in
- * the same run and asserts the dispatcher's choice is never materially worse
- * than the fused s16 assembly, which is the pre-1.2.1 behaviour and therefore
- * the floor we must not fall below.
- *
- * Correctness is checked first at every channel against the ansi reference: a
- * faster kernel that is not bit-exact is worthless.
+ * Large layers on both sides of the ESP32-S3 dot-product threshold (row_len
+ * 256), with 16-byte aligned operands (the fast paths) and with operands at
+ * 8 mod 16 (the s16 assembly). Every channel must match the reference.
+ * bench_app times the same shapes.
  */
-#define FC_PERF_ITERS       10
-#define FC_PERF_TOLERANCE   1.10f   /* allow 10% for dispatch + measurement noise */
-
-/* The io==0 case guards the second dispatch regime: with no correction pass the
- * dot path wins from row_len ~64, so at 128x256 the dispatcher must pick it and
- * beat the assembly outright (measured 0.68x). Found in self-review: a rule
- * gating on row_len alone sent io==0 mid rows to the assembly, a 1.5x loss.
- * Only the S3 dispatcher has this choice to make; elsewhere the misaligned call
- * is the same kernel with a load penalty, so only the generic bound applies. */
-#ifdef CONFIG_IDF_TARGET_ESP32S3
-#define FC_PERF_IO0_MAX     0.90f
-#else
-#define FC_PERF_IO0_MAX     FC_PERF_TOLERANCE
-#endif
-
-void esp_nn_fully_connected_perf_test()
+void esp_nn_fully_connected_large_s8_test()
 {
-    /* Spans both regimes: row_len >= 256 takes the dot path, below it the
-     * dispatcher should fall back to the assembly. */
-    const struct { const char *name; uint16_t row_len; uint16_t out_ch;
-                   int32_t io; float max_ratio; } cases[] = {
-        { "256x256",     256, 256, -3, FC_PERF_TOLERANCE },
-        { "512x128",     512, 128, -3, FC_PERF_TOLERANCE },
-        { "320x320",     320, 320, -3, FC_PERF_TOLERANCE },
-        { "128x256",     128, 256, -3, FC_PERF_TOLERANCE },
-        { " 64x256",      64, 256, -3, FC_PERF_TOLERANCE },
-        { "128x256 io0", 128, 256,  0, FC_PERF_IO0_MAX },
+    const struct { uint16_t row_len; uint16_t out_ch; int32_t io; } cases[] = {
+        { 256, 256, -3 },
+        { 512, 128, -3 },
+        { 320, 320, -3 },
+        { 128, 256, -3 },
+        {  64, 256, -3 },
+        { 128, 256,  0 },
     };
     const int32_t filter_offset = 0;    /* symmetric weights, as real int8 models */
     const int32_t out_mult = 1355715584, out_shift = -6;
-    int advisory = 0;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
 
     for (int c = 0; c < (int)(sizeof(cases) / sizeof(cases[0])); c++) {
         const uint16_t row_len = cases[c].row_len, out_ch = cases[c].out_ch;
         const int32_t input_offset = cases[c].io;
-        /* +32 slack so the operands can be pushed off 16-byte alignment below */
+        /* +32 slack so the operands can be pushed off 16-byte alignment */
         int8_t *input_raw  = ESP_NN_TEST_ALLOC(row_len + 32);
         int8_t *filter_raw = ESP_NN_TEST_ALLOC((size_t)row_len * out_ch + 32);
-        int8_t *in2_raw    = ESP_NN_TEST_ALLOC(row_len + 32);
-        int8_t *filt2_raw  = ESP_NN_TEST_ALLOC((size_t)row_len * out_ch + 32);
         int8_t *out_raw    = ESP_NN_TEST_ALLOC(out_ch + 16);
         int8_t *ref        = ESP_NN_TEST_ALLOC(out_ch);
         int32_t *bias      = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
-        if (!input_raw || !filter_raw || !in2_raw || !filt2_raw || !out_raw || !ref || !bias) {
-            TEST_SKIP("[%s] allocation failed\n", cases[c].name);
-            goto perf_cleanup;
+        if (!input_raw || !filter_raw || !out_raw || !ref || !bias) {
+            TEST_SKIP("[%3dx%3d io %d] allocation failed\n", row_len, out_ch, (int) input_offset);
+            goto large_cleanup;
         }
-        /* 16-byte align, as TFLite Micro's arena does. Plain malloc is 4-byte
-         * aligned, which makes the dispatcher bail to the ansi reference and
-         * would measure the wrong path entirely (~10 cyc/MAC). */
-        int8_t *input  = (int8_t *)(((uintptr_t)input_raw  + 15) & ~(uintptr_t)15);
-        int8_t *filter = (int8_t *)(((uintptr_t)filter_raw + 15) & ~(uintptr_t)15);
-        int8_t *out    = (int8_t *)(((uintptr_t)out_raw    + 15) & ~(uintptr_t)15);
+        int8_t *out = (int8_t *)(((uintptr_t)out_raw + 15) & ~(uintptr_t)15);
 
-        for (int i = 0; i < row_len; i++) {
-            input[i] = rand() % 256 - 128;
-        }
-        for (int i = 0; i < row_len * out_ch; i++) {
-            filter[i] = rand() % 256 - 128;
-        }
         for (int i = 0; i < out_ch; i++) {
             bias[i] = (rand() % 256 - 128) * 64;
         }
-
-        /* --- bit-exactness at every channel --- */
-        esp_nn_fully_connected_s8(input, input_offset, row_len, filter, filter_offset,
-                                  bias, out, out_ch, 0, out_shift, out_mult, -128, 127);
-        esp_nn_fully_connected_s8_ansi(input, input_offset, row_len, filter, filter_offset,
-                                       bias, ref, out_ch, 0, out_shift, out_mult, -128, 127);
-        if (!CHECK_EQUAL(out, ref, out_ch)) {
-            int bad = 0, first = -1;
-            for (int i = 0; i < out_ch; i++) {
-                if (out[i] != ref[i]) {
-                    bad++;
-                    if (first < 0) {
-                        first = i;
-                    }
-                }
+        /* Offset 0 is 16-byte aligned (TFLite Micro's arena); 8 sends the
+         * ESP32-S3 dispatcher to its s16 assembly. */
+        for (int off = 0; off <= 8; off += 8) {
+            int8_t *input  = (int8_t *)(((uintptr_t)input_raw  + 15) & ~(uintptr_t)15) + off;
+            int8_t *filter = (int8_t *)(((uintptr_t)filter_raw + 15) & ~(uintptr_t)15) + off;
+            for (int i = 0; i < row_len; i++) {
+                input[i] = rand() % 256 - 128;
             }
-            TEST_FAIL("[%s] NOT BIT-EXACT vs ansi: %d/%d channels, first ch %d "
-                      "(opt %d, ref %d)\n",
-                      cases[c].name, bad, out_ch, first, out[first], ref[first]);
-            goto perf_cleanup;
-        }
-
-        /* --- dispatcher's chosen path --- */
-        profile_opt_start();
-        for (int it = 0; it < FC_PERF_ITERS; it++) {
+            for (int i = 0; i < row_len * out_ch; i++) {
+                filter[i] = rand() % 256 - 128;
+            }
+            esp_nn_fully_connected_s8_ansi(input, input_offset, row_len, filter, filter_offset,
+                                           bias, ref, out_ch, 0, out_shift, out_mult, -128, 127);
+            profile_opt_start();
             esp_nn_fully_connected_s8(input, input_offset, row_len, filter, filter_offset,
                                       bias, out, out_ch, 0, out_shift, out_mult, -128, 127);
+            profile_opt_end();
+            if (!CHECK_EQUAL(out, ref, out_ch)) {
+                TEST_FAIL("[%3dx%3d io %d, operands at %d mod 16] failed\n",
+                          row_len, out_ch, (int) input_offset, off);
+            } else {
+                TEST_PASS("[%3dx%3d io %d, operands at %d mod 16] passed\n",
+                          row_len, out_ch, (int) input_offset, off);
+            }
         }
-        uint32_t chosen = profile_opt_end();
 
-        /* --- fused s16 assembly, the floor. Reached by defeating both fast-path
-         * alignment conditions; the input stays 8-aligned, which that assembly
-         * requires. --- */
-        /* Offset from the ALIGNED pointers, not the raw malloc'd ones: malloc is
-         * only 4-byte aligned, so raw+8 is not reliably 8-aligned and the call
-         * would fall through to the ansi reference instead of the assembly,
-         * making this comparison vacuous. Copy into separate buffers - deriving
-         * these from the same allocation and memcpy'ing would overlap, which is
-         * undefined behaviour. */
-        int8_t *in_off = (int8_t *)(((uintptr_t)in2_raw + 15) & ~(uintptr_t)15) + 8;
-        int8_t *filt_off = (int8_t *)(((uintptr_t)filt2_raw + 15) & ~(uintptr_t)15) + 8;
-        memcpy(in_off, input, row_len);
-        memcpy(filt_off, filter, (size_t)row_len * out_ch);
-        esp_nn_fully_connected_s8(in_off, input_offset, row_len, filt_off, filter_offset,
-                                  bias, out, out_ch, 0, out_shift, out_mult, -128, 127);
-        profile_opt_start();
-        for (int it = 0; it < FC_PERF_ITERS; it++) {
-            esp_nn_fully_connected_s8(in_off, input_offset, row_len, filt_off, filter_offset,
-                                      bias, out, out_ch, 0, out_shift, out_mult, -128, 127);
-        }
-        uint32_t asm_floor = profile_opt_end();
-
-        /* Bit-exactness is the verdict; the dispatch-vs-assembly ratio below is
-         * advisory (a regression signal on hardware, noise under emulation). */
-        TEST_PASS("[%s] bit-exact vs ansi\n", cases[c].name);
-        /* Compare by cross-multiplication and report hundredths: nano-printf,
-         * the default C library on some targets, has no float conversions. */
-        const uint32_t max_x100 = (uint32_t) (cases[c].max_ratio * 100.0f + 0.5f);
-        bool ok = (uint64_t) chosen * 100 <= (uint64_t) max_x100 * asm_floor;
-        const uint32_t ratio_x100 = asm_floor
-                ? (uint32_t) (((uint64_t) chosen * 100 + asm_floor / 2) / asm_floor) : 0;
-        if (!ok) {
-            advisory++;
-        }
-        printf("%s[%s] chosen %8"PRIu32" cyc, asm floor %8"PRIu32" cyc, %"PRIu32".%02"PRIu32"x  %s%s\n",
-               ok ? ANSI_COLOR_GREEN : ANSI_COLOR_RED, cases[c].name,
-               chosen / FC_PERF_ITERS, asm_floor / FC_PERF_ITERS,
-               ratio_x100 / 100, ratio_x100 % 100,
-               ok ? "ok" : "SLOWER THAN THE ASSEMBLY (advisory)", ANSI_COLOR_RESET);
-
-    perf_cleanup:
-        if (input_raw) {
-            free(input_raw);
-        }
-        if (filter_raw) {
-            free(filter_raw);
-        }
-        if (in2_raw) {
-            free(in2_raw);
-        }
-        if (filt2_raw) {
-            free(filt2_raw);
-        }
-        if (out_raw) {
-            free(out_raw);
-        }
-        if (ref) {
-            free(ref);
-        }
-        if (bias) {
-            free(bias);
-        }
-    }
-    if (advisory) {
-        printf(ANSI_COLOR_YELLOW"%s: %d advisory ratio miss(es), not counted\n"ANSI_COLOR_RESET,
-               __FUNCTION__, advisory);
+    large_cleanup:
+        free(input_raw);
+        free(filter_raw);
+        free(out_raw);
+        free(ref);
+        free(bias);
     }
 }
 
@@ -882,28 +771,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
     fc_batch_cleanup:
         free(in_o); free(flt_o); free(ob_o); free(or_o); free(out_mult); free(out_shift);
     }
-}
-
-/* A row that names fully connected fails when the scratch call is faster
- * than this fraction of the same call with the scratch buffer cleared.
- * Convolution rows are not compared this way: a small shape can take the
- * 1x1 path and still be slower, so the path comes from the dispatch return. */
-enum {
-    FC_1X1_FC_MIN_X100 = 95,
-};
-
-static uint32_t fc_1x1_median(uint32_t *samples, int n)
-{
-    for (int i = 1; i < n; i++) {
-        uint32_t v = samples[i];
-        int j = i;
-        while (j > 0 && samples[j - 1] > v) {
-            samples[j] = samples[j - 1];
-            j--;
-        }
-        samples[j] = v;
-    }
-    return samples[n / 2];
 }
 
 /* The scratch batch call takes the 1x1 path exactly when
@@ -1003,7 +870,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
     };
     const int n_cfg = (int) (sizeof(cfg) / sizeof(cfg[0]));
     const int32_t out_offset = 5;
-    const int reps = 5;
     const int dual = esp_nn_dual_core_active() ? 1 : 0;
 
     for (int c = 0; c < n_cfg; c++) {
@@ -1121,22 +987,15 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
                     out_offset, out_shift, out_mult, activation_min, activation_max);
         }
 
-        uint32_t samples[5];
         void *arg = NULL;
         size_t arg_size = 0;
         fc_1x1_arm(cfg[c].scratch_mode, scratch, scratch_bytes, &arg, &arg_size);
-        for (int r = 0; r < reps; r++) {
-            profile_opt_start();
-            esp_nn_fully_connected_per_ch_s8_batch_scratch(
-                    input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
-                    out_batched, out_ch, out_offset, out_shift, out_mult,
-                    activation_min, activation_max, B, arg, arg_size);
-            samples[r] = profile_opt_end();
-        }
-        const uint32_t cycles = fc_1x1_median(samples, reps);
-        const uint32_t ticks_per_us = esp_rom_get_cpu_ticks_per_us();
-        const uint32_t us_x100 = ticks_per_us
-                ? (uint32_t) (((uint64_t) cycles * 100ull) / ticks_per_us) : 0;
+        profile_opt_start();
+        esp_nn_fully_connected_per_ch_s8_batch_scratch(
+                input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
+                out_batched, out_ch, out_offset, out_shift, out_mult,
+                activation_min, activation_max, B, arg, arg_size);
+        profile_opt_end();
 
         int mismatch = 0;
         const int n_out = B * out_ch;
@@ -1146,32 +1005,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
             }
         }
 
-        /* The plain batch call is fully connected. Its cycle count is printed
-         * for every row. On S3, P4, and S31 a fully connected row fails when
-         * the scratch call is faster than FC_1X1_FC_MIN_X100 percent of it. */
-        uint32_t cycles_fc = 0;
-        int cycle_fail = (cycles == 0);
-#if defined(CONFIG_NN_OPTIMIZED) && \
-        (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4) || \
-         defined(CONFIG_IDF_TARGET_ESP32S31))
-        if (scratch != NULL && !cycle_fail) {
-            for (int r = 0; r < reps; r++) {
-                profile_opt_start();
-                esp_nn_fully_connected_per_ch_s8_batch(
-                        input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
-                        out_batched, out_ch, out_offset, out_shift, out_mult,
-                        activation_min, activation_max, B);
-                samples[r] = profile_opt_end();
-            }
-            cycles_fc = fc_1x1_median(samples, reps);
-            if (cycles_fc == 0) {
-                cycle_fail = 1;
-            } else if (!expect) {
-                cycle_fail = (uint64_t) cycles * 100 <
-                        (uint64_t) cycles_fc * FC_1X1_FC_MIN_X100;
-            }
-        }
-#endif
         /* The outputs match on either path. Ask the same function the scratch
          * call uses. On S3, P4, and S31 that return has to match expect, so a
          * missed 1x1 dispatch fails. Other builds have no 1x1 path. */
@@ -1186,20 +1019,15 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
 #else
         const int path_fail = (took != 0);
 #endif
-        printf("FC_BATCH_1X1 name=%s cycles=%" PRIu32 " fc_cycles=%" PRIu32
-               " us_x100=%" PRIu32 " mismatch=%d expect=%d path=%d dual=%d\n",
-               cfg[c].name, cycles, cycles_fc, us_x100, mismatch, expect, took,
-               dual);
+        printf("FC_BATCH_1X1 name=%s mismatch=%d expect=%d path=%d dual=%d\n",
+               cfg[c].name, mismatch, expect, took, dual);
         if (mismatch != 0) {
             TEST_FAIL("[%s] failed, %d of %d outputs differ\n",
                       cfg[c].name, mismatch, n_out);
         } else if (path_fail) {
             TEST_FAIL("[%s] path=%d expect=%d\n", cfg[c].name, took, expect);
-        } else if (cycle_fail) {
-            TEST_FAIL("[%s] cycles=%" PRIu32 " fc_cycles=%" PRIu32 " expect=%d\n",
-                      cfg[c].name, cycles, cycles_fc, expect);
         } else {
-            TEST_PASS("[%s] passed, cycles=%" PRIu32 "\n", cfg[c].name, cycles);
+            TEST_PASS("[%s] passed\n", cfg[c].name);
         }
 
     case_cleanup:

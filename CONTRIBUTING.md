@@ -14,7 +14,7 @@ If you'd like to propose a change to the existing APIs or a large-scale refactor
 
 ## Updating the Benchmarks Table
 
-The benchmarks table in [README.md](README.md) contains benchmarks for ESP32-S3. The benchmarks are collected by running the app in [test_app](test_app/) directory. Please update this table if you have changed the implementations of some of the functions or added the new ones.
+The kernel tables in [README.md](README.md) and [docs/performance.md](docs/performance.md) come from the `BENCH` lines of [bench_app](bench_app/). See its README for how to run it and how to add a case. Please update the tables if you change or add a kernel.
 
 ## Releasing a new version
 

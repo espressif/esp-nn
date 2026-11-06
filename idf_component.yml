@@ -8,5 +8,6 @@ dependencies:
     version: ">=5.1"
 files:
   exclude:
+    - bench_app
     - test_app
     - tests

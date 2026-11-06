@@ -10,9 +10,25 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <inttypes.h>
+#include <math.h>
 
 #include <esp_nn.h>
 #include "test_utils.h"
+
+/* 1 / n as a Q31 multiplier in [2^30, 2^31) and a shift, as TFLite's
+ * QuantizeMultiplier computes it. */
+static void mean_quant(int n, int32_t *mult, int32_t *shift)
+{
+    int e;
+    const double q = frexp(1.0 / n, &e);
+    int64_t m = llround(q * 2147483648.0);
+    if (m == (1LL << 31)) {
+        m /= 2;
+        e++;
+    }
+    *mult = (int32_t) m;
+    *shift = e;
+}
 
 void esp_nn_mean_nhwc_s8_test()
 {
@@ -32,8 +48,6 @@ void esp_nn_mean_nhwc_s8_test()
 
     const int32_t input_zp = -128;
     const int32_t output_zp = -128;
-    const int32_t multiplier = 1073741824; /* typical */
-    const int32_t shift = -1;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
 
@@ -42,6 +56,9 @@ void esp_nn_mean_nhwc_s8_test()
         int w = test_cases[t].width;
         int c = test_cases[t].channels;
         int input_size = h * w * c;
+        /* The multiplier and shift scale the sum by 1 / (h * w). */
+        int32_t multiplier, shift;
+        mean_quant(h * w, &multiplier, &shift);
 
         int8_t *input_orig = malloc(input_size + 16);
         int8_t *out_c_orig = malloc(c + 16);

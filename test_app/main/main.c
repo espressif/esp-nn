@@ -26,10 +26,12 @@
 #endif
 
 static const char *TAG = "test_app";
-static uint32_t start_c, start_opt, total_c, total_opt;
-/* Per-suite sums of every profiled section, reset by RUN_TEST. The per-call
- * return values above stay per call for the tests' own cycle prints. */
-static uint64_t suite_c, suite_opt;
+
+/* The tests call these hooks around every kernel call. test_app reports no
+ * cycles (bench_app measures them); on ESP32-P4 and ESP32-S31 the hooks clear
+ * the PIE CFG before each optimized call, so a kernel that does not set it
+ * itself fails its bit-exact check. */
+static uint32_t start_c, start_opt;
 
 void profile_c_start()
 {
@@ -39,10 +41,7 @@ void profile_c_start()
 
 uint32_t profile_c_end()
 {
-    /* record profile number */
-    total_c = esp_cpu_get_ccount() - start_c;
-    suite_c += total_c;
-    return total_c;
+    return esp_cpu_get_ccount() - start_c;
 }
 
 #if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
@@ -86,62 +85,19 @@ void profile_opt_start()
 
 uint32_t profile_opt_end()
 {
-    /* record profile number */
-    total_opt = esp_cpu_get_ccount() - start_opt;
-    suite_opt += total_opt;
-    return total_opt;
+    return esp_cpu_get_ccount() - start_opt;
 }
 
-/* nano-printf (the default C library for ESP32-C2 on IDF v5.x) implements
- * neither 64-bit nor floating-point conversions, so format both by hand. */
-static const char *u64_dec(uint64_t v, char *buf, size_t len)
-{
-    char *p = buf + len - 1;
-    *p = '\0';
-    do {
-        *--p = (char) ('0' + (v % 10));
-        v /= 10;
-    } while (v);
-    return p;
-}
-
-/* Silent for a test that does not profile, which leaves the counters at 0. */
-static void print_profile(const char *kernel)
-{
-    if (suite_c == 0 && suite_opt == 0) {
-        return;
-    }
-    /* Whole-suite sums, not the last case. Cycle counts are wherever the
-     * app runs (emulator or silicon); the CI report labels the source. */
-    uint32_t whole = 0, hundredths = 0;
-    if (suite_c > 0 && suite_opt > 0) {
-        uint64_t ratio_x100 = (suite_c * 100u) / suite_opt;
-        whole = (uint32_t) (ratio_x100 / 100);
-        hundredths = (uint32_t) (ratio_x100 % 100);
-    }
-    char ansi_buf[24], opt_buf[24];
-    printf("PROFILE: %s, ansi=%s, opt=%s, speedup=%u.%02ux\n", kernel,
-           u64_dec(suite_c, ansi_buf, sizeof(ansi_buf)),
-           u64_dec(suite_opt, opt_buf, sizeof(opt_buf)),
-           (unsigned) whole, (unsigned) hundredths);
-}
-
-
-/* Run one test, then report its own pass/fail tally and its cycle counts. */
+/* Run one test, then report its own pass/fail tally. */
 #define RUN_TEST(fn, name) do {                                     \
     uint32_t passed_before = esp_nn_test_passed;                    \
     uint32_t failed_before = esp_nn_test_failed;                    \
     uint32_t skipped_before = esp_nn_test_skipped;                  \
-    total_c = 0;                                                    \
-    total_opt = 0;                                                  \
-    suite_c = 0;                                                    \
-    suite_opt = 0;                                                  \
     fn();                                                           \
     printf("TEST: %s, passed=%"PRIu32", failed=%"PRIu32", skipped=%"PRIu32"\n", name, \
            esp_nn_test_passed - passed_before,                      \
            esp_nn_test_failed - failed_before,                      \
            esp_nn_test_skipped - skipped_before);                   \
-    print_profile(name);                                            \
 } while (0)
 
 void app_main()
@@ -167,7 +123,7 @@ void app_main()
     RUN_TEST(esp_nn_fully_connected_per_ch_s8_batch_1x1_test, "fc_per_ch_s8_batch_1x1");
     RUN_TEST(esp_nn_fully_connected_align_s8_test, "fc_align_s8");
     RUN_TEST(esp_nn_alignment_s8_test, "alignment_s8");
-    RUN_TEST(esp_nn_fully_connected_perf_test, "fc_perf");
+    RUN_TEST(esp_nn_fully_connected_large_s8_test, "fc_large_s8");
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");
     RUN_TEST(esp_nn_mean_nhwc_s8_test, "mean_nhwc_s8");
