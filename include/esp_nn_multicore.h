@@ -25,6 +25,10 @@ extern "C" {
 #define ESP_NN_DUAL_CORE_SUPPORTED 0
 #endif
 
+/* Set when esp_nn_dual_core_begin() and esp_nn_dual_core_end() exist.
+ * Callers that split work themselves can check it at compile time. */
+#define ESP_NN_HAS_DUAL_CORE_CLAIM 1
+
 /**
  * Opt in to dual-core kernel splitting. Spawns a worker task pinned to the
  * other core; kernels that support it then split their output range in two.
