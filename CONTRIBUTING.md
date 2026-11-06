@@ -14,7 +14,7 @@ If you'd like to propose a change to the existing APIs or a large-scale refactor
 
 ## Updating the Benchmarks Table
 
-The kernel tables in [README.md](README.md) come from the `BENCH` lines of [bench_app](bench_app/). See its README for how to run it and how to add a case. Please update the tables if you change or add a kernel.
+The kernel tables in [README.md](README.md) and [docs/performance.md](docs/performance.md) come from the `BENCH` lines of [bench_app](bench_app/). See its README for how to run it and how to add a case. Please update the tables if you change or add a kernel.
 
 ## Releasing a new version
 

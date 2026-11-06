@@ -1,6 +1,6 @@
 # esp-nn kernel performance
 
-CPU cycles for one call of each s8 kernel, measured with the test app in `test_app/`.
+CPU cycles for one call of each s8 kernel, measured with the benchmark app in `bench_app/`.
 
 - **ANSI C** is the portable reference kernel.
 - **Optimized** is the target kernel.
