@@ -38,8 +38,11 @@ BENCH_DONE cases=40 failures=0 skipped=0
   cache are timed with a warm cache, even when they live in PSRAM.
 - `result`: `ok`, or `MISMATCH` when an output or a guard byte differs. The run continues.
   `skip` means the case could not allocate its buffers. `BENCH_DONE` counts these as `skipped`.
-- `BENCH_WARN`: a fully connected case where `esp_nn` is slower than its limit relative to the
-  same call with operands 8 bytes past a 16-byte boundary. It guards against esp-nn#36.
+- `BENCH_WARN`: a variant slower than its limit relative to another variant of the same case.
+  - Fully connected: `esp_nn` against the same call with operands 8 bytes past a 16-byte
+    boundary. It guards against esp-nn#36.
+  - Batched fully connected: `esp_nn_scratch` (the 1x1 convolution path, when its gate accepts
+    the shape) against `esp_nn`. The gate should pick the 1x1 path only where it wins.
 
 Each case seeds its data from the run seed, its op and its shape. A case gets the same data
 however many cases run before it.
@@ -51,12 +54,11 @@ The published kernel performance tables are made from these lines.
 Each op has its own file in `main/`, for example `bench_fully_connected.c`.
 
 - **A new shape:** add a row to the op's shape table. Nothing else changes.
-- **Another way to run the same op**, for example a contributed kernel, or a batched fully
-  connected layer evaluated as a 1x1 convolution: write a function with the `bench_fn` signature
-  that makes one call, and add it to the op's variants table:
+- **Another way to run the same op**, for example a contributed kernel: write a function with
+  the `bench_fn` signature that makes one call, and add it to the op's variants table:
 
   ```c
-  static void fc_batch_via_conv(void *p, int v, int8_t *out)
+  static void fc_batch_contrib(void *p, int v, int8_t *out)
   {
       const fc_batch_ctx_t *c = p;
       /* one call computing the same output as the reference */
@@ -64,7 +66,8 @@ Each op has its own file in `main/`, for example `bench_fully_connected.c`.
 
   static const bench_variant_t s_batch_variants[] = {
       { "esp_nn", fc_batch_opt },
-      { "via_1x1_conv", fc_batch_via_conv },
+      { "esp_nn_scratch", fc_batch_scratch },
+      { "contrib", fc_batch_contrib },
   };
   ```
 

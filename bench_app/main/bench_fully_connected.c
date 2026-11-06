@@ -172,6 +172,8 @@ typedef struct {
     const int8_t *input[2];
     const int8_t *filter;
     const int32_t *bias, *mult, *shift;
+    void *scratch;
+    size_t scratch_size;
 } fc_batch_ctx_t;
 
 #define FC_BATCH_INPUT_OFFSET 128
@@ -192,11 +194,27 @@ static void fc_batch_opt(void *p, int v, int8_t *out)
                                            c->shift, c->mult, -128, 127, c->batches);
 }
 
-/* Another way to compute the same batch (for example as a 1x1 convolution)
- * goes here as one more entry: it is timed and checked like the others. */
+/* The scratch call runs the batch as a 1x1 convolution when its gate
+ * accepts the shape, and otherwise the same kernel as esp_nn. */
+static void fc_batch_scratch(void *p, int v, int8_t *out)
+{
+    const fc_batch_ctx_t *c = p;
+    esp_nn_fully_connected_per_ch_s8_batch_scratch(c->input[v], FC_BATCH_INPUT_OFFSET,
+                                                   c->row_len, c->filter, 0, c->bias, out,
+                                                   c->out_ch, 0, c->shift, c->mult, -128, 127,
+                                                   c->batches, c->scratch, c->scratch_size);
+}
+
+/* Another way to compute the same batch goes here as one more entry: it is
+ * timed and checked like the others. */
 static const bench_variant_t s_batch_variants[] = {
     { "esp_nn", fc_batch_opt },
+    { "esp_nn_scratch", fc_batch_scratch },
 };
+
+/* Warn when the scratch call takes more than this percentage of the cycles
+ * of esp_nn: its gate should pick the 1x1 path only where it wins. */
+#define FC_BATCH_SCRATCH_MAX_PCT 105
 
 static void run_fc_batch(const fc_batch_shape_t *s)
 {
@@ -207,11 +225,15 @@ static void run_fc_batch(const fc_batch_shape_t *s)
     int32_t *bias = bench_alloc(s->out_ch * sizeof(int32_t), BENCH_MEM_INT);
     int32_t *mult = bench_alloc(s->out_ch * sizeof(int32_t), BENCH_MEM_INT);
     int32_t *shift = bench_alloc(s->out_ch * sizeof(int32_t), BENCH_MEM_INT);
+    /* With the tensors, as in a TFLite Micro arena. */
+    const int32_t scratch_size = esp_nn_get_fc_batch_scratch_size(s->batches, s->row_len,
+                                                                  s->out_ch);
+    void *scratch = scratch_size > 0 ? bench_alloc(scratch_size, s->mem) : NULL;
     char shape[64];
     snprintf(shape, sizeof(shape), "batch %d, length %d, %d outputs",
              s->batches, s->row_len, s->out_ch);
 
-    if (in[0] && in[1] && filter && bias && mult && shift) {
+    if (in[0] && in[1] && filter && bias && mult && shift && (scratch_size <= 0 || scratch)) {
         bench_seed_case("fully_connected_batch", shape);
         bench_fill(in[0], in_size);
         bench_fill(in[1], in_size);
@@ -220,14 +242,23 @@ static void run_fc_batch(const fc_batch_shape_t *s)
         bench_fill_quant(mult, shift, s->out_ch);
         fc_batch_ctx_t c = { .batches = s->batches, .row_len = s->row_len, .out_ch = s->out_ch,
                              .input = { in[0], in[1] }, .filter = filter,
-                             .bias = bias, .mult = mult, .shift = shift };
+                             .bias = bias, .mult = mult, .shift = shift,
+                             .scratch = scratch,
+                             .scratch_size = scratch ? (size_t) scratch_size : 0 };
+        uint32_t cycles[2] = { 0 };
         const bench_case_t bc = {
             .op = "fully_connected_batch", .shape = shape, .mem = s->mem,
             .out_size = (size_t) s->batches * s->out_ch, .ref = fc_batch_ref,
             .variants = s_batch_variants,
             .n_variants = sizeof(s_batch_variants) / sizeof(s_batch_variants[0]), .ctx = &c,
+            .cycles = cycles,
         };
         bench_run(&bc);
+        if ((uint64_t) cycles[1] * 100 > (uint64_t) cycles[0] * FC_BATCH_SCRATCH_MAX_PCT) {
+            printf("BENCH_WARN op=fully_connected_batch esp_nn_scratch=%" PRIu32 " esp_nn=%"
+                   PRIu32 " limit=%d%% shape=\"%s\"\n", cycles[1], cycles[0],
+                   FC_BATCH_SCRATCH_MAX_PCT, shape);
+        }
     } else {
         bench_skip("fully_connected_batch", shape, s->mem);
     }
@@ -237,6 +268,7 @@ static void run_fc_batch(const fc_batch_shape_t *s)
     bench_free(bias);
     bench_free(mult);
     bench_free(shift);
+    bench_free(scratch);
 }
 
 void bench_fully_connected(void)
