@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 37; itr++) {
+    for (int itr = 0; itr < 39; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -438,6 +438,31 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 37: // 5x5, some channels shift left: the S3 KxK general requant
+            input_wd = 11;
+            input_ht = 9;
+            filter_ht = 5;
+            filter_wd = 5;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 2;
+            pad_ht = 2;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 38: // 5x3 filter, 24 channels: the S3 KxK generic rows and an
+                 // 8-channel tail group
+            input_wd = 9;
+            input_ht = 7;
+            filter_ht = 3;
+            filter_wd = 5;
+            ch_mult = 1;
+            channels = 24;
+            pad_wd = 2;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         case 32: // 520 channels, 8 mod 16, stride 2
             input_wd = 9;
             input_ht = 5;
@@ -539,6 +564,10 @@ void esp_nn_depthwise_conv_s8_test()
             bias[i + 1] = rand() % INT16_MAX; //0th index left for unalignment
             out_shift[i] = -8 + rand() % 3;
             out_mult[i] = 0x7eb0e200 + rand() % 50;
+            if (itr == 37 && i % 3 == 0) {
+                out_shift[i] = 1;
+                out_mult[i] = 0x40000000 + rand() % 50;
+            }
         }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
