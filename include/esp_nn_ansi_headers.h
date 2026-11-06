@@ -153,6 +153,11 @@ int esp_nn_get_fc_batch_scratch_size(int32_t batches, uint16_t row_len,
  *              esp_nn_set_conv_scratch_buf leaves that call on the fully
  *              connected kernel. This pointer is not the convolution scratch
  *              pointer.
+ *
+ * @note        Not thread safe. During the 1x1 path the batch call sets the
+ *              convolution scratch pointer to buf and restores it on return.
+ *              Do not run esp_nn_conv_s8 or esp_nn_set_conv_scratch_buf from
+ *              another task at the same time.
  */
 void esp_nn_set_fc_scratch_buf(const void *buf, size_t size);
 

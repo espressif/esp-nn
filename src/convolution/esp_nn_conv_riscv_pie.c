@@ -1726,20 +1726,14 @@ void esp_nn_set_conv_scratch_buf_riscv_pie(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
-void esp_nn_conv_scratch_borrow_riscv_pie(void *buf, void **scratch,
-                                          void **preferred, size_t *preferred_size)
+void esp_nn_conv_scratch_borrow_riscv_pie(void *buf, void **scratch)
 {
-    (void) preferred;
-    (void) preferred_size;
     *scratch = scratch_buffer;
     scratch_buffer = (int16_t *) buf;
 }
 
-void esp_nn_conv_scratch_restore_riscv_pie(void *scratch, void *preferred,
-                                           size_t preferred_size)
+void esp_nn_conv_scratch_restore_riscv_pie(void *scratch)
 {
-    (void) preferred;
-    (void) preferred_size;
     scratch_buffer = (int16_t *) scratch;
 }
 

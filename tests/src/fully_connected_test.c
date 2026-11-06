@@ -1295,6 +1295,97 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         free(scratch_raw);
     }
 
+#if defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    /* S3: an output that is not 8-byte aligned stays on fully connected.
+     * With a preferred conv buffer registered, the 1x1 path stages its
+     * panels there and still matches the per-row reference. */
+    {
+        const int batch = 16;
+        const int row = 128;
+        const int out_ch = 256;
+        const size_t pref_size = 24 * row + 16 * 1024 + 64;
+        int8_t *in_o = ESP_NN_TEST_ALLOC((size_t) batch * row + 32);
+        int8_t *flt_o = ESP_NN_TEST_ALLOC((size_t) row * out_ch + 32);
+        int8_t *out_o = ESP_NN_TEST_ALLOC((size_t) batch * out_ch + 32);
+        int8_t *ref = ESP_NN_TEST_ALLOC((size_t) batch * out_ch);
+        int32_t *mult = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        int32_t *shift = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        int32_t *bias = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        void *pref_raw = ESP_NN_TEST_ALLOC(pref_size + 32);
+        int scratch_bytes = esp_nn_get_fc_batch_scratch_size(batch, row, out_ch);
+        void *scratch_raw = scratch_bytes > 0 ?
+                ESP_NN_TEST_ALLOC((size_t) scratch_bytes + 32) : NULL;
+        if (!in_o || !flt_o || !out_o || !ref || !mult || !shift || !bias ||
+                !pref_raw || !scratch_raw) {
+            TEST_SKIP("[s3_out_align_preferred] alloc failed\n");
+        } else {
+            int8_t *input = (int8_t *) (((uintptr_t) in_o + 15) & ~(uintptr_t) 15);
+            int8_t *filter = (int8_t *) (((uintptr_t) flt_o + 15) & ~(uintptr_t) 15);
+            int8_t *out = (int8_t *) (((uintptr_t) out_o + 15) & ~(uintptr_t) 15);
+            void *scratch = (void *) (((uintptr_t) scratch_raw + 15) & ~(uintptr_t) 15);
+            void *pref = (void *) (((uintptr_t) pref_raw + 15) & ~(uintptr_t) 15);
+            for (int i = 0; i < batch * row; i++) {
+                input[i] = (int8_t) (rand() & 0xff);
+            }
+            for (int i = 0; i < row * out_ch; i++) {
+                filter[i] = (int8_t) (rand() & 0xff);
+            }
+            for (int i = 0; i < out_ch; i++) {
+                mult[i] = 0x40000000 + (rand() & 0xfffff);
+                shift[i] = -8;
+                bias[i] = (rand() & 0x3ff) - 512;
+            }
+            for (int b = 0; b < batch; b++) {
+                esp_nn_fully_connected_per_ch_s8_ansi(input + b * row, 3, row,
+                        filter, 0, bias, ref + b * out_ch, out_ch, -2,
+                        shift, mult, -128, 127);
+            }
+
+            esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
+            int took = esp_nn_fc_per_ch_s8_batch_via_conv(input, 3, row,
+                    filter, 0, bias, out + 4, out_ch, -2, shift, mult,
+                    -128, 127, batch);
+            esp_nn_set_fc_scratch_buf(NULL, 0);
+            if (took != 0) {
+                TEST_FAIL("[s3_out_misaligned] entered the 1x1 path\n");
+            } else {
+                TEST_PASS("[s3_out_misaligned] stayed on fully connected\n");
+            }
+
+            memset(pref, 0x5a, pref_size);
+            esp_nn_set_conv_preferred_scratch_buf_esp32s3(pref, pref_size);
+            esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
+            took = esp_nn_fc_per_ch_s8_batch_via_conv(input, 3, row, filter, 0,
+                    bias, out, out_ch, -2, shift, mult, -128, 127, batch);
+            esp_nn_set_fc_scratch_buf(NULL, 0);
+            esp_nn_set_conv_preferred_scratch_buf_esp32s3(NULL, 0);
+            int mismatch = 0;
+            for (int i = 0; i < batch * out_ch; i++) {
+                mismatch += out[i] != ref[i];
+            }
+            bool pref_used = false;
+            for (size_t i = 0; i < pref_size && !pref_used; i++) {
+                pref_used = ((uint8_t *) pref)[i] != 0x5a;
+            }
+            if (took != 1 || mismatch != 0 || !pref_used) {
+                TEST_FAIL("[s3_fc_preferred] took=%d mismatch=%d pref_used=%d\n",
+                          took, mismatch, pref_used);
+            } else {
+                TEST_PASS("[s3_fc_preferred] passed\n");
+            }
+        }
+        free(in_o);
+        free(flt_o);
+        free(out_o);
+        free(ref);
+        free(mult);
+        free(shift);
+        free(bias);
+        free(pref_raw);
+        free(scratch_raw);
+    }
+#endif
+
     /* The getter must match the 1x1 conv scratch size. Offsets are not part
      * of that size. ANSI and the generic targets report 0. */
     {

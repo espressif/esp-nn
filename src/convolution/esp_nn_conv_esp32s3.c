@@ -608,26 +608,17 @@ void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
-void esp_nn_conv_scratch_borrow_esp32s3(void *buf, void **scratch,
-                                        void **preferred, size_t *preferred_size)
+/* The preferred buffer stays set. The 1x1 kernel stages its panels there
+ * when it fits, so a fully connected buffer in PSRAM does not slow it. */
+void esp_nn_conv_scratch_borrow_esp32s3(void *buf, void **scratch)
 {
     *scratch = scratch_buffer;
-    *preferred = preferred_scratch_buffer;
-    *preferred_size = preferred_scratch_size;
     scratch_buffer = (int16_t *) buf;
-    /* The 1x1 kernel writes the preferred buffer when it is large enough.
-     * Suspend it so this call writes the borrowed fully connected buffer,
-     * then the caller restores the preferred registration. */
-    preferred_scratch_buffer = NULL;
-    preferred_scratch_size = 0;
 }
 
-void esp_nn_conv_scratch_restore_esp32s3(void *scratch, void *preferred,
-                                         size_t preferred_size)
+void esp_nn_conv_scratch_restore_esp32s3(void *scratch)
 {
     scratch_buffer = (int16_t *) scratch;
-    preferred_scratch_buffer = (uint8_t *) preferred;
-    preferred_scratch_size = preferred_size;
 }
 
 void esp_nn_set_conv_preferred_scratch_buf_esp32s3(void *buf, size_t size)

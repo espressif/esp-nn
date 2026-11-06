@@ -48,6 +48,19 @@ enum {
     ESP_NN_FC_P4_MIN_OUT = 4,
 };
 
+/* Performance only. The S3 1x1 fast path and its dual-core split store the
+ * output 8 bytes at a time. Other outputs take the slower C path there,
+ * which loses to the fully connected kernel. */
+static int fc_out_aligned(const int8_t *out_data)
+{
+#if defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    return (((uintptr_t) out_data) & 7) == 0;
+#else
+    (void) out_data;
+    return 1;
+#endif
+}
+
 /* Performance only. Correctness checks stay in the caller. Targets that
  * were not swept keep the original cutoffs. */
 static int fc_conv_shape_wins(int32_t batches, uint16_t row_len,
@@ -225,7 +238,7 @@ static int fc_scratch_fits(int bytes)
  * the fully connected buffer and then restored.
  *
  * Performance: fc_conv_shape_wins is the per-chip floor from the board
- * sweeps. The S3 fast assembly still requires channels % 8 inside the
+ * sweeps. On S3 the output must also be 8-byte aligned (fc_out_aligned). The S3 fast assembly still requires channels % 8 inside the
  * convolution kernel and uses its existing fallback for other widths.
  * Batch 1 and 2 require that multiple of 8 here as well. A live worker
  * is also required, and the convolution can still decline the split and
@@ -249,6 +262,7 @@ int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
             filter_offset != 0 ||
             (((uintptr_t) input_data) & 7) != 0 ||
             (((uintptr_t) filter_data) & 7) != 0 ||
+            !fc_out_aligned(out_data) ||
             !fc_conv_shape_wins(batches, row_len, out_channels)) {
         return 0;
     }
@@ -280,14 +294,10 @@ int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
         .mult = (int32_t *) out_mult,
     };
     void *saved_scratch = NULL;
-    void *saved_preferred = NULL;
-    size_t saved_preferred_size = 0;
-    esp_nn_conv_scratch_borrow(fc_scratch, &saved_scratch, &saved_preferred,
-                               &saved_preferred_size);
+    esp_nn_conv_scratch_borrow(fc_scratch, &saved_scratch);
     esp_nn_conv_s8(&input_dims, input_data, &filter_dims, filter_data, bias,
                    &output_dims, out_data, &conv_params, &quant);
-    esp_nn_conv_scratch_restore(saved_scratch, saved_preferred,
-                                saved_preferred_size);
+    esp_nn_conv_scratch_restore(saved_scratch);
     return 1;
 }
 

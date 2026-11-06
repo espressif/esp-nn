@@ -31,23 +31,17 @@ void esp_nn_set_conv_scratch_buf_ansi(const void *buf)
 
 }
 
-void esp_nn_conv_scratch_borrow_ansi(void *buf, void **scratch,
-                                     void **preferred, size_t *preferred_size)
+void esp_nn_conv_scratch_borrow_ansi(void *buf, void **scratch)
 {
     (void) buf;
-    (void) preferred;
-    (void) preferred_size;
     if (scratch) {
         *scratch = NULL;
     }
 }
 
-void esp_nn_conv_scratch_restore_ansi(void *scratch, void *preferred,
-                                      size_t preferred_size)
+void esp_nn_conv_scratch_restore_ansi(void *scratch)
 {
     (void) scratch;
-    (void) preferred;
-    (void) preferred_size;
 }
 
 /**
