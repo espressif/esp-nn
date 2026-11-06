@@ -81,6 +81,18 @@ build_idf_master_ansi:
     EXAMPLE_TARGETS: esp32 esp32s3 esp32c3 esp32c5 esp32p4 esp32s31
     IDF_EXTRA_FLAGS: "--preview -D SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ci.ansi"
 
+# ESP32-P4 before rev v3.0 needs every hardware loop placed by the rules in
+# src/common/common_functions.h (esp-idf#19025). Build test_app for those
+# revisions and check each loop in the ELF. The image uses the pre-rev-v3 PIE
+# encodings, which esp-emu rejects, so it is not staged for the test stage.
+build_idf_v5.5_p4_rev_lt_v3:
+  extends: .build_template
+  image: espressif/idf:release-v5.5
+  script:
+    - cd ${CI_PROJECT_DIR}/test_app
+    - idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.p4_rev_lt_v3" set-target esp32p4 build
+    - python3 ${CI_PROJECT_DIR}/tools/ci/check_hwloop_rules.py build/test_app.elf
+
 build_idf_v6.0:
   extends: .build_template
   image: espressif/idf:release-v6.0
