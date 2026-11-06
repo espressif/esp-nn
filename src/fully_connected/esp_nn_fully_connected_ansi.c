@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <common_functions.h>
+#include <esp_nn.h>
 
 void esp_nn_fully_connected_s8_ansi(const int8_t *input_data,
                                     const int32_t input_offset,
@@ -106,4 +108,62 @@ void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     out_offset, out_shift, out_mult,
                                     activation_min, activation_max);
     }
+}
+
+/* The 1x1 scratch formulas do not read the offsets or the activation, so
+ * those fields are fixed. The batch count is the convolution height: S3
+ * drops its transpose buffer below 8 positions, and PIE pads the input when
+ * the channel count is not a multiple of 8. */
+int esp_nn_get_fc_batch_scratch_size(int32_t batches, uint16_t row_len,
+                                     uint16_t out_ch)
+{
+    if (batches <= 0 || batches > UINT16_MAX || row_len == 0 || out_ch == 0) {
+        return 0;
+    }
+    const data_dims_t input_dims = {
+        .width = 1, .height = batches, .channels = row_len,
+    };
+    const data_dims_t filter_dims = {
+        .width = 1, .height = 1, .channels = row_len,
+    };
+    const data_dims_t output_dims = {
+        .width = 1, .height = batches, .channels = out_ch,
+    };
+    const conv_params_t conv_params = {
+        .in_offset = 0,
+        .out_offset = 0,
+        .stride = { .width = 1, .height = 1 },
+        .padding = { .width = 0, .height = 0 },
+        .dilation = { .width = 1, .height = 1 },
+        .activation = { .min = -128, .max = 127 },
+    };
+    return esp_nn_get_conv_scratch_size(&input_dims, &filter_dims,
+                                        &output_dims, &conv_params);
+}
+
+/* The portable reference ignores the scratch buffer and loops the per-row
+ * kernel, so it stays bit-exact with it. */
+void esp_nn_fully_connected_per_ch_s8_batch_scratch_ansi(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches,
+                                    void *scratch,
+                                    size_t scratch_size)
+{
+    (void) scratch;
+    (void) scratch_size;
+    esp_nn_fully_connected_per_ch_s8_batch_ansi(input_data, input_offset, row_len,
+                                    filter_data, filter_offset, bias, out_data,
+                                    out_channels, out_offset, out_shift, out_mult,
+                                    activation_min, activation_max, batches);
 }

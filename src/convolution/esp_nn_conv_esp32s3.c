@@ -608,6 +608,19 @@ void esp_nn_set_conv_scratch_buf_esp32s3(void *buf)
     scratch_buffer = (int16_t *) buf;
 }
 
+/* The preferred buffer stays set. The 1x1 kernel stages its panels there
+ * when it fits, so a fully connected buffer in PSRAM does not slow it. */
+void esp_nn_conv_scratch_borrow_esp32s3(void *buf, void **scratch)
+{
+    *scratch = scratch_buffer;
+    scratch_buffer = (int16_t *) buf;
+}
+
+void esp_nn_conv_scratch_restore_esp32s3(void *scratch)
+{
+    scratch_buffer = (int16_t *) scratch;
+}
+
 void esp_nn_set_conv_preferred_scratch_buf_esp32s3(void *buf, size_t size)
 {
     preferred_scratch_buffer = (uint8_t *)buf;

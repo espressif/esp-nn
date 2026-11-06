@@ -10,6 +10,8 @@
  * @file        Header definitions to include for esp_nn reference functions
  */
 
+#include <stddef.h>
+
 #include "esp_nn_defs.h"
 /************************** Basic math functions ****************************/
 
@@ -124,6 +126,18 @@ int esp_nn_get_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                       const data_dims_t *output_dims,
                                       const conv_params_t *conv_params);
 void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
+
+/**
+ * @brief       Bytes of scratch for one batched fully connected 1x1 call
+ *
+ * @note        The same value as esp_nn_get_conv_scratch_size for height =
+ *              batches, width = 1, in_ch = row_len, out_ch = out_ch.
+ *              ANSI and the generic targets return 0. A non-positive batch
+ *              count, a batch above UINT16_MAX, or a zero row or output
+ *              count returns 0.
+ */
+int esp_nn_get_fc_batch_scratch_size(int32_t batches, uint16_t row_len,
+                                     uint16_t out_ch);
 
 int esp_nn_get_depthwise_conv_scratch_size_ansi(const data_dims_t *input_dims,
                                                 const data_dims_t *filter_dims,
@@ -278,6 +292,46 @@ void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t activation_min,
                                     const int32_t activation_max,
                                     const int32_t batches);
+
+/**
+ * @brief       Batched per-channel fully connected with a scratch buffer
+ *
+ * @note        Same arguments and result as
+ *              esp_nn_fully_connected_per_ch_s8_batch, plus scratch and
+ *              scratch_size. On S3, P4 and S31, a batch with weight
+ *              zero-point 0 on a shape that wins runs as a 1x1 convolution
+ *              in scratch. scratch must be 16-byte aligned, with
+ *              scratch_size at least esp_nn_get_fc_batch_scratch_size for
+ *              the same batches, row length and output channels. A NULL,
+ *              unaligned or short scratch runs the plain batch call. The
+ *              ANSI version always runs the plain batch call.
+ *
+ * @note        With CONFIG_NN_SKIP_NUDGE the 1x1 path uses the fast
+ *              requantize, so its output can differ by 1 from the per-row
+ *              kernel.
+ *
+ * @note        Not thread safe. During the 1x1 path the call sets the
+ *              convolution scratch pointer to scratch and restores it on
+ *              return. Do not run esp_nn_conv_s8 or
+ *              esp_nn_set_conv_scratch_buf from another task at the same
+ *              time.
+ */
+void esp_nn_fully_connected_per_ch_s8_batch_scratch_ansi(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches,
+                                    void *scratch,
+                                    size_t scratch_size);
 
 /**
  * @brief   Get scratch buffer size needed by softmax function
