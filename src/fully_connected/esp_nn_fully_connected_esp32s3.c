@@ -271,19 +271,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
                                        const int32_t activation_max,
                                        const int32_t batches)
 {
-    /* Weight zero-point 0 on a shape the per-chip gate accepts is the 1x1
-     * convolution when a fully connected scratch buffer was registered.
-     * Anything else stays in this kernel. The registration is cleared on
-     * every return. */
-    if (esp_nn_fc_per_ch_s8_batch_via_conv(input_data, input_offset, row_len,
-                                           filter_data, filter_offset, bias,
-                                           out_data, out_channels, out_offset,
-                                           out_shift, out_mult, activation_min,
-                                           activation_max, batches)) {
-        esp_nn_fc_scratch_clear();
-        return;
-    }
-
     const bool input_aligned = (((uintptr_t)input_data & 15) == 0)
                                && ((row_len & 15) == 0);
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
@@ -304,7 +291,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
                 filter_offset, bias, out_data + b * out_channels, out_channels,
                 out_offset, out_shift, out_mult, activation_min, activation_max);
         }
-        esp_nn_fc_scratch_clear();
         return;
     }
 
@@ -344,5 +330,39 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
             out_data[b * out_channels + ch] = (int8_t)acc;
         }
     }
-    esp_nn_fc_scratch_clear();
 }
+
+#if ESP_NN_FC_BATCH_VIA_CONV
+/* Weight zero-point 0 on a shape the per-chip gate accepts runs as the 1x1
+ * convolution in scratch. Anything else runs the batch kernel above. */
+void esp_nn_fully_connected_per_ch_s8_batch_scratch_esp32s3(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches,
+                                    void *scratch,
+                                    size_t scratch_size)
+{
+    if (esp_nn_fc_per_ch_s8_batch_via_conv(input_data, input_offset, row_len,
+                                           filter_data, filter_offset, bias,
+                                           out_data, out_channels, out_offset,
+                                           out_shift, out_mult, activation_min,
+                                           activation_max, batches,
+                                           scratch, scratch_size)) {
+        return;
+    }
+    esp_nn_fully_connected_per_ch_s8_batch_esp32s3(input_data, input_offset, row_len,
+            filter_data, filter_offset, bias, out_data, out_channels,
+            out_offset, out_shift, out_mult, activation_min, activation_max,
+            batches);
+}
+#endif /* ESP_NN_FC_BATCH_VIA_CONV */

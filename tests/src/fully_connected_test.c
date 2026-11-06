@@ -804,10 +804,6 @@ void esp_nn_fully_connected_perf_test()
 void esp_nn_fully_connected_per_ch_s8_batch_test()
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    /* This test is the fully connected kernel. A fully connected scratch
-     * buffer left by an earlier case would take the 1x1 path for several of
-     * these shapes. A convolution scratch registration does not. */
-    esp_nn_set_fc_scratch_buf(NULL, 0);
     /* (batches, row_len, out_ch, input_offset, input misalign, filter misalign).
      * row_len a multiple of 16 keeps the s8 fast path; 33 exercises the scalar
      * tail and, since its rows then start at differing offsets, mixed row
@@ -888,7 +884,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
     }
 }
 
-/* A row that names fully connected fails when the registered call is faster
+/* A row that names fully connected fails when the scratch call is faster
  * than this fraction of the same call with the scratch buffer cleared.
  * Convolution rows are not compared this way: a small shape can take the
  * 1x1 path and still be slower, so the path comes from the dispatch return. */
@@ -910,8 +906,27 @@ static uint32_t fc_1x1_median(uint32_t *samples, int n)
     return samples[n / 2];
 }
 
-/* Both batch wrappers take the 1x1 path exactly when
- * esp_nn_fc_per_ch_s8_batch_via_conv() returns 1. */
+/* The scratch batch call takes the 1x1 path exactly when
+ * esp_nn_fc_per_ch_s8_batch_via_conv() returns 1. That function exists
+ * only on S3, P4 and S31. */
+#if defined(CONFIG_NN_OPTIMIZED) && (defined(CONFIG_IDF_TARGET_ESP32S3) || \
+        defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))
+#define FC_1X1_VIA_CONV(...) esp_nn_fc_per_ch_s8_batch_via_conv(__VA_ARGS__)
+#else
+/* Other targets have no 1x1 path. A function, not a macro returning 0, so
+ * the arguments still count as used. */
+static int fc_1x1_no_conv(const int8_t *input, int32_t input_offset,
+                          uint16_t row_len, const int8_t *filter,
+                          int32_t filter_offset, const int32_t *bias,
+                          int8_t *out, uint16_t out_ch, int32_t out_offset,
+                          const int32_t *out_shift, const int32_t *out_mult,
+                          int32_t act_min, int32_t act_max, int32_t batches,
+                          void *scratch, size_t scratch_size)
+{
+    return 0;
+}
+#define FC_1X1_VIA_CONV(...) fc_1x1_no_conv(__VA_ARGS__)
+#endif
 
 /* A weight zero-point of 0 is the same product as a 1x1 convolution.
  * expect_s3 is that path with one core, expect_s3_dual is that path after
@@ -920,19 +935,22 @@ static uint32_t fc_1x1_median(uint32_t *samples, int n)
  * 1 means the 1x1 convolution. The numbers are written on the
  * row. A batch of 1 or 2 whose row length is not a multiple of 8 stays on
  * fully connected even when the worker is active. Scratch mode is 0 none,
- * 1 a fully connected buffer of the required size, 2 one byte short, 3 the
- * convolution setter, which does not register fully connected scratch. */
-static void fc_1x1_arm(int scratch_mode, void *scratch, int scratch_bytes)
+ * 1 a scratch argument of the required size, 2 one byte short, 3 only the
+ * convolution setter, which the scratch batch call does not read. */
+static void fc_1x1_arm(int scratch_mode, void *scratch, int scratch_bytes,
+                       void **arg, size_t *arg_size)
 {
+    *arg = NULL;
+    *arg_size = 0;
     if (scratch_mode == 1) {
-        esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
+        *arg = scratch;
+        *arg_size = (size_t) scratch_bytes;
     } else if (scratch_mode == 2) {
-        esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes - 1);
+        *arg = scratch;
+        *arg_size = (size_t) scratch_bytes - 1;
     } else if (scratch_mode == 3) {
-        esp_nn_set_fc_scratch_buf(NULL, 0);
         esp_nn_set_conv_scratch_buf(scratch);
     } else {
-        esp_nn_set_fc_scratch_buf(NULL, 0);
         esp_nn_set_conv_scratch_buf(NULL);
     }
 }
@@ -1094,9 +1112,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
                 goto case_cleanup;
             }
             scratch = (void *) (((uintptr_t) scratch_raw + 15) & ~(uintptr_t) 15);
-            fc_1x1_arm(cfg[c].scratch_mode, scratch, scratch_bytes);
-        } else {
-            fc_1x1_arm(0, NULL, 0);
         }
 
         for (int b = 0; b < B; b++) {
@@ -1107,15 +1122,15 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         }
 
         uint32_t samples[5];
+        void *arg = NULL;
+        size_t arg_size = 0;
+        fc_1x1_arm(cfg[c].scratch_mode, scratch, scratch_bytes, &arg, &arg_size);
         for (int r = 0; r < reps; r++) {
-            /* The batched call clears the registration, so each sample
-             * registers the buffer again. */
-            fc_1x1_arm(cfg[c].scratch_mode, scratch, scratch_bytes);
             profile_opt_start();
-            esp_nn_fully_connected_per_ch_s8_batch(
+            esp_nn_fully_connected_per_ch_s8_batch_scratch(
                     input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
                     out_batched, out_ch, out_offset, out_shift, out_mult,
-                    activation_min, activation_max, B);
+                    activation_min, activation_max, B, arg, arg_size);
             samples[r] = profile_opt_end();
         }
         const uint32_t cycles = fc_1x1_median(samples, reps);
@@ -1131,9 +1146,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
             }
         }
 
-        /* The cleared call is fully connected. Its cycle count is printed for
-         * every row. On S3, P4, and S31 a fully connected row fails when the
-         * registered call is faster than FC_1X1_FC_MIN_X100 percent of it. */
+        /* The plain batch call is fully connected. Its cycle count is printed
+         * for every row. On S3, P4, and S31 a fully connected row fails when
+         * the scratch call is faster than FC_1X1_FC_MIN_X100 percent of it. */
         uint32_t cycles_fc = 0;
         int cycle_fail = (cycles == 0);
 #if defined(CONFIG_NN_OPTIMIZED) && \
@@ -1141,7 +1156,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
          defined(CONFIG_IDF_TARGET_ESP32S31))
         if (scratch != NULL && !cycle_fail) {
             for (int r = 0; r < reps; r++) {
-                fc_1x1_arm(0, NULL, 0);
                 profile_opt_start();
                 esp_nn_fully_connected_per_ch_s8_batch(
                         input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
@@ -1158,22 +1172,19 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
             }
         }
 #endif
-        /* The outputs match on either path. Ask the same function the batch
-         * wrappers use. On S3, P4, and S31 that return has to match expect,
-         * so a missed 1x1 dispatch fails. Other builds have no 1x1 workspace
-         * when the scratch size is 0, and then the call stays on fully
-         * connected. */
-        fc_1x1_arm(cfg[c].scratch_mode, scratch, scratch_bytes);
-        const int took = esp_nn_fc_per_ch_s8_batch_via_conv(
+        /* The outputs match on either path. Ask the same function the scratch
+         * call uses. On S3, P4, and S31 that return has to match expect, so a
+         * missed 1x1 dispatch fails. Other builds have no 1x1 path. */
+        const int took = FC_1X1_VIA_CONV(
                 input, cfg[c].in_off, row_len, filter, cfg[c].filt_off, bias,
                 out_batched, out_ch, out_offset, out_shift, out_mult,
-                activation_min, activation_max, B);
+                activation_min, activation_max, B, arg, arg_size);
 #if defined(CONFIG_NN_OPTIMIZED) && \
         (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32P4) || \
          defined(CONFIG_IDF_TARGET_ESP32S31))
         const int path_fail = (took != expect);
 #else
-        const int path_fail = (scratch_bytes <= 0) ? (took != 0) : (took != expect);
+        const int path_fail = (took != 0);
 #endif
         printf("FC_BATCH_1X1 name=%s cycles=%" PRIu32 " fc_cycles=%" PRIu32
                " us_x100=%" PRIu32 " mismatch=%d expect=%d path=%d dual=%d\n",
@@ -1192,7 +1203,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         }
 
     case_cleanup:
-        esp_nn_set_fc_scratch_buf(NULL, 0);
         esp_nn_set_conv_scratch_buf(NULL);
         free(in_o);
         free(flt_o);
@@ -1259,11 +1269,11 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
             } else {
                 if (scratch_raw) {
                     scratch = (void *) (((uintptr_t) scratch_raw + 15) & ~(uintptr_t) 15);
-                    esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
                 }
-                took_hi = esp_nn_fc_per_ch_s8_batch_via_conv(
+                took_hi = FC_1X1_VIA_CONV(
                         input, 128, row, filter, 0, NULL, out, out_ch, 5,
-                        shift, mult, -128, 127, batches_hi);
+                        shift, mult, -128, 127, batches_hi,
+                        scratch, (size_t) scratch_bytes);
                 if (took_hi != 0) {
                     TEST_FAIL("[batches_above_u16] entered the 1x1 path\n");
                 } else {
@@ -1275,7 +1285,8 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
                 {
                     int took_ok = esp_nn_fc_per_ch_s8_batch_via_conv(
                             input, 128, row, filter, 0, NULL, out, out_ch, 5,
-                            shift, mult, -128, 127, batch_ok);
+                            shift, mult, -128, 127, batch_ok,
+                            scratch, (size_t) scratch_bytes);
                     if (took_ok != 1) {
                         TEST_FAIL("[batches_u16_ok] did not enter the 1x1 path\n");
                     } else {
@@ -1285,7 +1296,6 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
 #endif
             }
         }
-        esp_nn_set_fc_scratch_buf(NULL, 0);
         esp_nn_set_conv_scratch_buf(NULL);
         free(in_o);
         free(flt_o);
@@ -1341,11 +1351,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
                         shift, mult, -128, 127);
             }
 
-            esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
             int took = esp_nn_fc_per_ch_s8_batch_via_conv(input, 3, row,
                     filter, 0, bias, out + 4, out_ch, -2, shift, mult,
-                    -128, 127, batch);
-            esp_nn_set_fc_scratch_buf(NULL, 0);
+                    -128, 127, batch, scratch, (size_t) scratch_bytes);
             if (took != 0) {
                 TEST_FAIL("[s3_out_misaligned] entered the 1x1 path\n");
             } else {
@@ -1354,10 +1362,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
 
             memset(pref, 0x5a, pref_size);
             esp_nn_set_conv_preferred_scratch_buf_esp32s3(pref, pref_size);
-            esp_nn_set_fc_scratch_buf(scratch, (size_t) scratch_bytes);
             took = esp_nn_fc_per_ch_s8_batch_via_conv(input, 3, row, filter, 0,
-                    bias, out, out_ch, -2, shift, mult, -128, 127, batch);
-            esp_nn_set_fc_scratch_buf(NULL, 0);
+                    bias, out, out_ch, -2, shift, mult, -128, 127, batch,
+                    scratch, (size_t) scratch_bytes);
             esp_nn_set_conv_preferred_scratch_buf_esp32s3(NULL, 0);
             int mismatch = 0;
             for (int i = 0; i < batch * out_ch; i++) {
@@ -1424,7 +1431,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         const int zero_batch = esp_nn_get_fc_batch_scratch_size(0, row, out_ch);
         const int neg_batch = esp_nn_get_fc_batch_scratch_size(-1, row, out_ch);
         const int zero_row = esp_nn_get_fc_batch_scratch_size(batches, 0, out_ch);
-        if (ESP_NN_HAS_FC_SCRATCH_BUF != 1 || got != ref || got != ref_off ||
+        if (ESP_NN_HAS_FC_S8_BATCH_SCRATCH != 1 || got != ref || got != ref_off ||
                 odd != odd_ref || hi != 0 || zero_batch != 0 ||
                 neg_batch != 0 || zero_row != 0) {
             TEST_FAIL("[fc_scratch_size] got=%d ref=%d odd=%d hi=%d\n",

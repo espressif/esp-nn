@@ -356,6 +356,25 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
 #define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_esp32s3
 #define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_esp32s3
 
+void esp_nn_fully_connected_per_ch_s8_batch_scratch_esp32s3(const int8_t *input_data,
+                                    const int32_t input_offset,
+                                    const uint16_t row_len,
+                                    const int8_t *filter_data,
+                                    const int32_t filter_offset,
+                                    const int32_t *bias,
+                                    int8_t *out_data,
+                                    const uint16_t out_channels,
+                                    const int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    const int32_t activation_min,
+                                    const int32_t activation_max,
+                                    const int32_t batches,
+                                    void *scratch,
+                                    size_t scratch_size);
+#define esp_nn_fully_connected_per_ch_s8_batch_scratch \
+        esp_nn_fully_connected_per_ch_s8_batch_scratch_esp32s3
+
 int32_t esp_nn_get_softmax_scratch_size_esp32s3(const int32_t width, const int32_t height);
 void esp_nn_set_softmax_scratch_buf_esp32s3(void *buffer);
 void esp_nn_softmax_s8_esp32s3(const int8_t *input_data, const int32_t height,
