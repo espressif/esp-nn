@@ -27,7 +27,7 @@
  * outputs. The filter and output numbers match the split in
  * esp_nn_conv_esp32s3.c. esp_nn_dual_core_active() means the worker exists.
  * That kernel still runs the same shape on one core when its worker scratch
- * does not fit, or when esp_nn_dual_core_run() refuses a nested call or a
+ * does not fit, or when esp_nn_dual_core_begin() refuses a nested call or a
  * call already on the worker's core. Those one-core shapes lose to fully
  * connected. This gate cannot see that refusal. */
 enum {
