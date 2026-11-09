@@ -56,13 +56,14 @@ void esp_nn_relu6_s8_riscv_pie(int8_t *data, uint16_t size)
             /* esp.vst.128.xp stride register must be x26-x31 (required on S31) */
             "mv     x29, %[stride]          \n\t"
 
-            /* zero-overhead hardware loop; end label sits ON the last insn */
+            /* for (k = 0; k < cnt; k++, p += 16) p[0..15] = min(max(p[0..15], q2), q3); */
+            ESP_NN_HWLOOP_BEGIN
             "esp.lp.setup     0, %[cnt], 1f \n\t"
             "esp.vld.128.ip   q0, x30, 0    \n\t"  /* load 16 bytes, no auto-increment */
             "esp.vmax.s8      q0, q0, q2    \n\t"  /* max(val, 0) */
             "esp.vmin.s8      q0, q0, q3    \n\t"  /* min(val, 6) */
-            "1:                             \n\t"
-            "esp.vst.128.xp   q0, x30, x29  \n\t"  /* store and advance ptr by 16 */
+            ESP_NN_HWLOOP_LAST("esp.vst.128.xp   q0, x30, x29", 1)  /* store and advance ptr by 16 */
+            ESP_NN_HWLOOP_END
 
             :
             : [ptr] "r"(data + i), [cnt] "r"(count), [stride] "r"(stride)

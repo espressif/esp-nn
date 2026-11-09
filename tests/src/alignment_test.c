@@ -544,6 +544,13 @@ void esp_nn_alignment_s8_test(void)
     ag_dw_case(5, 5, 16, 1, 3, 3, 1, 0);
     ag_dw_case(5, 5, 8, 8, 3, 3, 1, 1);
     ag_dw_case(5, 5, 6, 2, 3, 3, 1, 1);
+    /* depthwise paths that take misaligned buffers on S3: row-tiled s16
+     * (5x5 filter), 3x3 with channels padded to 16, channels % 8 != 0,
+     * and the width-1 Kx1 path */
+    ag_dw_case(5, 5, 8, 1, 5, 5, 1, 2);
+    ag_dw_case(5, 5, 24, 1, 3, 3, 1, 1);
+    ag_dw_case(5, 5, 12, 1, 3, 3, 1, 1);
+    ag_dw_case(1, 9, 16, 1, 1, 3, 1, 0);
 
     /* pooling: 8-byte path (ch % 8 == 0), 4-byte path (ch % 8 == 4), the
      * scalar avg_pool path for channels % 4 != 0, and max_pool with

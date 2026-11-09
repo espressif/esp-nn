@@ -114,7 +114,9 @@ void esp_nn_conv_s8_opt(const data_dims_t *input_dims,
         return;
     }
 
-    if (filter_wd == 1 && filter_ht == 1) {
+    /* The 1x1 path does not handle padding. Padded 1x1 takes the general path. */
+    if (filter_wd == 1 && filter_ht == 1 &&
+        conv_params->padding.width == 0 && conv_params->padding.height == 0) {
         esp_nn_conv_s8_1x1(input_dims, input_data, filter_data, bias,
                            output_dims, out_data, conv_params, quant_data);
         return;

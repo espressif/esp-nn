@@ -185,6 +185,50 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
         : "x30", "memory" \
     ); \
 } while(0)
+
+/*
+ * Wrap an esp.lp.setup hardware loop in inline asm:
+ *
+ *     ESP_NN_HWLOOP_BEGIN
+ *     "esp.lp.setup 0, %[cnt], 1f \n\t"
+ *     ...body...
+ *     ESP_NN_HWLOOP_LAST("<last body insn>", <pad>)
+ *     ESP_NN_HWLOOP_END
+ *
+ * On ESP32-P4 before rev v3.0, an interrupt at the boundary of a hardware
+ * loop that breaks these rules corrupts the loop counter (esp-idf#19025):
+ * - the esp.lp.setup and the last body instruction are 4-byte aligned;
+ * - the body is at least 24 bytes;
+ * - the last body instruction is not a PIE or FPU instruction.
+ *
+ * .balign aligns the setup, and norvc keeps every body instruction 32-bit,
+ * so the last one is aligned too. Both apply on every PIE target.
+ * Do not add a .balign inside the body: linker relaxation can shrink its
+ * padding, while the loop end offset comes from the unrelaxed layout.
+ *
+ * ESP_NN_HWLOOP_LAST(insn, pad) closes the body with insn:
+ * - On P4 builds that can run on rev < v3.0, it emits insn, then pad nops,
+ *   then the loop end "1: nop". Pick pad so that the body is at least
+ *   6 instructions (24 bytes).
+ * - On other builds (P4 rev >= v3.0, S31), it puts the loop end label on
+ *   insn and ignores pad, so the loop has no extra instructions.
+ *
+ * ESP_NN_HWLOOP_PADDED is 1 on the builds that pad. Each nop costs a cycle
+ * per iteration, so a 2-instruction body runs 6 instructions per iteration,
+ * where a software loop (addi + bnez) runs 4. A kernel whose loop is hot
+ * enough for this to show uses a software loop when ESP_NN_HWLOOP_PADDED is 1.
+ */
+#define ESP_NN_HWLOOP_BEGIN ".balign 4\n\t.option push\n\t.option norvc\n\t"
+#define ESP_NN_HWLOOP_END   ".option pop\n\t"
+
+#if CONFIG_IDF_TARGET_ESP32P4 && CONFIG_ESP32P4_REV_MIN_FULL < 300
+#define ESP_NN_HWLOOP_PADDED 1
+#define ESP_NN_HWLOOP_LAST(insn, pad) \
+    insn "\n\t.rept " #pad "\n\tnop\n\t.endr\n\t1: nop\n\t"
+#else
+#define ESP_NN_HWLOOP_PADDED 0
+#define ESP_NN_HWLOOP_LAST(insn, pad) "1: " insn "\n\t"
+#endif
 #endif /* CONFIG_IDF_TARGET_ESP32P4 - PIE_ENABLE and QACC_EXTRACT */
 
 /**

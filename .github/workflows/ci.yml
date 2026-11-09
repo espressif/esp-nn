@@ -120,6 +120,27 @@ jobs:
             idf.py ${{ matrix.extra_flags }} set-target "${target}" build
           done
 
+  # ESP32-P4 before rev v3.0 needs every hardware loop placed by the rules in
+  # src/common/common_functions.h (esp-idf#19025). The image uses the
+  # pre-rev-v3 PIE encodings, which esp-emu rejects, so it is not emulated.
+  hwloop_p4_rev_lt_v3:
+    name: hardware loops (ESP32-P4 rev < v3.0)
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.5
+    env:
+      PEDANTIC_FLAGS: "-Werror -Wno-error=cpp -Werror=unused-variable -Werror=unused-but-set-variable -Werror=unused-function"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test_app and check the hardware loops
+        shell: bash
+        working-directory: test_app
+        run: |
+          . "${IDF_PATH}/export.sh"
+          export EXTRA_CFLAGS="${PEDANTIC_FLAGS}" EXTRA_CXXFLAGS="${PEDANTIC_FLAGS}"
+          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci.p4_rev_lt_v3" set-target esp32p4 build
+          python3 ../tools/ci/check_hwloop_rules.py build/test_app.elf
+
   emulate:
     needs: build
     runs-on: ubuntu-latest

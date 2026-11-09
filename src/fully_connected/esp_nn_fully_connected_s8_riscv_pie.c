@@ -50,7 +50,8 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
             "esp.vld.128.ip  q3, x31, 16            \n\t"
 
             "beqz   %[c32], 2f                      \n\t"
-            /* Zero-overhead hardware loop; end label sits ON the last insn */
+            /* for (k = 0; k < c32; k++) xacc += dot(in + 32 * k, flt + 32 * k, 32); */
+            ESP_NN_HWLOOP_BEGIN
             "esp.lp.setup 0, %[c32], 1f             \n\t"
             /* MAC pair 1 + load next input[0:16] */
             "esp.vmulas.s8.xacc.ld.ip q0, x30, 16, q0, q1 \n\t"
@@ -58,9 +59,9 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
             "esp.vld.128.ip  q1, x31, 16            \n\t"
             /* MAC pair 2 + load next input[16:32] */
             "esp.vmulas.s8.xacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-            "1:                                     \n\t"
             /* Load next filter[16:32] */
-            "esp.vld.128.ip  q3, x31, 16            \n\t"
+            ESP_NN_HWLOOP_LAST("esp.vld.128.ip  q3, x31, 16", 1)
+            ESP_NN_HWLOOP_END
 
             "2:                                     \n\t"
             /* Drain pipeline: final two MACs */
