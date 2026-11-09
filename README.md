@@ -14,7 +14,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
 
 ## Performance
 
-### Kernel performance
+### Kernel Performance
 
 Speedup of the optimized s8 kernels over the portable ANSI C ones (cycles, ANSI C / optimized):
 
@@ -31,9 +31,9 @@ Speedup of the optimized s8 kernels over the portable ANSI C ones (cycles, ANSI 
 All kernels and shapes, with cycle counts and the setup per chip, are in
 [docs/performance.md](docs/performance.md).
 
-### Model-level performance:
+### Model-Level Performance
 
-  * **Person Detection** (Visual Wake Words, INT8 quantized — from [esp-tflite-micro](https://github.com/espressif/esp-tflite-micro))
+  * **Person Detection** (Visual Wake Words, INT8 quantized, from [esp-tflite-micro](https://github.com/espressif/esp-tflite-micro))
     * Numbers are time (ms) for `invoke()` call, using internal memory
 
     | Chip     | CPU Freq | without ESP-NN | with ESP-NN |

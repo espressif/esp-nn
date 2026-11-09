@@ -8,7 +8,7 @@ This document covers various topics related to contributions to the ESP-NN proje
 
 We require accepting the contributor's license agreement for all pull requests. When opening a pull request the first time you will be prompted to sign the CLA by the [CLA Assistant](https://cla-assistant.io/) service.
 
-## Large-scale Changes
+## Large-Scale Changes
 
 If you'd like to propose a change to the existing APIs or a large-scale refactoring of the implementation, we recommend opening an issue first to discuss this.
 
@@ -16,7 +16,7 @@ If you'd like to propose a change to the existing APIs or a large-scale refactor
 
 The kernel tables in [README.md](README.md) and [docs/performance.md](docs/performance.md) come from the `BENCH` lines of [bench_app](bench_app/). See its README for how to run it and how to add a case. Please update the tables if you change or add a kernel.
 
-## Releasing a new version
+## Releasing a New Version
 
 Maintainers should follow the steps below to release a new version of ESP-NN component. Assuming the new version is `vX.Y.Z`:
 

@@ -67,7 +67,7 @@
 
 #include "esp_nn_conv_dispatch_esp32s3.h"
 
-/* 3x3 optimized path — im2col per pixel, iterate OC with input in cache */
+/* 3x3 optimized path: im2col per pixel, iterate OC with input in cache */
 extern void esp_nn_conv_s8_3x3_opt(const int8_t *input,
     const uint16_t input_wd, const uint16_t input_ht,
     const uint16_t in_channels, const int32_t input_offset,
@@ -92,7 +92,7 @@ extern void esp_nn_conv_s8_ansi(const data_dims_t *input_dims,
                                 const conv_params_t *conv_params,
                                 const quant_data_t *quant_data);
 
-/* 1x1 conv — correct SIMD implementation */
+/* 1x1 conv: correct SIMD implementation */
 extern int esp_nn_conv_s8_1x1_scratch_size(int in_channels);
 extern void esp_nn_conv_s8_1x1(const int8_t *input,
                                 const uint16_t input_wd,
@@ -359,7 +359,7 @@ static void conv_1x1_panel_mt_worker(void *p)
 }
 #endif /* ESP_NN_DUAL_CORE_SUPPORTED */
 
-/* Use shared dot product from common — see esp_nn_dot_s8_esp32s3.S */
+/* Use shared dot product from common. See esp_nn_dot_s8_esp32s3.S */
 
 /**
  * Im2col convolution for small in_ch (filter_wd * in_ch < 16).
@@ -473,7 +473,7 @@ static void esp_nn_conv_s8_im2col_s3(
             int8_t *buf = im2col_buf;
 
             if (is_safe_y && out_x >= safe_x_start && out_x < safe_x_end) {
-                /* FAST PATH: interior pixel — no bounds checking needed.
+                /* FAST PATH: interior pixel, no bounds checking needed.
                  * All filter taps guaranteed to be within valid input. */
                 for (int32_t fy = 0; fy < filter_ht; fy++) {
                     const int8_t *src = input_data + ((base_y + fy) * input_wd + base_x) * in_ch;
@@ -481,7 +481,7 @@ static void esp_nn_conv_s8_im2col_s3(
                     buf += row_bytes;
                 }
             } else {
-                /* SLOW PATH: edge pixel — per-element bounds checking */
+                /* SLOW PATH: edge pixel, per-element bounds checking */
                 for (int32_t fy = 0; fy < filter_ht; fy++) {
                     int32_t in_y = base_y + fy;
                     if (in_y >= 0 && in_y < input_ht) {
@@ -685,7 +685,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                     required <= preferred_scratch_size) {
                 pointwise_scratch = preferred_scratch_buffer;
             }
-            /* Full asm path — requires mult8 channels + 8-byte aligned filter */
+            /* Full asm path. Requires mult8 channels + 8-byte aligned filter */
             esp_nn_conv_s8_mult8_1x1_batched_tail(
                     input, spatial_size, channels, input_offset,
                     filter_data, bias, out_data, out_channels, out_offset,
@@ -801,7 +801,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 f_src += filter_ch_size;
             }
             // Pass input_offset=0 to assembly so it skips its pre-computation.
-            // Pass scratch_data as "bias" pointer — the assembly's bias-copy loop
+            // Pass scratch_data as "bias" pointer. The assembly's bias-copy loop
             // will read from scratch and write to scratch (identity, no-op).
             esp_nn_conv_s8_filter_aligned_input_padded_esp32s3(
                 input_padded, new_input_wd, new_input_ht, channels, 0,

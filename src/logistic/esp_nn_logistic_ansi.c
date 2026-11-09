@@ -12,7 +12,7 @@
  *
  * For int8, there are only 256 possible input values. We precompute sigmoid
  * for all of them during Prepare() and store as a 256-byte LUT.
- * Eval() then becomes a trivial table lookup — O(1) per element.
+ * Eval() then becomes a trivial table lookup, O(1) per element.
  *
  * Output quantization is fixed: scale = 1/256, zero_point = -128.
  * This matches TFLite's convention for int8 logistic output.

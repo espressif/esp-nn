@@ -19,7 +19,7 @@ void esp_nn_set_softmax_scratch_buf_esp32s3(void *buffer)
     scratch_buf_s3 = (int32_t *) buffer;
 }
 
-/* Find max of int8 array — SIMD for len >= 32, scalar for smaller */
+/* Find max of int8 array: SIMD for len >= 32, scalar for smaller */
 static inline int8_t find_max_s8(const int8_t *data, int32_t len)
 {
     int8_t m = -128;
@@ -124,7 +124,7 @@ void esp_nn_softmax_s8_esp32s3(const int8_t *input_data,
         const int32_t shifted_scale = ONE_OVER_ONE_X((sum_of_exps << headroom_plus1) - (1 << 31));
         const int32_t bits_over_unit = ACCUM_BITS - headroom_plus1 + 31 - 8;
 
-        /* Phase 4: Normalize and output — unrolled 4x for reduced loop overhead */
+        /* Phase 4: Normalize and output, unrolled 4x for reduced loop overhead */
         int col = 0;
         for (; col + 3 < width; col += 4) {
             for (int k = 0; k < 4; k++) {

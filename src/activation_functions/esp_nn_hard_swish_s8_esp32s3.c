@@ -18,7 +18,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Use ANSI C reference to build LUT — guarantees bit-exact match */
+/* Use ANSI C reference to build LUT. This guarantees a bit-exact match */
 extern void esp_nn_hard_swish_s8_ansi(const int8_t *input,
                                        int8_t *output,
                                        const int32_t size,
@@ -52,7 +52,7 @@ void esp_nn_hard_swish_s8_esp32s3(const int8_t *input,
                                    const int16_t output_zero_point)
 {
     if (!hard_swish_scratch) {
-        /* No scratch — fall through to ANSI */
+        /* No scratch: fall through to ANSI */
         esp_nn_hard_swish_s8_ansi(input, output, size,
                                    input_zero_point, output_mult_fxp,
                                    reluish_mult_fxp, reluish_mult_exp,
@@ -74,7 +74,7 @@ void esp_nn_hard_swish_s8_esp32s3(const int8_t *input,
                                reluish_mult_fxp, reluish_mult_exp,
                                output_mult_exp, output_zero_point);
 
-    /* Apply LUT — one byte load per element */
+    /* Apply LUT, one byte load per element */
     for (int i = 0; i < size; i++) {
         output[i] = lut[(uint8_t)input[i]];
     }

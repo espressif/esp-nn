@@ -417,7 +417,7 @@ __NN_FORCE_INLINE__ void esp_nn_s8_to_s16(const int8_t *src, int16_t *dst, const
 
 #if CONFIG_IDF_TARGET_ESP32S3
 /**
- * @brief       s8 dot product — both pointers 16-byte aligned.
+ * @brief       s8 dot product. Both pointers 16-byte aligned.
  *              Uses ACCX accumulator with fused MAC+load.
  *
  * @param       a       input data (16-byte aligned)
@@ -428,7 +428,7 @@ __NN_FORCE_INLINE__ void esp_nn_s8_to_s16(const int8_t *src, int16_t *dst, const
 extern int32_t esp_nn_dot_s8_aligned_esp32s3(const int8_t *a, const int8_t *b, int32_t len);
 
 /**
- * @brief       s8 dot product — input aligned, filter may be unaligned.
+ * @brief       s8 dot product. Input aligned, filter may be unaligned.
  *              Uses USAR+QUP pattern for filter data.
  *
  * @param       a       input data (16-byte aligned)

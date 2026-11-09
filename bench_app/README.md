@@ -1,9 +1,9 @@
-# bench_app: esp-nn kernel cycles
+# bench_app: ESP-NN Kernel Cycles
 
 Measures how many CPU cycles each esp-nn kernel takes, against its ANSI C reference, on real
 hardware. `test_app` checks correctness only; the cycle numbers come from here.
 
-## Build and run
+## Build and Run
 
 ```bash
 cd bench_app
@@ -49,7 +49,7 @@ however many cases run before it.
 
 The published kernel performance tables are made from these lines.
 
-## Adding a case or a variant
+## Adding a Case or a Variant
 
 Each op has its own file in `main/`, for example `bench_fully_connected.c`.
 
