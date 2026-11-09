@@ -85,6 +85,12 @@ All kernels and shapes, with cycle counts and the setup per chip, are in
   * Default selection is for `Optimized versions`. For ESP32-S3, ESP32-P4 and ESP32-S31, assembly versions are automatically selected, whereas for other chips (viz., ESP32, ESP32-C3), generic optimisations are selected.
   * For debugging purposes, you may want to select `ANSI C` reference versions.
 
+### ESP32-P4: PIE Kernels in Several Tasks
+
+* ESP-IDF v5.x release tags (up to v5.4.4 and v5.5.5) do not save the PIE register q3 when they switch tasks.
+* So on ESP32-P4, two tasks on the same core that both run PIE code can corrupt each other's results. For example, two TFLite Micro interpreters, or ESP-NN and ESP-DSP.
+* ESP-IDF v6.0 and later save q3. So do the next v5.3, v5.4 and v5.5 releases.
+* On an older v5.x release, run the PIE kernels from one task per core.
 
 ## Contributing
 
