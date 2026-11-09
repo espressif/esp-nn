@@ -86,6 +86,12 @@ All kernels and shapes, with cycle counts and the setup per chip, are in
   * For debugging purposes, you may want to select `ANSI C` reference versions.
 
 
+## Scratch Buffers
+
+Some kernels need a scratch buffer that the caller owns. Size it with `esp_nn_get_<op>_scratch_size()` and pass it with `esp_nn_set_<op>_scratch_buf()` before the call. The getters also build on Linux, so tools can compute the sizes ahead of time.
+
+For more details, including how to build the getters on Linux for a target, see [docs/scratch_buffers.md](docs/scratch_buffers.md).
+
 ## Contributing
 
 If you encounter an issue with ESP-NN, or wish to submit a feature request, please use the Issues section on the Github.
