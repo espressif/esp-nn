@@ -21,7 +21,6 @@
 
 #if ESP_NN_DUAL_CORE_SUPPORTED
 
-#include <assert.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -229,8 +228,9 @@ bool esp_nn_dual_core_run(void (*fn)(void *), void *arg)
     if (s_worker == NULL) {
         return false;
     }
+    /* Callers built before esp_nn_dual_core_begin() existed call run()
+     * without the claim. They get false and run the job single core. */
     if (xSemaphoreGetMutexHolder(s_claim) != xTaskGetCurrentTaskHandle()) {
-        assert(!"esp_nn_dual_core_run() without esp_nn_dual_core_begin()");
         return false;
     }
     s_fn = fn;
