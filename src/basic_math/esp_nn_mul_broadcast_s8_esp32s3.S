@@ -15,6 +15,17 @@
 // Optimized broadcast MUL for SE-block pattern: [H,W,C] * [1,1,C]
 // Processes 8 channels at a time using S3 SIMD.
 
+#include "s3_mul/esp_nn_mul_s8_esp32s3_macros.inc"
+
+    // Frame size, and the stack arguments above it
+    .set MUL_S8_FRAME, 336
+    .set ARG_OUT_MULT, MUL_S8_FRAME + 0
+    .set ARG_OUT_SHIFT, MUL_S8_FRAME + 4
+    .set ARG_ACT_MIN, MUL_S8_FRAME + 8
+    .set ARG_ACT_MAX, MUL_S8_FRAME + 12
+    .set ARG_SPATIAL, MUL_S8_FRAME + 16
+    .set ARG_CHANNELS, MUL_S8_FRAME + 20
+
     .text
     .align  4
     .literal_position
@@ -31,15 +42,15 @@
 //     const int32_t input2_offset,    // a5
 //     int8_t *output,                 // a6
 //     const int32_t output_offset,    // a7
-//     const int32_t output_mult,      // stack+120
-//     const int32_t output_shift,     // stack+124
-//     const int32_t activation_min,   // stack+128
-//     const int32_t activation_max,   // stack+132
-//     const int32_t total_spatial,    // stack+136
-//     const int32_t channels);        // stack+140
+//     const int32_t output_mult,      // ARG_OUT_MULT
+//     const int32_t output_shift,     // ARG_OUT_SHIFT
+//     const int32_t activation_min,   // ARG_ACT_MIN
+//     const int32_t activation_max,   // ARG_ACT_MAX
+//     const int32_t total_spatial,    // ARG_SPATIAL
+//     const int32_t channels);        // ARG_CHANNELS
 
-// Stack frame layout (entry a1, 120):
-//  0: to_add (for div by power of 2)
+// Stack frame layout (entry a1, MUL_S8_FRAME):
+//  0: right_shift + 3 on the per-row QACC path
 //  4: input2_per_ch (saved)
 //  8: output base (saved)
 // 12: channels
@@ -48,13 +59,16 @@
 // 24: input1_offset (saved)
 // 28: input2_offset (saved)
 // 32: spatial counter
-// 36: out_ptr (current)
+// 36: vector path: 0 off, -1 right_shift = 0, 1 per-row QACC step,
+//     else right_shift + 14
 // 40: out_offset (from a7)
-// 44: input1_offset (for vldbc)
-// 48: input2_offset (for vldbc)
+// 44: scalar scratch for the macros
+// 48..271: vector constants, see s3_mul/esp_nn_mul_s8_esp32s3_macros.inc
+// 272..319: free, for new slots without moving the stack arguments
+// 320..335: windowed-ABI base save area
 
 esp_nn_mul_broadcast_channel_s8_esp32s3:
-    entry   a1, 120
+    entry   a1, MUL_S8_FRAME
 
     // Save args
     s32i.n  a3, a1, 4               // input2_per_ch base
@@ -63,39 +77,114 @@ esp_nn_mul_broadcast_channel_s8_esp32s3:
     s32i.n  a4, a1, 24              // input1_offset
     s32i.n  a5, a1, 28              // input2_offset
     s32i    a7, a1, 40              // out_offset
+    movi.n  a5, 0                   // 1 while the leftover loop runs a row head
 
-    l32i    a8, a1, 136             // total_spatial
-    l32i    a9, a1, 140             // channels
+    l32i    a8, a1, ARG_SPATIAL             // total_spatial
+    l32i    a9, a1, ARG_CHANNELS             // channels
     s32i.n  a9, a1, 12              // save channels
 
     blti    a8, 1, .Lexit           // no spatial positions
     blti    a9, 1, .Lexit           // no channels
 
     // Prepare shift values
-    l32i    a15, a1, 124            // output_shift
+    l32i    a15, a1, ARG_OUT_SHIFT            // output_shift
     movi.n  a11, 0
     max     a14, a15, a11           // left_shift = max(shift, 0)
-    sub     a4, a14, a15            // right_shift = left_shift - shift
-    s32i.n  a4, a1, 20              // save right_shift
+    sub     a12, a14, a15           // right_shift = left_shift - shift
+    s32i.n  a12, a1, 20             // save right_shift
 
-    l32i    a13, a1, 120            // output_mult
+    l32i    a13, a1, ARG_OUT_MULT            // output_mult
+
+    // The vector path needs at least 8 channels. Left shifts take .Llshift.
+    // A right_shift above 16 always gives 0. Run it as mult = 0 and
+    // right_shift = 15 (see s3_mul/esp_nn_mul_s8_esp32s3_macros.inc).
+    // The scalar leftover keeps the real right_shift from a1+20. With
+    // mult = 0 it also gives 0.
+    s32i    a11, a1, 36
+    blti    a9, 8, .Lsetup_done
+    bgei    a15, 1, .Llshift
+    movi.n  a8, 16
+    bge     a8, a12, 1f
+    movi.n  a12, 15
+    movi.n  a13, 0
+1:
+    MUL_S8_SETUP a12, a8, a10
+    addi    a8, a12, 14
+    movi.n  a10, -1
+    moveqz  a8, a10, a12
+    s32i    a8, a1, 36
+
+.Lsetup_done:
     l32r    a4, .LC_nudge           // nudge = 1 << 30
-
-    // Store offsets for vldbc
-    l32i    a8, a1, 136             // reload total_spatial
-    s32i    a5, a1, 48              // input2_offset for vldbc
-    l32i.n  a5, a1, 24              // input1_offset
-    s32i    a5, a1, 44              // input1_offset for vldbc
 
     // Init spatial counter
     movi.n  a10, 0
     s32i    a10, a1, 32             // spatial counter = 0
 
+    // With channels a multiple of 8, 8-byte aligned buffers and
+    // right_shift 1..15, every row is aligned and has no leftover. Run the
+    // rows back to back then: only input2 is reset between rows.
+    l32i    a12, a1, 36
+    blti    a12, 1, .Lspatial_loop
+    or      a10, a2, a3
+    or      a10, a10, a6
+    or      a10, a10, a9
+    extui   a10, a10, 0, 3
+    // Right shifts 1..15 take the QACC step (see MUL_S8_STEP8_Q). a12 is
+    // right_shift + 14.
+    addi    a11, a12, -15
+    movi.n  a8, 15
+    bgeu    a11, a8, .Lspatial_loop
+    addi    a12, a12, -14           // right_shift
+    MUL_S8_SETUP_Q a12, a13, a14, a8, a11
+    addi    a7, a12, 3
+    bnez    a10, .Lrows_q
+    // The step uses no scalar temps here, so the row count (a10), the
+    // steps per row (a12) and the input2 base (a11) stay in registers.
+    // Rows can be as short as 2 steps, so stack reloads per row add up.
+.Lrows_back_to_back:
+    l32i    a10, a1, ARG_SPATIAL            // total_spatial
+    srli    a12, a9, 3
+    mov.n   a11, a3
+    movi.n  a5, 14
+.Lchannel_q:
+    mov.n   a3, a11                 // input2_per_ch base
+    loopgtz a12, .Lchannel_q_end
+    MUL_S8_STEP8_Q a2, a3, a6, a5, a7, a14
+.Lchannel_q_end:
+    addi.n  a10, a10, -1
+    bnez    a10, .Lchannel_q
+    j       .Lexit
+
+    // Left shifts 1..11 run the back-to-back rows with right_shift 0 (see
+    // MUL_S8_SETUP_Q), when channels are a multiple of 8 and the buffers
+    // 8-byte aligned. Other left shifts take the scalar path.
+.Llshift:
+    bgei    a15, 12, .Lsetup_done
+    or      a10, a2, a3
+    or      a10, a10, a6
+    or      a10, a10, a9
+    extui   a10, a10, 0, 3
+    bnez    a10, .Lsetup_done
+    movi.n  a12, 0                  // right_shift
+    MUL_S8_SETUP a12, a8, a10
+    MUL_S8_SETUP_Q a12, a13, a14, a8, a11, a15
+    movi.n  a7, 3                   // final shift 3 + right_shift
+    j       .Lrows_back_to_back
+
+    // Rows that are not all 8-byte aligned run the QACC step row by row,
+    // see .Lrow_q. a1+36 = 1 selects that path, a1+0 holds right_shift + 3.
+.Lrows_q:
+    s32i.n  a7, a1, 0
+    movi.n  a12, 1
+    s32i    a12, a1, 36
+    movi.n  a14, 0                  // left_shift for the leftover loop
+
     // Pointers: a2 = input1 (current), a3 = input2_per_ch (reloaded each row),
     //           a6 = output (current)
 
 .Lspatial_loop:
-    l32i    a8, a1, 136             // total_spatial
+    l32i    a8, a1, ARG_SPATIAL             // total_spatial
     l32i    a10, a1, 32             // spatial counter
     bge     a10, a8, .Lexit
 
@@ -105,174 +194,76 @@ esp_nn_mul_broadcast_channel_s8_esp32s3:
     // Channel counter
     l32i.n  a9, a1, 12              // channels
     movi.n  a11, 0                  // channel index
+    mov.n   a15, a9                 // leftover loop bound
 
-    blti    a9, 8, .Lchannel_leftover
+    l32i    a12, a1, 36
+    beqz    a12, .Lchannel_leftover
+    srli    a8, a9, 3
 
-    // Check alignment for SIMD path
-    or      a8, a2, a3
-    or      a8, a8, a6
-    extui   a8, a8, 0, 4
-    bnez    a8, .Lchannel_leftover
+    // The 64-bit vector loads and stores need 8-byte aligned rows
+    or      a10, a2, a3
+    or      a10, a10, a6
+    extui   a10, a10, 0, 3
+    bltz    a12, .Lchannel_rs0
+    beqi    a12, 1, .Lrow_q
+    bnez    a10, .Lchannel_leftover   // right_shift 16, unaligned row
 
-    // Setup SIMD constants
-    ee.zero.q   q1                  // zero register
-    addi    a8, a1, 44
-    ee.vldbc.16 q0, a8              // input1_offset broadcast
-    addi    a8, a1, 48
-    ee.vldbc.16 q7, a8              // input2_offset broadcast
-    st.qr   q0, a1, 64             // save for reload in loop
+.Lchannel_simd:
+    MUL_S8_CONST_PTR a14
+    loopgtz a8, .Lchannel_simd_end
+    MUL_S8_STEP8 a2, a3, a6, a12, a13, a4, a5, a7, a8, a9, a10, a11, a15, cp=a14
+.Lchannel_simd_end:
+    j       .Lchannel_vec_done
 
-.Lchannel_simd_loop:
-    addi    a8, a9, -7              // channels - 7
-    blt     a11, a8, .Lchannel_simd_body
+    // right_shift = 0 needs its own loop, see MUL_S8_STEP8. Unaligned rows
+    // take the scalar path.
+.Lchannel_rs0:
+    bnez    a10, .Lchannel_leftover
+    movi.n  a12, 16
+    MUL_S8_CONST_PTR a14
+    loopgtz a8, .Lchannel_rs0_end
+    MUL_S8_STEP8 a2, a3, a6, a12, a13, a4, a5, a7, a8, a9, a10, a11, a15, 1, a14
+.Lchannel_rs0_end:
+    j       .Lchannel_vec_done
+
+    // QACC step on one row. A scalar head (the leftover loop with bound
+    // a15 and a5 = 1) makes the output 8-byte aligned. The step reads the
+    // inputs with ee.src.q, so they may have any alignment.
+.Lrow_q:
+    neg     a15, a6
+    extui   a15, a15, 0, 3          // head size
+    movi.n  a5, 1
+    j       .Lchannel_leftover
+.Lrow_q_body:
+    l32i.n  a15, a1, 12             // channels
+    sub     a8, a15, a11
+    srli    a8, a8, 3
+    MUL_S8_CONST_PTR a14
+    addi    a14, a14, 32            // where MUL_S8_SETUP_Q left it
+    movi.n  a5, 14
+    l32i.n  a7, a1, 0               // right_shift + 3
+    movi.n  a12, 8
+    ssai    1                       // the scalar head changed SAR
+    loopgtz a8, .Lrow_q_end
+    MUL_S8_STEP8_Q a2, a3, a6, a5, a7, a14, a12, a10
+.Lrow_q_end:
+    slli    a8, a8, 3
+    add.n   a11, a11, a8            // channels done
+    movi.n  a5, 0
+    movi.n  a14, 0
     j       .Lchannel_leftover
 
-.Lchannel_simd_body:
-    ld.qr           q4, a1, 64             // input1_offset
-    ee.vld.l.64.ip  q2, a2, 8              // load 8 input1 values
-    movi.n          a7, 16
-    ee.vld.h.64.ip  q2, a3, 8              // load 8 input2 values (per-ch)
-    wsr.sar         a7
-    ee.vcmp.lt.s8   q5, q2, q1             // sign extend
-    ee.vzip.8       q2, q5                 // interleave to 16-bit
-    ee.vadds.s16    q5, q5, q7             // add input2_offset
-    ee.vadds.s16    q4, q2, q4             // add input1_offset
-    ee.vmul.s16     q3, q4, q5             // multiply (high part)
-    ssai            0                      // sar = 0
-    ee.vmul.s16     q2, q4, q5             // multiply (low part)
-
-    // Requantize 8 results (same pattern as elementwise mul)
-    wsr.sar         a14                     // left_shift
-    ee.vzip.16      q2, q3
-    ee.vsl.32       q6, q2                  // left shift first 4
-
-    ssai            31
-
-    // Element 2 of q6
-    ee.movi.32.a    q6, a8, 2
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a5, a8, a4
-    add.n           a5, a5, a7
-    src             a5, a5, a8
-    // Element 3
-    ee.movi.32.a    q6, a8, 3
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a12, a8, a4
-    add.n           a12, a12, a7
-    src             a12, a12, a8
-    ee.movi.32.q    q2, a5, 2
-    ee.movi.32.q    q2, a12, 3
-    // Element 1
-    ee.movi.32.a    q6, a8, 1
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a5, a8, a4
-    add.n           a5, a5, a7
-    src             a5, a5, a8
-    // Element 0
-    ee.movi.32.a    q6, a8, 0
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a12, a8, a4
-    add.n           a12, a12, a7
-    src             a12, a12, a8
-    ee.movi.32.q    q2, a5, 1
-    ee.movi.32.q    q2, a12, 0
-
-    // Second group of 4 (q3)
-    wsr.sar         a14                     // left_shift
-    ee.vsl.32       q4, q3
-
-    ssai            31
-
-    ee.movi.32.a    q4, a8, 2
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a5, a8, a4
-    add.n           a5, a5, a7
-    src             a5, a5, a8
-    ee.movi.32.a    q4, a8, 3
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a12, a8, a4
-    add.n           a12, a12, a7
-    src             a12, a12, a8
-    ee.movi.32.q    q0, a5, 2
-    ee.movi.32.q    q0, a12, 3
-    ee.movi.32.a    q4, a8, 1
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a5, a8, a4
-    add.n           a5, a5, a7
-    src             a5, a5, a8
-    ee.movi.32.a    q4, a8, 0
-    mulsh           a7, a13, a8
-    mull            a8, a13, a8
-    add.n           a8, a4, a8
-    saltu           a12, a8, a4
-    add.n           a12, a12, a7
-    src             a12, a12, a8
-    ee.movi.32.q    q0, a5, 1
-    ee.movi.32.q    q0, a12, 0
-
-    // Divide by power of 2 (right_shift)
-    l32i.n          a5, a1, 20              // right_shift
-    movi.n          a7, 1
-
-    blti            a5, 1, .Lskip_div
-
-    ee.vcmp.lt.s32  q5, q2, q1
-    ee.vcmp.lt.s32  q6, q0, q1
-    addi.n          a8, a5, -1
-    ssl             a8
-    sll             a7, a7                  // to_add = 1 << (right_shift - 1)
-    s32i.n          a7, a1, 0
-    ee.vldbc.32     q4, a1                  // broadcast to_add
-    wsr.sar         a5
-    ee.vadds.s32    q5, q4, q5
-    ee.vadds.s32    q5, q2, q5
-    ee.vsr.32       q2, q5
-    wsr.sar         a5
-    ee.vadds.s32    q5, q4, q6
-    ee.vadds.s32    q5, q0, q5
-    ee.vsr.32       q0, q5
-
-.Lskip_div:
-    // Add output offset, apply activation
-    addi            a8, a1, 132
-    ee.vldbc.32     q4, a8                  // activation_max
-    addi            a5, a1, 40
-    ee.vldbc.32     q6, a5                  // output_offset
-    addi            a7, a1, 128
-    ee.vadds.s32    q0, q0, q6              // add offset
-    ee.vadds.s32    q2, q2, q6
-    ee.vldbc.32     q6, a7                  // activation_min
-    ee.vmin.s32     q0, q0, q4
-    ee.vmin.s32     q2, q2, q4
-    ee.vmax.s32     q0, q0, q6
-    ee.vmax.s32     q2, q2, q6
-
-    // Pack 32-bit -> 8-bit and store
-    ee.vunzip.16    q2, q0
-    ee.vunzip.8     q2, q0
-    ee.vst.l.64.ip  q2, a6, 8
-
-    addi            a11, a11, 8             // channel index += 8
-    j               .Lchannel_simd_loop
+.Lchannel_vec_done:
+    movi.n  a5, 0
+    movi.n  a14, 0                  // left_shift, 0 on the vector path
+    l32r    a4, .LC_nudge
+    l32i.n  a15, a1, 12             // channels
+    movi.n  a11, -8
+    and     a11, a15, a11           // channels done
 
 .Lchannel_leftover:
-    // Process remaining channels one by one
-    l32i.n  a9, a1, 12              // channels
-    bge     a11, a9, .Lspatial_next
+    // Process channels one by one, up to a15
+    bge     a11, a15, .Lleftover_done
 
     ssl     a14                     // left_shift
     l32i.n  a8, a1, 24              // input1_offset
@@ -311,8 +302,8 @@ esp_nn_mul_broadcast_channel_s8_esp32s3:
 
 .Lskip_div_scalar:
     l32i    a8, a1, 40              // output_offset
-    l32i    a7, a1, 128             // activation_min
-    l32i    a12, a1, 132            // activation_max
+    l32i    a7, a1, ARG_ACT_MIN             // activation_min
+    l32i    a12, a1, ARG_ACT_MAX            // activation_max
     add.n   a10, a10, a8
     min     a10, a10, a12
     max     a10, a10, a7
@@ -324,6 +315,8 @@ esp_nn_mul_broadcast_channel_s8_esp32s3:
     addi    a11, a11, 1             // channel index++
     j       .Lchannel_leftover
 
+.Lleftover_done:
+    bnez    a5, .Lrow_q_body
 .Lspatial_next:
     l32i    a10, a1, 32             // spatial counter
     addi    a10, a10, 1
