@@ -43,6 +43,9 @@ void esp_nn_mean_nhwc_s8_test()
         {28, 28, 24},    /* early layer SE */
         {1, 1, 576},     /* degenerate 1x1 */
         {3, 3, 96},      /* small spatial */
+        {7, 7, 18},      /* channels % 4 == 2: tail */
+        {5, 3, 7},       /* channels below one block */
+        {1, 1, 1},       /* single channel */
     };
     const int num_tests = sizeof(test_cases) / sizeof(test_cases[0]);
 
