@@ -1,5 +1,8 @@
 # ESP-NN
 
+[![Component Registry](https://components.espressif.com/components/espressif/esp-nn/badge.svg)](https://components.espressif.com/components/espressif/esp-nn)
+[![CI](https://github.com/espressif/esp-nn/actions/workflows/ci.yml/badge.svg)](https://github.com/espressif/esp-nn/actions/workflows/ci.yml)
+
 The library contains optimised NN (Neural Network) functions for various Espressif chips.
 
 * Supported platforms:
