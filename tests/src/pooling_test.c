@@ -123,6 +123,12 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test(16, 8, 12, 3, 3, 1, 1, 1, 1, iter++);   /* 16x8, ch % 8 == 4 */
     run_avg_pool_test(8, 16, 12, 3, 3, 1, 1, 1, 1, iter++);   /* 8x16, ch % 8 == 4 */
     run_avg_pool_test(5, 24, 32, 2, 2, 2, 2, 0, 0, iter++);   /* 2x12 */
+    /* Padding as wide as the filter: the first and last windows of each row
+     * and column miss the input, and the output is 0, clamped. */
+    run_avg_pool_test(6, 6, 16, 2, 2, 1, 1, 2, 2, iter++);                /* ch % 16 == 0 */
+    run_avg_pool_test(6, 5, 12, 2, 2, 1, 1, 2, 2, iter++);                /* ch % 8 == 4 */
+    run_avg_pool_test(1, 8, 16, 1, 2, 3, 1, 1, 0, iter++);                /* one column */
+    run_avg_pool_test_act(6, 6, 20, 2, 2, 1, 1, 2, 2, 5, 30, iter++);     /* clamped to 5 */
 }
 
 static void run_max_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,

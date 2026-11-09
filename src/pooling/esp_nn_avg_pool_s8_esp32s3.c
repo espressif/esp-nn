@@ -55,7 +55,13 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
      * count alone no longer selects the assembly. */
     const uintptr_t bufs = (uintptr_t) input | (uintptr_t) output;
     const uintptr_t need = (channels % 8 == 0) ? 7u : 3u;
-    if (channels % 4 == 0 && (bufs & need) == 0) {
+    /* The assembly divides by the window's element count, which is 0 for a
+     * window that misses the input (padding at least as wide as the filter).
+     * Such shapes take the C path. */
+    const int misses_input = pad_wd >= filter_wd || pad_ht >= filter_ht ||
+                             (int32_t) (output_wd - 1) * stride_wd - pad_wd >= input_wd ||
+                             (int32_t) (output_ht - 1) * stride_ht - pad_ht >= input_ht;
+    if (channels % 4 == 0 && (bufs & need) == 0 && !misses_input) {
         esp_nn_avg_pool_s8_esp32s3_asm(input, input_wd, input_ht, output,
                                         output_wd, output_ht, stride_wd, stride_ht,
                                         filter_wd, filter_ht, pad_wd, pad_ht,
@@ -76,9 +82,15 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
             int32_t fx_start = max(0, -base_x);
             int32_t fy_end = min(filter_ht, input_ht - base_y);
             int32_t fx_end = min(filter_wd, input_wd - base_x);
+            int32_t out_idx = (out_y * output_wd + out_x) * channels;
+            /* A window that misses the input averages to 0, as in the reference. */
+            if (fx_end <= fx_start || fy_end <= fy_start) {
+                const int32_t empty = min(max(0, activation_min), activation_max);
+                memset(output + out_idx, (int8_t) empty, channels);
+                continue;
+            }
             int32_t filter_cnt = (fy_end - fy_start) * (fx_end - fx_start);
             int32_t half_cnt = filter_cnt / 2;
-            int32_t out_idx = (out_y * output_wd + out_x) * channels;
 
             for (int32_t c0 = 0; c0 < channels; c0 += AVG_POOL_CH_CHUNK) {
                 int32_t n = min(AVG_POOL_CH_CHUNK, channels - c0);

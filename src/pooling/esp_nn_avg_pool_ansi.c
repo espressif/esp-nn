@@ -56,9 +56,14 @@ void esp_nn_avg_pool_s8_ansi(const int8_t *input,
                     }
                 }
 
-                /* Rounded average */
-                result = result > 0 ? (result + filter_cnt / 2) / filter_cnt
-                                    : (result - filter_cnt / 2) / filter_cnt;
+                /* Rounded average. A window that misses the input (padding at
+                 * least as wide as the filter) averages to 0. */
+                if (filter_cnt == 0) {
+                    result = 0;
+                } else {
+                    result = result > 0 ? (result + filter_cnt / 2) / filter_cnt
+                                        : (result - filter_cnt / 2) / filter_cnt;
+                }
 
                 /* Activation function */
                 result = max(result, activation_min);
