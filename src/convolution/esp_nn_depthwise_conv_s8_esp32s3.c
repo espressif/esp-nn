@@ -156,17 +156,7 @@ extern void esp_nn_depthwise_conv_s16_mult1_esp32s3(const int16_t *input_data,
 
 extern void esp_nn_s8_to_s16_esp32s3(const int8_t *src, int16_t *dst, const int size);
 
-/* int8 depthwise for (K,1) filters on width-1 tensors, the shape a 1-D
- * convolutional encoder produces. Measured on ESP32-S3 with a 16-layer speech
- * encoder: 461-489 ms against 478-507 ms for the int16 path it replaces, and
- * scratch for the affected layers falls from 99 kB to about 1 kB. */
-#ifndef ESP_NN_DW_S8_KX1
-#define ESP_NN_DW_S8_KX1 1
-#endif
-/* The (K,1) int8 kernel sums raw s8 x s8 products in the 20-bit QACC lanes:
- * 32 taps of the largest product (127 * 128 = 16256) are the most that
- * always fit in +-2^19. Taller filters take the general path. */
-#define ESP_NN_DW_S8_KX1_MAX_TAPS 32
+#include "esp_nn_conv_dispatch_esp32s3.h"
 
 /* Everything past the sixth argument goes by pointer: see the note in
  * esp_nn_depthwise_conv_s8_kx1_esp32s3.S about stack-argument placement. */
@@ -608,130 +598,6 @@ static void dw_s16m8_3x3_run_split(const int16_t *input_data16,
             activation_min, activation_max);
 }
 
-int esp_nn_get_depthwise_conv_scratch_size_esp32s3(const data_dims_t *input_dims,
-                                                   const data_dims_t *filter_dims,
-                                                   const data_dims_t *output_dims,
-                                                   const dw_conv_params_t *conv_params)
-{
-    const uint16_t input_wd = input_dims->width;
-    const uint16_t input_ht = input_dims->height;
-    const uint16_t channels = input_dims->channels;
-    const uint16_t filter_wd = filter_dims->width;
-    const uint16_t filter_ht = filter_dims->height;
-    const uint16_t ch_mult = conv_params->ch_mult;
-    const uint16_t out_wd = output_dims->width;
-    const uint16_t out_ht = output_dims->height;
-    const uint16_t pad_wd = conv_params->padding.width;
-    const uint16_t pad_ht = conv_params->padding.height;
-    const uint16_t stride_wd = conv_params->stride.width;
-    const uint16_t stride_ht = conv_params->stride.height;
-
-    /* MUST mirror the kernel's dispatch. Now that the (K,1) path declines
-     * nothing on alignment grounds, its requirement is knowable here:
-     * bias_adj (channels int32) + a K-row window + an aligned filter copy.
-     * For a 384x1x128 layer that is ~1.3 kB against 99 kB for the int16 path
-     * it replaces. */
-    if (ESP_NN_DW_S8_KX1 && (ch_mult == 1) && (input_wd == 1) &&
-            (filter_wd == 1) && (filter_ht <= ESP_NN_DW_S8_KX1_MAX_TAPS) &&
-            (out_wd == 1) && (stride_wd == 1) &&
-            (pad_wd == 0) && (channels % 16 == 0)) {
-        return channels * 4 + 2 * filter_ht * channels + 64;
-    }
-
-    int filter_size = filter_wd * filter_ht * channels * ch_mult;
-    int pad_width = 0, pad_height = 0;
-
-    if ((ch_mult == 1) && (channels % 8 == 0)) {
-        if(filter_wd == 3 && filter_ht == 3) {
-            if (channels % 16 == 0) {
-                /* Mirrors the kernel: leading pad from the caller, trailing
-                 * pad from whatever the output extent still needs. Covers
-                 * TFLite's asymmetric "SAME" shapes on this path. */
-                pad_width = pad_wd + max(0, (out_wd - 1) * stride_wd + filter_wd
-                                            - pad_wd - input_wd);
-                pad_height = pad_ht + max(0, (out_ht - 1) * stride_ht + filter_ht
-                                             - pad_ht - input_ht);
-                if (pad_width || pad_height) {
-                    int full_input = (input_wd + pad_width) * (input_ht + pad_height) * channels;
-                    if (full_input <= 40 * 1024) {
-                        return filter_size + full_input + 16;
-                    } else {
-                        /* Strip-tiled: filter + as many padded input rows as
-                         * fit the same 40 KB budget the monolithic path uses,
-                         * never fewer than filter_ht. The kernel derives its
-                         * strip height from this size (minus its 16-byte
-                         * alignment pad, hence +32 not +16), so reserving
-                         * only filter_ht rows here would silently degrade it
-                         * to one output row per assembly call. */
-                        int row_bytes = (input_wd + pad_width) * channels;
-                        int rows = (40 * 1024 - filter_size - 32) / row_bytes;
-                        if (rows < filter_ht) {
-                            rows = filter_ht;
-                        }
-                        if (rows > input_ht + pad_height) {
-                            rows = input_ht + pad_height;
-                        }
-                        return filter_size + rows * row_bytes + 32;
-                    }
-                } else {
-                    return filter_size + 16;
-                }
-            } else if (channels >= 12) {
-                /* ch % 8 == 0, not % 16, ch >= 12: pad channels to 16, s8 path + compaction */
-                int new_ch = (channels + 15) & ~15;
-                int new_filter_size = 9 * new_ch;
-                int total_pad_wd = pad_wd * 2 + max(0, (out_wd * stride_wd + 2) - input_wd);
-                int total_pad_ht = pad_ht * 2 + max(0, (out_ht * stride_ht + 2) - input_ht);
-                int new_input_size = (input_wd + total_pad_wd) * (input_ht + total_pad_ht) * new_ch;
-                int out_buf_size = out_wd * out_ht * new_ch;
-                /* + channel-padded shift/mult/bias arrays (see the kernel) */
-                int quant_pad_size = 3 * new_ch * (int)sizeof(int32_t);
-                return new_filter_size + new_input_size + out_buf_size + quant_pad_size + 64;
-            } else {
-                /* ch=8: s16 path is more efficient (no channel padding overhead) */
-                int input_s = input_wd * input_ht * channels;
-                return  2 * (filter_size + input_s) + 32;
-            }
-        } else {
-            int input_size = input_wd * input_ht * channels;
-            int total_s16 = 2 * (filter_size + input_size);
-            if (total_s16 <= 48 * 1024) {
-                return total_s16 + 32;
-            } else {
-                /* Tiled: only need filter_s16 + tile buffer (filter_ht rows of input s16) */
-                int tile_rows = filter_ht;
-                int tile_s16 = 2 * input_wd * tile_rows * channels;
-                return 2 * filter_size + tile_s16 + 32;
-            }
-        }
-    } else if ((ch_mult == 1) && (channels > 3)) {
-        // ch_mult=1, channels>3 case: pad channels to multiple of 8 for mult1
-        int padded_channels = (channels + 7) & ~7;
-        int padded_input_size = input_wd * input_ht * padded_channels;
-        int padded_filter_size = filter_wd * filter_ht * padded_channels;
-
-        // Calculate actual memory layout with 16-byte alignments (matching usage)
-        size_t filter_bytes = padded_filter_size * sizeof(int16_t);
-        size_t input_start = (filter_bytes + 15) & ~15;
-        size_t input_bytes = padded_input_size * sizeof(int16_t);
-        size_t out_start = (input_start + input_bytes + 15) & ~15;
-        size_t out_bytes = out_wd * out_ht * padded_channels * sizeof(int8_t);
-        size_t bias_start = (out_start + out_bytes + 15) & ~15;
-        size_t bias_bytes = padded_channels * sizeof(int32_t);
-        size_t shift_bytes = padded_channels * sizeof(int32_t);
-        size_t mult_bytes = padded_channels * sizeof(int32_t);
-        size_t total_size = bias_start + bias_bytes + shift_bytes + mult_bytes;
-
-        return total_size + 16; // 16 for margin
-    } else if (ch_mult % 4 == 0) {
-        int input_size = input_wd * input_ht * channels;
-        return  2 * (filter_size + input_size) + 32; // 32 for alignment
-    }
-
-    // Default fallback
-    return 32;
-}
-
 void esp_nn_set_depthwise_conv_scratch_buf_esp32s3(void *buf)
 {
     scratch_buffer = (int16_t *) buf;
@@ -897,7 +763,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
         printf("esp_nn_depthwise_conv error! scratch_buffer not set!\n");
         return;
     }
-    int required_scratch = esp_nn_get_depthwise_conv_scratch_size_esp32s3(
+    int required_scratch = esp_nn_depthwise_conv_scratch_size_esp32s3_impl(
             input_dims, filter_dims, output_dims, conv_params);
     int16_t *active_scratch = scratch_buffer;
     if (preferred_scratch_buffer != NULL &&

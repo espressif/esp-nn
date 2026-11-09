@@ -25,17 +25,6 @@ void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
 
 static int32_t *scratch_buffer = NULL;
 
-int esp_nn_get_depthwise_conv_scratch_size_riscv_pie(const data_dims_t *input_dims,
-                                                    const data_dims_t *filter_dims,
-                                                    const data_dims_t *output_dims,
-                                                    const dw_conv_params_t *conv_params)
-{
-    if (conv_params->ch_mult == 1 && input_dims->channels >= 8) {
-        return input_dims->channels * sizeof(int32_t);
-    }
-    return 0;
-}
-
 void esp_nn_set_depthwise_conv_scratch_buf_riscv_pie(const void *buf)
 {
     scratch_buffer = (int32_t *) buf;

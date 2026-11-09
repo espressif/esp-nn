@@ -27,63 +27,7 @@
 #include <esp_nn_defs.h>
 #include <common_functions.h>
 
-/*
- * Check if a conv can use the optimized 3x3 path.
- * Requirements:
- * - filter_wd == 3 && filter_ht == 3
- * - in_channels >= 16 (SIMD worth it)
- * - in_channels % 16 == 0 (aligned for ee.vld.128)
- */
-/* Output positions staged per pass. One pass streams the filter once, so the
- * chunk only has to be long enough to amortise that; measured on ESP32-S3,
- * 8/16/32/48 land within a few percent of each other on yolo11n's shapes and
- * 16 is the best compromise across them. */
-#define ESP_NN_3X3_BATCH_POSITIONS          16
-
-/* Staging is worth it whenever a whole filter pass is amortised over at least
- * one full chunk of positions. It is NOT a cache-residency test: the per-pixel
- * path reloads the filter only once its working set exceeds the data cache
- * (ESP_NN_S3_DCACHE_BYTES), but the staged path also replaces a per-pixel dot
- * with the batched assembly, which measured faster on every eligible yolo11n
- * layer - including ones whose filter fits the cache many times over. */
-static inline int esp_nn_conv_s8_3x3_use_batch(int out_wd, int out_ht)
-{
-    return ((int32_t)out_wd * out_ht) >= ESP_NN_3X3_BATCH_POSITIONS;
-}
-
-int esp_nn_conv_s8_3x3_can_use(int filter_wd, int filter_ht,
-                                int in_channels, int out_channels)
-{
-    /* out_channels gate is a measured profitability bound: the per-pixel
-     * im2col build amortizes across the output-channel dots, and at
-     * out_channels == 1 the path measured 3.8x SLOWER than the general
-     * kernel on a 3x3x32 map (S3), while out_channels == 16 wins. */
-    return (filter_wd == 3 && filter_ht == 3 &&
-            in_channels >= 16 && (in_channels % 16) == 0 &&
-            out_channels >= 16);
-}
-
-/*
- * Scratch size for the 3x3 optimized path. Mirrors the dispatch below:
- * staged positions need staging + the panel driver's work area, the
- * per-pixel layout needs one window + an aligned filter copy + corrections.
- */
-int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_channels,
-                                     int out_wd, int out_ht)
-{
-    int window_len_aligned = (9 * in_channels + 15) & ~15;
-    if (esp_nn_conv_s8_3x3_use_batch(out_wd, out_ht)) {
-        /* Staged positions plus the 1x1 panel driver's work area. The filter
-         * is read in place, so there is no per-layer copy: this is smaller
-         * than the per-pixel layout below for every shape that reaches it. */
-        int staging = ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned;
-        return staging + esp_nn_conv_1x1_panel_scratch_size(window_len_aligned) + 32;
-    }
-    int im2col = window_len_aligned;
-    int filter_copy = out_channels * window_len_aligned;  /* aligned, zero-padded rows */
-    int corrections = out_channels * 4;
-    return im2col + filter_copy + corrections + 32;
-}
+#include "esp_nn_conv_dispatch_esp32s3.h"
 
 /*
  * 3x3 convolution: im2col per pixel, then dot product per output channel.

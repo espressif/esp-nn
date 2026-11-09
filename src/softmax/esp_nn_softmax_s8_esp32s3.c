@@ -14,14 +14,6 @@
 
 static int32_t *scratch_buf_s3 = NULL;
 
-int32_t esp_nn_get_softmax_scratch_size_esp32s3(const int32_t width, const int32_t height)
-{
-    (void) width;
-    (void) height;
-    /* Two 256-entry per-layer LUTs (raw exp + accumulation-scaled exp). */
-    return 2 * 256 * 4 + 16;
-}
-
 void esp_nn_set_softmax_scratch_buf_esp32s3(void *buffer)
 {
     scratch_buf_s3 = (int32_t *) buffer;
