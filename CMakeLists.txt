@@ -72,6 +72,7 @@ if(CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
         "src/basic_math/esp_nn_add_s8_riscv_pie.c"
         "src/basic_math/esp_nn_mul_s8_riscv_pie.c"
         "src/convolution/esp_nn_conv_riscv_pie.c"
+        "src/convolution/esp_nn_scratch_sizes_riscv_pie.c"
         "src/convolution/esp_nn_depthwise_conv_riscv_pie.c"
         "src/fully_connected/esp_nn_fully_connected_s8_riscv_pie.c"
         "src/fully_connected/esp_nn_fc_batch_conv.c"

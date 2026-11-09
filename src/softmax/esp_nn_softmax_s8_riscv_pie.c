@@ -12,15 +12,6 @@
 
 static int32_t *p4_scratch_buf = NULL;
 
-int32_t esp_nn_get_softmax_scratch_size_riscv_pie(const int32_t width, const int32_t height)
-{
-    (void) width;
-    (void) height;
-    /* Two 256-entry per-layer LUTs (raw exp + accumulation-scaled exp);
-     * the kernel no longer caches per-row exp values. */
-    return 2 * 256 * 4 + 16;
-}
-
 void esp_nn_set_softmax_scratch_buf_riscv_pie(void *buffer)
 {
     p4_scratch_buf = (int32_t *) buffer;
