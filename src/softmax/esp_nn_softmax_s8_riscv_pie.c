@@ -43,7 +43,7 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
 #define ACCUM_BITS  12
 #define DIFF_BITS   5
 
-    const int32_t mask = (1 << shift);
+    const int32_t mask = (int32_t) (1u << shift);
     int32_t col = 0;
     const int8_t *in_ptr = input_data;
     int8_t *out_ptr = output_data;
@@ -116,7 +116,7 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
 
         /* Phase 3: Normalize */
         const int32_t headroom_plus1 = esp_nn_clz32((uint32_t) sum_of_exps);
-        const int32_t shifted_scale = ONE_OVER_ONE_X((sum_of_exps << headroom_plus1) - (1 << 31));
+        const int32_t shifted_scale = ONE_OVER_ONE_X((int32_t) ((uint32_t) sum_of_exps << headroom_plus1) - INT32_MIN);
         const int32_t bits_over_unit = ACCUM_BITS - headroom_plus1 + 31 - sizeof(int8_t) * 8;
 
         for (col = 0; col < width; col++) {

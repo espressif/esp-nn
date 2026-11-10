@@ -112,6 +112,9 @@ void esp_nn_softmax_s8_test()
     run_softmax_test(8, 32, INT32_MAX / 2, 7, -128, iter++);
     run_softmax_test(8, 32, INT32_MAX / 4, 5, -128, iter++);
     run_softmax_test(8, 32, INT32_MAX, 10, -128, iter++);
+    /* Input scale 16 and above: left shift 31, diff_min 0 */
+    run_softmax_test(8, 32, 1 << 30, 31, 0, iter++);
+    run_softmax_test(8, 32, INT32_MAX, 31, 0, iter++);
     /* Odd width (non-aligned) */
     run_softmax_test(8, 17, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     run_softmax_test(8, 3, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);

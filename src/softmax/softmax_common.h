@@ -24,7 +24,7 @@
 __NN_FORCE_INLINE__ int32_t mul_power_of_2(int val, int exp)
 {
     const int32_t thresh = ((1 << (31 - exp)) - 1);
-    int32_t result = val << exp;
+    int32_t result = (int32_t) ((uint32_t) val << exp);
     result = SELECT_USING_MASK(MASK_IF_NON_ZERO(val > thresh), INT32_MAX, result);
     result = SELECT_USING_MASK(MASK_IF_NON_ZERO(val < -thresh), INT32_MIN, result);
     return result;
@@ -73,7 +73,7 @@ __NN_FORCE_INLINE__ int32_t esp_nn_exp_on_negative_values(int32_t val)
     const int32_t remainder             = val_mod_minus_quarter - val;
 
     // calculate exponent for x in [-1/4, 0) in `result`
-    const int32_t x                     = (val_mod_minus_quarter << 5) + (1 << 28);
+    const int32_t x                     = (int32_t) ((uint32_t) val_mod_minus_quarter << 5) + (1 << 28);
     const int32_t x2                    = SAT_HIGH_MUL(x, x);
     const int32_t x3                    = SAT_HIGH_MUL(x2, x);
     const int32_t x4                    = SAT_HIGH_MUL(x2, x2);
