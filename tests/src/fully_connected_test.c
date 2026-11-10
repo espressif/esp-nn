@@ -825,7 +825,7 @@ static void fc_1x1_arm(int scratch_mode, void *scratch, int scratch_bytes,
 void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    const struct {
+    static const struct {
         const char *name;
         int batches, row_len, out_ch;
         int32_t in_off, filt_off;

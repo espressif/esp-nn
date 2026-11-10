@@ -59,6 +59,10 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
             int32_t filter_y_end = min(filter_ht, input_ht - base_y);
             int32_t filter_x_end = min(filter_wd, input_wd - base_x);
 
+            /* A window can miss the input entirely when the padding is as
+             * wide as the filter. The result is then INT8_MIN, clamped. */
+            const int32_t fx_count = filter_x_end - filter_x_start;
+
             int8_t *out_ptr = output + (out_y * output_wd + out_x) * channels;
 
             /* Process channels in blocks of 16 */
@@ -68,11 +72,12 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
                 asm volatile ("esp.vmax.s8 q0, q6, q6 \n\t");
 
                 /* Accumulate max across filter window.
-                 * For fx loop: input channels are at stride=channels apart. */
-                for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
+                 * For fx loop: input channels are at stride=channels apart.
+                 * The hardware loop needs fx_count > 0: it does not treat 0
+                 * as no iterations. */
+                for (int32_t fy = filter_y_start; fx_count > 0 && fy < filter_y_end; fy++) {
                     int32_t in_y = base_y + fy;
                     const int8_t *row_ptr = input + (in_y * input_wd + base_x + filter_x_start) * channels + ch_offset;
-                    int32_t fx_count = filter_x_end - filter_x_start;
 
                     asm volatile (
                         "mv     x30, %[ptr]              \n\t"

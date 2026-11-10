@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* The dual-core worker: kernels stay bit-exact while another task holds or
- * uses the worker, and disable() frees everything enable() allocated. */
+/* The dual-core worker: run() needs the claim, kernels stay bit-exact while
+ * another task holds or uses the worker, and disable() frees everything
+ * enable() allocated. */
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -76,6 +77,11 @@ static void contender(void *arg)
     }
 }
 
+static void mark_ran(void *arg)
+{
+    *(volatile bool *) arg = true;
+}
+
 void esp_nn_dual_core_test(void)
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);
@@ -84,7 +90,18 @@ void esp_nn_dual_core_test(void)
         return;
     }
 
-    /* 1. Contention. A second task on this core takes the worker and runs
+    /* 1. run() without the claim returns false and dispatches nothing. */
+    volatile bool ran = false;
+    if (esp_nn_dual_core_run(mark_ran, (void *) &ran)) {
+        esp_nn_dual_core_wait();
+        TEST_FAIL("dual core: run() without begin() dispatched the job\n");
+    } else if (ran) {
+        TEST_FAIL("dual core: run() without begin() ran the job\n");
+    } else {
+        TEST_PASS("dual core: run() without begin() returns false\n");
+    }
+
+    /* 2. Contention. A second task on this core takes the worker and runs
      * split kernels while the conv and depthwise sweeps run here. */
     int8_t *buf = heap_caps_aligned_alloc(16, 4 * CONTENDER_LEN,
                                           MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -125,7 +142,7 @@ void esp_nn_dual_core_test(void)
     }
     (void) task;
 
-    /* 2. disable() frees everything; enable() starts the worker again. */
+    /* 3. disable() frees everything; enable() starts the worker again. */
     esp_nn_dual_core_disable();
     if (esp_nn_dual_core_active()) {
         TEST_FAIL("dual core: still active after disable()\n");

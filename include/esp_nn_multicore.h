@@ -81,8 +81,9 @@ void esp_nn_dual_core_end(void);
 
 /** Dispatch fn(arg) to the worker core; the caller must hold the claim
  * (esp_nn_dual_core_begin()). Pair every successful call with
- * esp_nn_dual_core_wait(). Returns false when the worker is not running;
- * asserts when the caller does not hold the claim. */
+ * esp_nn_dual_core_wait(). Returns false when the worker is not running
+ * or the caller does not hold the claim; the caller then runs the job
+ * itself. */
 bool esp_nn_dual_core_run(void (*fn)(void *), void *arg);
 
 /** Block until the dispatched job completes. */

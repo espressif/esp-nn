@@ -5,6 +5,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 #include <common_functions.h>
 
 /**
@@ -52,10 +53,18 @@ void esp_nn_avg_pool_s8_riscv_pie(const int8_t *input,
             int32_t filter_x_start = max(0, -base_x);
             int32_t filter_y_end = min(filter_ht, input_ht - base_y);
             int32_t filter_x_end = min(filter_wd, input_wd - base_x);
+            int8_t *out_ptr = output + (out_y * output_wd + out_x) * channels;
+
+            /* A window that misses the input averages to 0, as in the
+             * reference. Its hardware loop count would be 0 or less, which
+             * esp.lp.setup does not treat as no iterations. */
+            if (filter_x_end <= filter_x_start || filter_y_end <= filter_y_start) {
+                const int32_t empty = min(max(0, activation_min), activation_max);
+                memset(out_ptr, (int8_t) empty, channels);
+                continue;
+            }
             int32_t filter_cnt = (filter_y_end - filter_y_start) * (filter_x_end - filter_x_start);
             int32_t half_cnt = filter_cnt >> 1;
-
-            int8_t *out_ptr = output + (out_y * output_wd + out_x) * channels;
 
             /* Process 16 channels at a time using QACC per-lane accumulation */
             int32_t ch_offset = 0;
