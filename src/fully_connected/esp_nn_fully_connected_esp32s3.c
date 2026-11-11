@@ -47,7 +47,7 @@ extern void esp_nn_fc_per_ch_s16_esp32s3(const int8_t *input_data,
                                           const int32_t activation_min,
                                           const int32_t activation_max);
 
-/* Shared s8 dot product from common — `a` must be 16-byte aligned, `b` may be
+/* Shared s8 dot product from common. `a` must be 16-byte aligned, `b` may be
  * unaligned (handled via USAR+QUP). The product is symmetric, so whichever of
  * input/filter happens to be aligned can be passed as `a`.
  *
@@ -56,7 +56,7 @@ extern void esp_nn_fc_per_ch_s16_esp32s3(const int8_t *input_data,
  * Per call, with n = len_div16:
  *   a (aligned):   16 bytes over for even n, 0 for odd n
  *   b (unaligned): 17..31 bytes over for even n, 1..15 for odd n
- * Reads only — nothing is written outside out_data.
+ * Reads only. Nothing is written outside out_data.
  *
  * Swapping the operands therefore moves the larger over-read from the filter
  * onto the input. It does not introduce one: as `a`, a 16-byte aligned input was
@@ -130,7 +130,7 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                                            activation_min, activation_max);
             return;
         }
-        /* Fallback to original s16 assembly — tail call, no extra overhead */
+        /* Fallback to original s16 assembly: tail call, no extra overhead */
         esp_nn_fc_s16_esp32s3(input_data, input_offset, row_len, filter_data,
                               filter_offset, bias, out_data, out_channels,
                               out_offset, out_shift, out_mult,
@@ -249,11 +249,11 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
  * times:
  *   1. the per-channel correction (input_offset*sum(filter_row) + bias) does
  *      not depend on the batch on the fast path (filter_offset == 0), so each
- *      filter row is summed once and the result serves every input row —
+ *      filter row is summed once and the result serves every input row:
  *      (batches-1) fewer filter walks;
  *   2. the loop is reordered out_channel-outer / batch-inner, so each filter row
  *      (row_len bytes) is fetched from PSRAM once per channel and reused from
- *      dcache across all batches — weight-stationary instead of weight-streaming.
+ *      dcache across all batches, weight-stationary instead of weight-streaming.
  * Bit-identical to the per-row kernel; falls back to it when the s8 fast path is
  * ineligible. Layout: input [batches][row_len], out_data [batches][out_channels]. */
 void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,

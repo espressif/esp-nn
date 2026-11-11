@@ -557,7 +557,7 @@ void esp_nn_fully_connected_align_s8_test()
 
     /* Sweep D0: row_len below one SIMD width, where the header now promises
      * correctness too. Misaligned small rows go to ansi, 8-aligned ones reach
-     * the s16 assembly's scalar tail — both need covering. */
+     * the s16 assembly's scalar tail. Both need covering. */
     const uint16_t small_rows[] = {1, 5, 8, 15, 16, 17};
     printf("-- sweep D0: small row_len, out_ch 2, input off 0/1/8 --\n");
     for (int i = 0; i < (int)(sizeof(small_rows) / sizeof(small_rows[0])); i++) {

@@ -826,7 +826,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
 
                 int padded_input_size = padded_wd_full * padded_ht_full * channels;
                 if (padded_input_size <= 40 * 1024) {
-                    /* Small enough — full padding, single assembly call */
+                    /* Small enough: full padding, single assembly call */
                     esp_nn_aligned_s8_pad_asymmetric(input_data, input_padded,
                                                      input_wd, input_ht, channels,
                                                      -input_offset, pad_wd, pad_ht,
@@ -889,7 +889,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
                 }
             } else if (channels >= 12) {
                 /* channels % 8 == 0, not % 16, channels >= 12: pad to 16 is worthwhile
-                 * (overhead <= 33%). For ch=8, padding to 16 doubles data — use s16 instead */
+                 * (overhead <= 33%). For ch=8, padding to 16 doubles data, so use s16 instead */
                 int new_ch = (channels + 15) & ~15;
                 int8_t pad_val = (int8_t)(-input_offset);
 
@@ -977,7 +977,7 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
              * does not. */
             int total_s16_size = 2 * (filter_size + input_size);
             if (total_s16_size <= 48 * 1024 && in_aligned) {
-                /* Small enough — full conversion is fine */
+                /* Small enough: full conversion is fine */
                 esp_nn_aligned_s8_to_s16_with_offset_esp32s3(input_data, input_data16, input_size, input_offset);
                 esp_nn_depthwise_conv_s16_mult1_esp32s3(input_data16, input_wd, input_ht, channels,
                                                         pad_wd, pad_ht, stride_wd, stride_ht, filter_data16,

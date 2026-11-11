@@ -121,7 +121,7 @@ static inline void transpose_8x8_s16_simd(const int8_t *input, int stride,
  */
 static inline void mac_8pos_8ch_simd(const int16_t *data_buf, const int8_t *filter)
 {
-    /* Copy filter to aligned buffer — ee.vld.l.64.ip requires 8-byte alignment */
+    /* Copy filter to aligned buffer. ee.vld.l.64.ip requires 8-byte alignment */
     int8_t __attribute__((aligned(16))) f_aligned[16];
     memcpy(f_aligned, filter, 8);
 
@@ -177,7 +177,7 @@ void esp_nn_conv_s8_1x1(const int8_t *input,
                                     (((uintptr_t)input & 7) == 0);
     const int16_t offset16 = (int16_t)input_offset;
 
-    /* Use scratch buffer for transpose data — holds ALL channel groups at once.
+    /* Use scratch buffer for transpose data. It holds ALL channel groups at once.
      * Layout: [cg0: 8 int16 × 8 pos, cg1: 8 int16 × 8 pos, ...] = ch8 × 128 bytes.
      * Aligned to 16 bytes for SIMD loads. */
     int16_t *tbuf = (int16_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
@@ -187,7 +187,7 @@ void esp_nn_conv_s8_1x1(const int8_t *input,
         const int8_t *in_base = input + pos * in_channels;
 
         /* Transpose ALL channel groups ONCE per position batch.
-         * This is the key optimization — reuse transposed data across all out_channels. */
+         * This is the key optimization: reuse transposed data across all out_channels. */
         for (int cg = 0; cg < ch8; cg++) {
             int16_t *cg_buf = tbuf + cg * 64; /* 64 int16 per channel group */
             if (use_simd_transpose) {

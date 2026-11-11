@@ -1,4 +1,4 @@
-# esp-nn kernel performance
+# ESP-NN Kernel Performance
 
 CPU cycles for one call of each s8 kernel, measured with the benchmark app in `bench_app/`.
 
@@ -30,7 +30,7 @@ The "Memory" column says where the tensors were.
 | ESP32-S31 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 277008 | 94210 | 2.94 | Internal |
 | ESP32-S31 | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | 1798390 | 765708 | 2.35 | Internal |
 
-## Depthwise convolution
+## Depthwise Convolution
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -43,7 +43,7 @@ The "Memory" column says where the tensors were.
 | ESP32-S31 | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 315201 | 118944 | 2.65 | Internal |
 | ESP32-S31 | out(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1325229 | 755116 | 1.75 | Internal |
 
-## Fully connected
+## Fully Connected
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -51,7 +51,7 @@ The "Memory" column says where the tensors were.
 | ESP32-P4 | len: 271, ch = 3 | 7650 | 915 | 8.36 | Internal |
 | ESP32-S31 | len: 271, ch = 3, non-zero input offset | 7547 | 1475 | 5.11 | Internal |
 
-### Batched fully connected (weight zero-point 0)
+### Batched Fully Connected (Weight Zero-Point 0)
 
 Times are in microseconds (µs) for one batched call. Before uses the existing ESP-NN batched fully connected implementation: the optimized weight-stationary kernel on ESP32-S3 and the portable ANSI C implementation on ESP32-P4. The P4 also has an optimized single-row PIE kernel, but its existing batched API does not use it. After uses the optimized 1×1 convolution path for batched fully connected operations with weight zero-point 0. ESP32-S3 is revision v0.2 at 240 MHz. ESP32-P4 is revision v1.3 at 360 MHz.
 
@@ -72,7 +72,7 @@ The Cores column indicates the number of cores used by the new 1×1 convolution 
 | ESP32-P4 | 48×160×32 | 6426 | 226 | 28.5× | 2 |
 | ESP32-P4 | 64×128×256 | 55326 | 1382 | 40.0× | 2 |
 
-## Elementwise add
+## Elementwise Add
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -80,7 +80,7 @@ The Cores column indicates the number of cores used by the new 1×1 convolution 
 | ESP32-P4 | size = 1615 | 190786 | 88451 | 2.16 | External |
 | ESP32-S31 | size = 1615 | 196283 | 75032 | 2.62 | Internal |
 
-## Elementwise multiply
+## Elementwise Multiply
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -88,7 +88,7 @@ The Cores column indicates the number of cores used by the new 1×1 convolution 
 | ESP32-P4 | size = 1615 | 76585 | 47601 | 1.60 | External |
 | ESP32-S31 | size = 1615 | 83337 | 45765 | 1.82 | Internal |
 
-## Max pooling
+## Max Pooling
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -96,7 +96,7 @@ The Cores column indicates the number of cores used by the new 1×1 convolution 
 | ESP32-P4 | input(16,16), filter (1x3x3x16) | 482184 | 24178 | 19.94 | Internal |
 | ESP32-S31 | input(16,16), filter(1x3x3x16) | 274866 | 21724 | 12.65 | Internal |
 
-## Average pooling
+## Average Pooling
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
@@ -112,7 +112,7 @@ The Cores column indicates the number of cores used by the new 1×1 convolution 
 | ESP32-P4 | size, 1615 | 1195 | 154 | 7.76 | Internal |
 | ESP32-S31 | size: 1615 | 625 | 123 | 5.08 | Internal |
 
-## Hard swish
+## Hard Swish
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
