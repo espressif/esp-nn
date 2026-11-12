@@ -64,6 +64,15 @@ static inline void esp_nn_3x3_build_window(
     }
 }
 
+/* One filter row of window_len bytes, zero-padded to window_len_aligned:
+ * the asm reads whole 16-byte blocks, and the padding multiplies zeros. */
+static inline void esp_nn_3x3_copy_filter_row(int8_t *dst, const int8_t *src,
+                                              int window_len, int window_len_aligned)
+{
+    memcpy(dst, src, window_len);
+    memset(dst + window_len, 0, window_len_aligned - window_len);
+}
+
 /* Run output positions [pos_begin, pos_end) of the staged path: stage the
  * windows for a chunk of positions, then hand them to the 1x1 OC-panel
  * driver, for which a 3x3 conv with its windows built is a 1x1 conv over
@@ -82,13 +91,13 @@ static void esp_nn_3x3_staged_range(
     const int window_len_aligned = ((9 * in_channels) + 15) & ~15;
     const int in_row_stride = input_wd * in_channels;
     const int8_t pad_val = (int8_t)(-input_offset);
+    /* batch and the panel size are recomputed per chunk (cheap) so they are
+     * not live across the window build loop. */
     int8_t *staging = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
-    void *panel_scratch = staging
-            + ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned;
 
-    for (int pos0 = pos_begin; pos0 < pos_end;
-            pos0 += ESP_NN_3X3_BATCH_POSITIONS) {
-        const int n = min(ESP_NN_3X3_BATCH_POSITIONS, pos_end - pos0);
+    for (int pos0 = pos_begin; pos0 < pos_end;) {
+        const int n = min(esp_nn_3x3_batch_positions(in_channels, out_channels),
+                          pos_end - pos0);
         for (int k = 0; k < n; k++) {
             const int pos = pos0 + k;
             const int out_y = pos / out_wd;
@@ -99,12 +108,15 @@ static void esp_nn_3x3_staged_range(
                                     input_wd, input_ht, in_channels,
                                     in_row_stride, pad_val);
         }
-        esp_nn_conv_s8_mult8_1x1_oc_panel(
+        const int batch = esp_nn_3x3_batch_positions(in_channels, out_channels);
+        esp_nn_conv_s8_mult8_1x1_oc_panel_ex(
                 staging, n, (uint16_t)window_len_aligned, input_offset,
                 filter_data, bias, out_data + (int32_t)pos0 * out_channels,
                 (uint16_t)out_channels, (uint16_t)out_channels, out_offset,
                 out_shift, out_mult, activation_min, activation_max,
-                panel_scratch);
+                staging + batch * window_len_aligned,
+                esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels));
+        pos0 += n;
     }
 }
 
@@ -163,18 +175,40 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
     const int window_len = 9 * in_channels; /* 3×3 window */
     const int window_len_aligned = (window_len + 15) & ~15;
 
+    if (esp_nn_conv_s8_3x3_small_map_can_use(in_channels, out_channels, out_wd, out_ht,
+                                stride_wd, stride_ht)) {
+        esp_nn_conv_s8_3x3_small_map(input, input_wd, input_ht, in_channels,
+                input_offset, pad_wd, pad_ht, stride_wd, stride_ht,
+                filter_data, bias, out_data, out_wd, out_ht, out_channels,
+                out_offset, out_shift, out_mult, activation_min,
+                activation_max, scratch);
+        return;
+    }
+
     if (esp_nn_conv_s8_3x3_use_batch(out_wd, out_ht)) {
         const int total_positions = (int)out_wd * out_ht;
+        if (window_len_aligned != window_len) {
+            /* The asm reads filter rows of window_len_aligned bytes: copy the
+             * filter with zero-padded rows. The staged windows' tails then
+             * multiply zeros. */
+            int8_t *fcopy = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
+            for (int oc = 0; oc < out_channels; oc++) {
+                esp_nn_3x3_copy_filter_row(fcopy + oc * window_len_aligned,
+                                           filter_data + oc * window_len,
+                                           window_len, window_len_aligned);
+            }
+            filter_data = fcopy;
+            scratch = fcopy + out_channels * window_len_aligned;
+        }
 #if ESP_NN_DUAL_CORE_SUPPORTED
         /* Split the position range across cores: disjoint output slices, same
          * arithmetic. The worker stages into its own scratch. */
-        if (total_positions >= 2 * ESP_NN_3X3_BATCH_POSITIONS
-                && esp_nn_dual_core_begin()) {
-            const int wneed = ESP_NN_3X3_BATCH_POSITIONS * window_len_aligned
-                    + esp_nn_conv_1x1_panel_scratch_size(window_len_aligned) + 32;
+        const int batch = esp_nn_3x3_batch_positions(in_channels, out_channels);
+        if (total_positions >= 2 * batch && esp_nn_dual_core_begin()) {
+            const int wneed = batch * window_len_aligned + 32
+                    + esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels);
             void *wscr = esp_nn_dual_core_scratch(wneed);
-            const int split = ((total_positions / 2) / ESP_NN_3X3_BATCH_POSITIONS)
-                    * ESP_NN_3X3_BATCH_POSITIONS;
+            const int split = ((total_positions / 2) / batch) * batch;
             if (wscr != NULL && split > 0 && split < total_positions) {
                 conv3x3_staged_mt_job_t job = {
                     .input = input, .input_wd = input_wd, .input_ht = input_ht,
@@ -221,19 +255,18 @@ void esp_nn_conv_s8_3x3_opt(const int8_t *input,
                                        + out_channels * window_len_aligned);
 
     /* The inner loop is the plain aligned dot - no unaligned SIMD, no
-     * priming, no reads outside either operand. in_ch % 16 == 0 makes
-     * window_len a multiple of 16 already, so when the filter pointer is
-     * 16-byte aligned (TFLM arena/flash weights are) the filter is used in
-     * place; only a misaligned caller pays the aligned copy. */
+     * priming, no reads outside either operand. When window_len is a
+     * multiple of 16 (in_ch % 16 == 0) and the filter pointer is 16-byte
+     * aligned (TFLM arena/flash weights are), the filter is used in place.
+     * Otherwise it is copied into zero-padded aligned rows. */
     const int copy_filter = (((uintptr_t)filter_data & 15) != 0)
                             || (window_len_aligned != window_len);
     const int8_t *filter_base = copy_filter ? filter_aligned : filter_data;
     const int8_t *f_ptr = filter_data;
     for (int oc = 0; oc < out_channels; oc++) {
         if (copy_filter) {
-            int8_t *slot = filter_aligned + oc * window_len_aligned;
-            memcpy(slot, f_ptr, window_len);
-            memset(slot + window_len, 0, window_len_aligned - window_len);
+            esp_nn_3x3_copy_filter_row(filter_aligned + oc * window_len_aligned,
+                                       f_ptr, window_len, window_len_aligned);
         }
         int32_t corr = bias ? bias[oc] : 0;
         if (input_offset != 0) {

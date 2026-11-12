@@ -57,9 +57,11 @@
 #include <stdio.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
 #include "esp_nn_conv_1x1_panel_esp32s3.h"
+#include "esp_memory_utils.h"
 #include <esp_nn_multicore.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 #include <esp_nn_defs.h>
 
@@ -252,41 +254,33 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
  * GEBP-style OC-panel driver for the mult8 1x1 asm. The asm streams the
  * whole filter matrix once per 8-position batch, which thrashes the 64 KB
  * L1 D-cache whenever the filter exceeds it. Output channels are therefore
- * processed in panels sized to ~24 KB of filter rows: a panel stays
+ * processed in panels sized to half the data cache: a panel stays
  * resident across every position batch, so filter data is fetched from
  * memory once per layer while the batched SIMD kernel does the math.
  * Each panel's output is staged contiguous and scattered into the NHWC
  * layout. Per-output-channel arithmetic is independent and unchanged:
  * results are bit-identical to a single batched call.
  */
-void esp_nn_conv_s8_mult8_1x1_oc_panel(
+void esp_nn_conv_s8_mult8_1x1_oc_panel_ex(
         const int8_t *input, int spatial_size, uint16_t in_channels,
         int32_t input_offset, const int8_t *filter_data, const int32_t *bias,
         int8_t *out_data, uint16_t out_channels, uint16_t out_stride,
         int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
-        int32_t activation_min, int32_t activation_max, void *scratch)
+        int32_t activation_min, int32_t activation_max, void *scratch,
+        int work_bytes)
 {
-    int oc_tile = ESP_NN_S3_PANEL_BYTES / in_channels;
-    oc_tile &= ~7;
-    /* Every panel pass re-reads the staged positions. For wide windows the
-     * byte budget alone leaves a panel of one or two channels, so the
-     * re-reads cost more than the residency they buy: keep at least 16
-     * channels per panel there. Shapes whose budget already allows more are
-     * untouched, and a larger panel measured slower for them. */
-    if (oc_tile < 16) {
-        oc_tile = 16;
+    /* Internal RAM is not cached, so panels only pay off for a filter
+     * behind the cache (PSRAM or flash). An internal filter runs as one
+     * panel when its work area fits: the positions are transposed once,
+     * not once per panel. */
+    const int one_panel = min(out_channels, 1024);
+    int one_panel_bytes = esp_nn_conv_1x1_batched_work_bytes(in_channels, one_panel) + 32;
+    if (one_panel != out_channels || out_stride != out_channels) {
+        one_panel_bytes += 16 + 8 * one_panel;  /* output staging */
     }
-    if (oc_tile > out_channels) {
-        oc_tile = out_channels;
-    }
-    if (oc_tile < 8) {
-        oc_tile = 8;
-    }
-    if (oc_tile > 1024) {
-        oc_tile = 1024;
-    }
-    if (oc_tile > out_channels) {
-        oc_tile = out_channels;
+    int oc_tile = one_panel;
+    if (!esp_ptr_internal(filter_data) || one_panel_bytes > work_bytes) {
+        oc_tile = esp_nn_conv_1x1_panel_tile(in_channels, out_channels);
     }
 
     uint8_t *work = (uint8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);
@@ -300,11 +294,20 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel(
     }
 
     /* Staging area sits after the asm work region (transpose + tails). */
-    int8_t *staging = (int8_t *)(work + 24 * in_channels + 8 * oc_tile + 32);
-    int pos_chunk = (8 * 1024) / oc_tile;
+    int8_t *staging = (int8_t *)(work + esp_nn_conv_1x1_batched_work_bytes(in_channels, oc_tile) + 32);
+    /* Output staging gets what is left of the work area, at most 8 KB. */
+    int staging_bytes = work_bytes - (esp_nn_conv_1x1_batched_work_bytes(in_channels, oc_tile) + 32 + 16);
+    if (staging_bytes > 8 * 1024) {
+        staging_bytes = 8 * 1024;
+    }
+    int pos_chunk = staging_bytes / oc_tile;
     pos_chunk &= ~7;
+    /* The header's minimum work area leaves room for 32 positions. A smaller
+     * area makes pos_chunk 0 and the loop below would never end, so return
+     * without output even when asserts are off. */
+    assert(pos_chunk >= 8);
     if (pos_chunk < 8) {
-        pos_chunk = 8;
+        return;
     }
 
     for (int oc_base = 0; oc_base < out_channels; oc_base += oc_tile) {
@@ -326,6 +329,20 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel(
             }
         }
     }
+}
+
+void esp_nn_conv_s8_mult8_1x1_oc_panel(
+        const int8_t *input, int spatial_size, uint16_t in_channels,
+        int32_t input_offset, const int8_t *filter_data, const int32_t *bias,
+        int8_t *out_data, uint16_t out_channels, uint16_t out_stride,
+        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max, void *scratch)
+{
+    esp_nn_conv_s8_mult8_1x1_oc_panel_ex(input, spatial_size, in_channels,
+            input_offset, filter_data, bias, out_data, out_channels,
+            out_stride, out_offset, out_shift, out_mult, activation_min,
+            activation_max, scratch,
+            esp_nn_conv_1x1_panel_scratch_size(in_channels));
 }
 
 #if ESP_NN_DUAL_CORE_SUPPORTED
@@ -630,7 +647,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 void *panel_scratch = scratch_buffer;
                 if (preferred_scratch_buffer != NULL &&
                         (((uintptr_t)preferred_scratch_buffer & 15) == 0) &&
-                        (size_t)(24 * channels + 16 * 1024 + 64) <= preferred_scratch_size) {
+                        (size_t)esp_nn_conv_1x1_panel_scratch_size(channels) <= preferred_scratch_size) {
                     panel_scratch = preferred_scratch_buffer;
                 }
                 /* Filter exceeds the L1 panel budget: the OC-panel driver keeps
@@ -640,7 +657,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
 #if ESP_NN_DUAL_CORE_SUPPORTED
                 if (out_channels >= 32 && esp_nn_dual_core_begin()) {
                     const int oc0 = ((out_channels / 2) + 7) & ~7;
-                    const int wneed = 24 * channels + 16 * 1024 + 64;
+                    const int wneed = esp_nn_conv_1x1_panel_scratch_size(channels);
                     uint8_t *wscr = (uint8_t *)esp_nn_dual_core_scratch(wneed);
                     if (wscr != NULL && oc0 > 0 && oc0 < out_channels) {
                         conv_1x1_panel_mt_job_t job = {
@@ -679,7 +696,7 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
                 return;
             }
             void *pointwise_scratch = scratch_buffer;
-            int required = 24 * channels + 8 * out_channels + 16;
+            int required = esp_nn_conv_1x1_batched_work_bytes(channels, out_channels) + 16;
             if (preferred_scratch_buffer != NULL &&
                     (((uintptr_t)preferred_scratch_buffer & 15) == 0) &&
                     required <= preferred_scratch_size) {
@@ -710,12 +727,9 @@ void esp_nn_conv_s8_esp32s3(const data_dims_t *input_dims,
         int32_t filter_row_size = filter_wd * channels;
         int32_t window_len = filter_wd * filter_ht * channels;
 
-        /* 3x3 optimized path: im2col per pixel, iterate OC with the input in
-         * cache - avoids the general asm's per-output-channel input reload.
-         * Rewritten around the aligned dot: one aligned zero-padded filter
-         * copy per layer, then both operands are plain 16-byte-aligned
-         * vectors. The previous inline-asm version MAC'd two uninitialized
-         * q-registers on the first iteration of every pixel. */
+        /* 3x3 optimized path: staged windows through the 1x1 asm, an OC-outer
+         * kernel for small maps, or im2col per pixel with the input in cache.
+         * Each avoids the general asm's per-output-channel input reload. */
         if (esp_nn_conv_s8_3x3_can_use(filter_wd, filter_ht, channels, out_channels)) {
             esp_nn_conv_s8_3x3_opt(input, input_wd, input_ht, channels,
                                     input_offset, pad_wd, pad_ht, stride_wd, stride_ht,
