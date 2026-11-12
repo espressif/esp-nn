@@ -115,7 +115,8 @@ static void esp_nn_3x3_staged_range(
                 (uint16_t)out_channels, (uint16_t)out_channels, out_offset,
                 out_shift, out_mult, activation_min, activation_max,
                 staging + batch * window_len_aligned,
-                esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels));
+                esp_nn_3x3_panel_work_bytes(window_len_aligned, in_channels, out_channels),
+                pos0 != pos_begin);
         pos0 += n;
     }
 }

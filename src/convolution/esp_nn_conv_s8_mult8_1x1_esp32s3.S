@@ -13,8 +13,6 @@
 // limitations under the License.
 
     .text
-    .literal_position
-    .literal  .nudge_val, 1073741824
 
  # Requantize the 4 sums of a QACC half, dumped at a1[base..base+19] as 40-bit
  # lanes, into the int32 lanes of \qd. a8 = mult, a3 = left shift. The
@@ -72,6 +70,38 @@
     ee.movi.32.q    \qd,a15,3
  .endm
 
+ # Fast form of the SRDHM part, used when every channel passes the bound
+ # checked at entry. With |v| < 2^29 after the left shift,
+ # u = mulsh(v << 2, mult) = floor(v * mult / 2^30) is exact, and the SRDHM
+ # result is (u + 1) >> 1. The epilogue folds that halving into the rounding
+ # shift. a10 holds 4 * bias, so addx4 gives (acc + bias) << 2. With lshift,
+ # SAR holds the left shift. a3, a6 and a11 hold a1 + 1, 2 and 3, so the
+ # unaligned lane loads need no address adds.
+ .macro FASTREQ4 qd, base, lshift
+    l32i    a12,a1,\base
+    l32i    a13,a3,\base+4               # a1 + base + 5
+    l32i    a14,a6,\base+8               # a1 + base + 10
+    l32i    a15,a11,\base+12             # a1 + base + 15
+    addx4   a12,a12,a10
+    addx4   a13,a13,a10
+    addx4   a14,a14,a10
+    addx4   a15,a15,a10
+  .if \lshift
+    sll     a12,a12
+    sll     a13,a13
+    sll     a14,a14
+    sll     a15,a15
+  .endif
+    mulsh   a12,a8,a12
+    mulsh   a13,a8,a13
+    mulsh   a14,a8,a14
+    mulsh   a15,a8,a15
+    ee.movi.32.q    \qd,a12,0
+    ee.movi.32.q    \qd,a13,1
+    ee.movi.32.q    \qd,a14,2
+    ee.movi.32.q    \qd,a15,3
+ .endm
+
     # Program Unit: esp_nn_conv_s8_mult8_1x1_esp32s3
     #
     # Pure .S: this hand-scheduled kernel predates esp-nn's inline-asm
@@ -79,15 +109,20 @@
     # a separate change.
     #
     # Requirements:
+    #   - size (input_wd * input_ht) must be a multiple of 8. The C driver
+    #     runs a lone last position with esp_nn_conv_s8_1x1_1pos_esp32s3.
     #   - in_channels must be a multiple of 8
     #   - input_data must be 8-byte aligned (ee.vld.l/h.64.xp ignore the low 3 address bits)
-    #   - buffer (scratch) must be 16-byte aligned
+    #   - buffer (scratch) must be 16-byte aligned, with 16 * in_channels
+    #     bytes for the transpose and 16 * out_channels for the per-OC table
+    #   - table_ready = 1 only when the last call used the same buffer,
+    #     in_channels, out_channels, bias, out_shift, out_mult and out_offset
     #   - filter_data may have any alignment, but it must be readable for
     #     16 bytes past its end. The 8-channel loop (in_channels % 16 == 8)
-    #     and the leftover path load filter blocks in funnel-shift pairs, and
-    #     the second load of a pair can read the 16-byte block just past the
-    #     filter's end. The 16-channel loop reads a 16-byte aligned filter
-    #     with plain aligned loads.
+    #     loads filter blocks in funnel-shift pairs, and the second load of a
+    #     pair can read the 16-byte block just past the filter's end. The
+    #     16-channel loop reads a 16-byte aligned filter with plain aligned
+    #     loads.
     #
     .type   esp_nn_conv_s8_mult8_1x1_esp32s3, @function
     .align   4
@@ -96,13 +131,11 @@
 esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     # Stack frame (240 bytes). Every slot stays below 192: the top 48 bytes
     # are the register-window save area.
-    #   0..51    QACC_L and QACC_H dumps (0..19, 32..51); the leftover path
-    #            reuses 0..35 after the main loop
+    #   0..51    QACC_L and QACC_H dumps (0..19, 32..51)
     #   20       size - 7
     #   24       a3 across the output tile flush
-    #   28       out_mult end, ends the OC loop
-    #   36       leftover path: input channel iterations
-    #   52       bias of the current output channel
+    #   28       end of the per-OC table, ends the OC loop
+    #   52       bias of the current output channel (exact path)
     #   56       input
     #   60       filter_data
     #   64       input_offset
@@ -117,7 +150,9 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     #   108      zero word, the bias of a NULL bias pointer
     #   112..175 8x8 output tile
     #   176      output tile flag
-    #   180..191 free
+    #   180      free
+    #   184      per-OC table, at buffer + 16 * in_channels
+    #   188..191 free
 
  // registers:
  // a2: int8_t *input_data
@@ -139,6 +174,7 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
  // int32_t activation_min  // 272
  // int32_t activation_max  // 276
  // void *buffer // tmp buf // 280
+ // int table_ready         // 284, 1: the per-OC table is still valid
 
     entry   a1,240                      #
     # The top 48 bytes of the frame (192 and above) are a register-window
@@ -171,7 +207,7 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     movi.n  a11,0
     movnez  a10,a11,a9
     s32i    a10,a1,176
-    blti    a8,8,.prepare_leftover      # [5] // process remaining lines one by one
+    blti    a8,8,.return_function
     addi    a9,a8,-7                    # [32]
     s32i    a9,a1,20                    # [33]  gra_spill_temp_175, size-7
 
@@ -201,6 +237,81 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     movi.n  a11,4
     moveqz  a11,a10,a9
     s32i    a11,a1,104                  # bias step
+    # Per-OC table at buffer + 16 * in_channels, so the OC loop only loads
+    # its constants. Each OC takes 16 bytes:
+    # - mult.
+    # - The bias term.
+    # - The rounding term plus out_offset << (rs + 1). The rounding term is
+    #   1 + 2^rs, or 1 when rs is 0.
+    # - The shifts word. Bits 0-4 hold ls. Bit 8 is set unless the channel
+    #   takes plain FASTREQ4. Bit 9 is set for the exact path. Bits 16-21
+    #   hold rs + 1.
+    # FASTREQ4 needs |acc << left_shift| < 2^29 and a right shift <= 21.
+    # Then |u| < 2^30 and the rounding term is below 2^30 in magnitude, so
+    # the vector adds of the fast path do not saturate.
+    # |acc| <= in_channels * 255 * 128 + |bias| < (in_channels << 15) + |bias|.
+    # A channel that passes stores 4 * bias (it fits, |bias| < 2^29). The
+    # others store the bias and take the exact path. a1[184] points at it.
+    addi    a10,a1,108
+    moveqz  a9,a10,a9                   # NULL bias reads the zero word
+    l32i    a10,a1,264                  # out_shift
+    l32i    a7,a1,268                   # out_mult
+    l32i    a6,a1,280                   # buffer
+    slli    a13,a5,4
+    add     a6,a6,a13                   # table
+    s32i    a6,a1,184
+    l32i    a12,a1,284                  # table_ready
+    bnez    a12,.table_end              # same channels as the last call
+    l16ui   a12,a1,256                  # out_channels
+    slli    a13,a5,15
+    loopgtz a12,.table_end
+    l32i    a15,a9,0                    # bias
+    l32i    a2,a10,0                    # shift
+    l32i    a8,a7,0                     # mult
+    add     a9,a9,a11
+    addi.n  a10,a10,4
+    addi.n  a7,a7,4
+    s32i    a8,a6,0
+    movi.n  a3,0
+    max     a3,a2,a3                    # left shift
+    sub     a8,a3,a2                    # right shift
+    movi    a5,29
+    min     a2,a3,a5                    # left shift > 29 shifts by 0: exact path
+    sub     a2,a5,a2
+    ssr     a2
+    abs     a2,a15
+    add     a2,a2,a13                   # bound on |acc|, unsigned, never 0
+    srl     a2,a2                       # nonzero: bound >= 2^(29 - left shift)
+    movi    a5,21
+    sub     a5,a5,a8
+    srli    a5,a5,31                    # right shift > 21
+    or      a2,a2,a5                    # nonzero: exact path
+    slli    a5,a15,2
+    moveqz  a15,a5,a2
+    s32i    a15,a6,4                    # 4 * bias, or the bias
+    ssl     a8
+    movi.n  a5,1
+    sll     a15,a5
+    add     a15,a15,a5                  # 1 + 2^rs
+    moveqz  a15,a5,a8                   # 1 for rs 0
+    l32i    a14,a1,92                   # out_offset
+    addi    a12,a8,1
+    ssl     a12
+    sll     a14,a14
+    add     a15,a15,a14                 # + out_offset << (rs + 1)
+    s32i    a15,a6,8
+    addi    a15,a8,1
+    slli    a15,a15,16
+    or      a15,a15,a3
+    movi    a5,0x100
+    or      a5,a15,a5
+    movnez  a15,a5,a3                   # bit 8: ls != 0
+    movi    a5,0x300
+    or      a5,a15,a5
+    movnez  a15,a5,a2                   # bits 8, 9: exact path
+    s32i    a15,a6,12
+    addi    a6,a6,16
+.table_end:
 
 .outer_loop: // for (; i_out < size - 7; i_out += 8) {
 
@@ -252,29 +363,24 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     addi.n                  a8,a8,8
 .transpose_loop_end:    # 0xeeb
 
- # 468          uint32_t bias_ptr = (uint32_t) bias;
- # 469          uint32_t filter_ptr = (uint32_t) (filter_data);
- # 470          const int32_t *out_mult_ptr = out_mult;
- # 471          const int32_t *out_shift_ptr = out_shift;
-    l32i    a6,a1,264                   # [0]  out_shift
-    l32i    a2,a1,268                   # [1]  out_mult
-    l32i    a5,a1,60                    # [2]  gra_spill_temp_170, filter
-    l32i    a9,a1,240                   # bias pointer
-    addi    a10,a1,108
-    moveqz  a9,a10,a9
- # 472          for (int32_t out_ch_idx = 0; out_ch_idx < out_channels; out_ch_idx++) {
-    l16ui   a8,a1,256                   # [5]  id:620 out_channels+0x0
-    mov.n   a3,a9                       # bias pointer, kept in a3
+    l32i    a5,a1,60                    # filter
+    l16ui   a8,a1,256                   # out_channels
+    l32i    a2,a1,184                   # per-OC table, walked in a2
     blti    a8,1,.outer_ch_loop_end
-
-    addx4   a10,a8,a2
-    s32i    a10,a1,28                   # out_mult end, ends the OC loop
+    slli    a10,a8,4
+    add     a10,a10,a2
+    s32i    a10,a1,28                   # table end, ends the OC loop
+    addi    a3,a1,1                     # lane pointers of FASTREQ4
+    addi    a6,a1,2
+    addi    a11,a1,3
     ee.zero.q   q5                      # sign compare zero, kept across channels
 
 .out_ch_loop:   # 0xf3e
+    # Loads sit a few instructions ahead of the branches that use them:
+    # a load followed by a branch on it stalls.
+    l32i    a9,a1,84                    # 16-channel blocks after the first
     l32i    a8,a1,280                   # [4]  gra_spill_temp_165, buffer_ptr
     ee.zero.qacc                        # [3]
-    l32i    a9,a1,84                   # 16-channel blocks after the first
     bltz    a9,.mac8                    # in_channels % 16 == 8
     bbsi    a9,30,.mac16u               # filter not 16-byte aligned
     # 16 channels per step: one filter load gives two s16 halves
@@ -324,58 +430,50 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
 
 .mac_done:
 
- # Per output channel requant constants. They are set up once for all 8
- # positions, and the requant runs inline, without helper calls.
- # a11 = left shift and a7 = right shift stay in registers. The bias goes
- # to a1[52] for REQUANT4. a3 is the bias pointer across the OC loop.
-    l32i.n  a9,a6,0                     # shift
-    l32i.n  a8,a2,0                     # mult
-    addi.n  a6,a6,4                     # out_shift_ptr++
-    addi.n  a2,a2,4                     # out_mult_ptr++
-    l32i.n  a12,a3,0                    # bias
-    l32i    a10,a1,104                  # bias step
-    movi.n  a13,0
-    s32i    a12,a1,52
-    max     a11,a9,a13                  # left_shift
-    sub     a7,a11,a9                   # right_shift
-    add.n   a3,a3,a10
+ # Per output channel requant constants, from the table built at entry.
+ # a2 walks the table. a7 holds the packed shifts word.
     mov.n   a9,a1
     ee.st.qacc_l.l.128.ip   a9,16       # QACC_L to a1[0..19]
     ee.st.qacc_l.h.32.ip    a9,16
     ee.st.qacc_h.l.128.ip   a9,16       # QACC_H to a1[32..51]
     ee.st.qacc_h.h.32.ip    a9,0
-    # A left shift is rare (shift > 0), so it runs out of line.
-    bnez    a11,.requant_lshift
-    REQUANT4 q0,0,0
-    REQUANT4 q4,32,0,0                 # SAR is still 31
-.requant_done:
-
- # Rounding right shift: (x + (1 << (rs - 1)) - (x < 0)) >> rs
-    beqz.n  a7,.round_skip
-    addi.n  a10,a7,-1
-    wsr.sar a10
-    addi    a9,a1,88
-    ee.vldbc.32.ip  q1,a9,4             # 1
-    ee.vsl.32       q1,q1               # to_add = 1 << (rs - 1)
-    ee.vcmp.lt.s32  q3,q0,q5            # q5 is zero
-    ee.vcmp.lt.s32  q2,q4,q5
-    ee.vadds.s32    q3,q3,q1
-    ee.vadds.s32    q2,q2,q1
-    ee.vadds.s32    q0,q0,q3
-    ee.vadds.s32    q4,q4,q2
-    wsr.sar         a7
-    ee.vsr.32       q0,q0
-    ee.vsr.32       q4,q4
-.round_done:
-
-# Broadcast out_offset and the activation bounds. a9 points at out_offset.
-    ee.vldbc.32.ip  q1,a9,4             # out_offset
-    ee.vldbc.32.ip  q2,a9,4             # activation_min
-    ee.vldbc.32     q3,a9               # activation_max
-
-# add offset
+    l32i.n  a7,a2,12                    # shifts
+    l32i.n  a8,a2,0                     # mult
+    l32i.n  a10,a2,4                    # 4 * bias (the bias, exact path)
+    addi    a9,a2,8                     # rounding term
+    addi    a2,a2,16
+    bbsi    a7,8,.fast_other
+    FASTREQ4 q0,0,0
+    FASTREQ4 q4,32,0
+.fast_requant_done:
+ # With u from FASTREQ4 and rs the right shift, the reference result is
+ # (u + 1 + 2^rs - 2 * (u < -1)) >> (rs + 1), and (u + 1) >> 1 for rs 0.
+ # The table term also holds out_offset << (rs + 1). Adding a multiple of
+ # 2^(rs + 1) before the floor shift adds out_offset after it.
+    ee.vldbc.32     q1,a9               # rounding term + out_offset
+    extui   a10,a7,16,6                 # rs + 1
+    beqi    a10,1,.fast_rs0
+    ee.vcmp.eq.s32  q6,q5,q5            # -1
+    ee.vcmp.lt.s32  q3,q0,q6
+    ee.vcmp.lt.s32  q2,q4,q6
     ee.vadds.s32    q0,q0,q1
     ee.vadds.s32    q4,q4,q1
+    ee.vadds.s32    q0,q0,q3
+    ee.vadds.s32    q4,q4,q2
+    ee.vadds.s32    q0,q0,q3
+    ee.vadds.s32    q4,q4,q2
+.fast_shift:
+    wsr.sar a10
+    ee.vsr.32       q0,q0
+    ee.vsr.32       q4,q4
+    addi    a9,a1,96
+.round_done:
+    l32i    a10,a1,176                  # tile flag
+    l32i    a15,a1,28                   # table end, ends the OC loop
+
+# Broadcast the activation bounds. a9 points at activation_min.
+    ee.vldbc.32.ip  q2,a9,4             # activation_min
+    ee.vldbc.32     q3,a9               # activation_max
 
  # activation
     ee.vmin.s32     q0,q0,q3
@@ -385,19 +483,17 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
 
 # With the tile, the 8 bytes of this OC go to tile row oc % 8. After the
 # 8th OC the tile is transposed and stored as 8 bytes per position.
-    l32i    a10,a1,176                  # tile flag
     beqz    a10,.store_bytes
     ee.vunzip.16    q0,q4
     ee.vunzip.8     q0,q4               # q0 low 8 bytes: the 8 positions
     extui   a10,a4,0,3                  # oc % 8, out_data is 8-byte aligned
-    addx8   a11,a10,a1
-    addi    a11,a11,112
-    ee.vst.l.64.ip  q0,a11,0
+    addx8   a9,a10,a1
+    addi    a9,a9,112
+    ee.vst.l.64.ip  q0,a9,0
     beqi    a10,7,.tile_flush
 .store_done:
     addi.n  a4,a4,1                     # [29] out_data++;
-    l32i    a10,a1,28                   # out_mult end
-    bne     a2,a10,.out_ch_loop
+    bne     a2,a15,.out_ch_loop
 
 .outer_ch_loop_end:
     l16ui   a9,a1,256                   # out_channels
@@ -414,183 +510,6 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     add.n   a9,a9,a10                   # [8]
     s32i    a9,a1,68                    # [9]  gra_spill_temp_172
     blt     a15,a8,.outer_loop          # [10]
-
- # check if leftover
-    l32i    a15,a1,72
-    l32i    a13,a1,80                   # [1]  gra_spill_temp_176, size
-    l32i    a8,a1,76                    # [0]  gra_spill_temp_166, in_channels
-    bge     a15, a13, .return_function  # no leftover
-
-// This block below processes one input channel line at a time.
-.process_leftover:
-    mov.n   a3,a1                       # scratch_buf
-    l32i    a15,a1,72                   # [1]  gra_spill_temp_165, i_out
-    l32i    a14,a1,56                   # [2]  gra_spill_temp_169, input
-    mull    a15,a15,a8                  # [3] in_channels * i_out
-    addi.n  a8,a8,-1                    # [4] in_channels - 1
-    add.n   a14,a14,a15                 # [5] input_ptr = in_channels * i_out + input
-    srai    a8,a8,3                     # [6] iterations, (in_channels - 1) >> 3
-    s32i    a8,a1,36                    # [7]  gra_spill_temp_164, iterations
-    s32i    a14,a1,68                   # [8]  gra_spill_temp_172, in_channels * i_out + input
-    addi            a12,a1,64
-    ee.vldbc.16     q4,a12              # [8]  id:716 input_offset
-
-.leftover_outer_loop:
-
-    l32i    a15,a1,264                  # [0]  out_shift
-    l32i    a2,a1,268                   # [1]  out_mult
-    l32i    a8,a1,60                    # [3]  gra_spill_temp_170, filter_data
-    l32i    a5,a1,240                   # [0]  gra_spill_temp_170, bias
-    movi.n  a11,0                       # [2]
-
-.leftover_out_ch_loop:
-
-    ee.zero.qacc                            # [0]
-    ee.zero.q       q3                      # [1]
-    l32i            a9,a1,68                # [4]  gra_spill_temp_172, input_ptr
-    l32i            a10,a1,36               # [1]  gra_spill_temp_164, iterations, (in_channels - 1) >> 3
-    ee.vld.l.64.ip          q0,a9,8         # [7]  id:717, input
-    # USAR-based filter load for unaligned access
-    ee.ld.128.usar.ip       q1,a8,16
-    ee.ld.128.usar.ip       q7,a8,0
-    addi                    a8,a8,-8
-    ee.src.q                q1,q1,q7
-    ee.vcmp.lt.s8           q6,q0,q3
-    ee.vcmp.lt.s8           q7,q1,q3
-    ee.vzip.8               q0,q6
-    ee.vzip.8               q1,q7
-    ee.vadds.s16            q0,q0,q4  # [11]  id:718, add offset
-
-    loopgtz a10,.leftover_inner_loop_end        # [3]
-
-    ee.vmulas.s16.qacc          q0,q1  # mula(q0,q1)
-    ee.vld.l.64.ip              q0,a9,8         # load 8 input values
-    # USAR-based filter load for unaligned access
-    ee.ld.128.usar.ip           q1,a8,16
-    ee.ld.128.usar.ip           q7,a8,0
-    addi                        a8,a8,-8
-    ee.src.q                    q1,q1,q7
-    ee.vcmp.lt.s8               q2,q0,q3        # sign
-    ee.vcmp.lt.s8               q7,q1,q3
-    ee.vzip.8                   q0,q2           # 16 bit input
-    ee.vzip.8                   q1,q7           # 16 bit filter
-    ee.vadds.s16                q0,q0,q4        # add offset
-.leftover_inner_loop_end:   # 0x1262
-
-# re-arrange data from qacc in 32 bit q registers
-    ee.vmulas.s16.qacc      q0,q1       # [3]
-    ee.st.qacc_l.l.128.ip   a3,16       # [5]  id:722
-    ee.st.qacc_l.h.32.ip    a3,0        # [6]  id:723
-    l8ui    a10,a1,5                    # [11]  scratch_buf+5
-    l8ui    a12,a1,6                    # [10]  scratch_buf+6
-    l16ui   a14,a1,10                   # [8]  scratch_buf+10
-    l8ui    a9,a1,15                    # [7]  scratch_buf+15
-    l8ui    a13,a1,16                   # [9]  scratch_buf+16
-    s8i     a10,a1,2                    # [12]  scratch_buf+2
-    s8i     a12,a1,3                    # [13]  scratch_buf+3
-    s16i    a14,a1,4                    # [15]  scratch_buf+4
-    s8i     a9,a1,6                     # [16]  scratch_buf+6
-    s8i     a13,a1,7                    # [14]  scratch_buf+7
-
-    ee.st.qacc_h.l.128.ip   a3,16       # [17]  id:724
-    ee.st.qacc_h.h.32.ip    a3,-32      # [18]  id:725
-    l16ui   a13,a1,16                   # [30]  scratch_buf+16
-    l8ui    a14,a1,21                   # [23]  scratch_buf+21
-    l8ui    a9,a1,22                    # [22]  scratch_buf+22
-    l16ui   a10,a1,26                   # [21]  scratch_buf+26
-    s16i    a13,a1,8                    # [31]  scratch_buf+8
-    l8ui    a12,a1,31                   # [20]  scratch_buf+31
-    l8ui    a13,a1,32                   # [19]  scratch_buf+32
-    s8i     a14,a1,10                   # [24]  scratch_buf+10
-    s8i     a9,a1,11                    # [25]  scratch_buf+11
-    s16i    a10,a1,12                   # [26]  scratch_buf+12
-    s8i     a12,a1,14                   # [27]  scratch_buf+14
-    s8i     a13,a1,15                   # [28]  scratch_buf+15
-    movi.n  a12,16
-
-# get data now
-    ee.vld.128.ip       q0,a3,0
-    ee.srcmb.s16.qacc   q1,a12,0
-    ee.vzip.16          q0,q1
-
-    ee.vadds.s32    q0,q0,q1
-    ee.movi.32.a    q0,a10,3
-    ee.movi.32.a    q0,a9,2
-    ee.movi.32.a    q0,a14,0
-    add             a9,a9,a10
-    ee.movi.32.a    q0,a10,1
-    add             a14,a14,a10
-    add             a14,a14,a9
-
-# a14 contains conv_out
-    l32i    a9,a1,240                   # [43]  gra_spill_temp_170, bias ptr
-    l32i.n  a6,a15,0                    # [44]  id:730, shift
-    beqz.n  a9,.leftover_multiply_by_quant_mult             # [45]
-
-# load and add bias
-    l32i.n  a9,a5,0
-    add.n   a14,a14,a9
-
-.leftover_multiply_by_quant_mult:   # 0x12e7
-    l32i.n  a9,a2,0                 # [0]  id:729, mult
-    movi.n  a10,0                   # [1]
-    max     a10,a6,a10              # [2]  left_shift
-    ssl     a10                     # [3]
-    sll     a14,a14                 # [4] (value << left_shift)
-
-    sub     a7,a10,a6               # right_shift
-
-    l32r    a13,.nudge_val
-    mulsh   a12,a9,a14
-    mull    a14,a9,a14
-    ssai    31
-
-    addi.n  a2,a2,4                 # [0] mult
-    addi.n  a15,a15,4               # [1] shift
-    addi.n  a5,a5,4                 # [2] bias
-    addi.n  a11,a11,1               # [3]
-
-    add     a13,a14,a13             # low part
-    saltu   a14,a13,a14
-    add     a9,a12,a14              # high part
-    src     a12,a9,a13
-
-    blti    a7,1,.leftover_skip_div_by2
-
-    addi.n  a14,a7,-1
-    ssl     a14
-    movi.n  a10,1
-    sll     a10,a10                     # 1 << (exponent - 1)
-    extui   a14,a12,31,1
-    ssr     a7
-    sub     a10,a10,a14                 # 1 << (exponent - 1) - (val < 0)
-    add     a12,a12,a10                 # val += to_add
-    sra     a12,a12
-
-.leftover_skip_div_by2:
-    l32i    a10,a1,260                  # [26]  id:733 out_offset+0x0
-    l32i    a9,a1,272                   # [29]  id:732 activation_min+0x0
-    l16ui   a13,a1,256                  # [5]  id:620 out_channels+0x0
-    l32i    a14,a1,276                  # [31]  id:731 activation_max+0x0
-
-// add offset, apply activation and store
-    add.n   a10,a10,a12
-    max     a9,a9,a10
-    min     a14,a14,a9
-    s8i     a14,a4,0
-    addi.n  a4,a4,1
-
-    bne     a11,a13,.leftover_out_ch_loop
-
-    l32i    a15,a1,76                   # [0]  gra_spill_temp_166, in_channels
-    l32i    a14,a1,68                   # [1]  gra_spill_temp_172, input_ptr
-    l32i    a13,a1,72                   # [2]  gra_spill_temp_165, i_out
-    l32i    a12,a1,80                   # [3]  gra_spill_temp_176, size
-    addi.n  a13,a13,1                   # [4]
-    s32i    a13,a1,72                   # [5]  gra_spill_temp_165, i_out
-    add     a14,a14,a15                 # [7]  input_ptr += in_channels
-    s32i    a14,a1,68                   # [8]  gra_spill_temp_172, input_ptr
-    blt     a13,a12,.leftover_outer_loop
 
 .return_function:
     retw.n              # [9]
@@ -698,12 +617,57 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     ee.vsmulas.s16.qacc q3,q7,7     # [3]
     j       .mac_done
 
+.fast_other:
+    bbsi    a7,9,.requant_slow
+    ssl     a7                          # uses bits 0-4: ls
+    FASTREQ4 q0,0,1
+    FASTREQ4 q4,32,1
+    j       .fast_requant_done
+
+.fast_rs0:
+    ee.vadds.s32    q0,q0,q1
+    ee.vadds.s32    q4,q4,q1
+    j       .fast_shift
+
+# The exact 64-bit requant, for channels that fail the FASTREQ4 bound.
+# a8 = mult and a10 = bias from the table. REQUANT4 reads the bias from
+# a1[52] and clobbers a9-a15, so a11 is set again before the join.
+.requant_slow:
+    s32i    a10,a1,52                   # bias
+    extui   a11,a7,0,5                  # left shift
+    extui   a7,a7,16,6
+    addi.n  a7,a7,-1                    # right shift
+    bnez    a11,.requant_lshift
+    REQUANT4 q0,0,0
+    REQUANT4 q4,32,0,0                 # SAR is still 31
+.requant_done:
+
+ # Rounding right shift: (x + (1 << (rs - 1)) - (x < 0)) >> rs
+    beqz.n  a7,.round_skip
+    addi.n  a10,a7,-1
+    wsr.sar a10
+    addi    a9,a1,88
+    ee.vldbc.32.ip  q1,a9,4             # 1
+    ee.vsl.32       q1,q1               # to_add = 1 << (rs - 1)
+    ee.vcmp.lt.s32  q3,q0,q5            # q5 is zero
+    ee.vcmp.lt.s32  q2,q4,q5
+    ee.vadds.s32    q3,q3,q1
+    ee.vadds.s32    q2,q2,q1
+    ee.vadds.s32    q0,q0,q3
+    ee.vadds.s32    q4,q4,q2
+    wsr.sar         a7
+    ee.vsr.32       q0,q0
+    ee.vsr.32       q4,q4
 .round_skip:
     addi    a9,a1,92
+    ee.vldbc.32.ip  q1,a9,4             # out_offset
+    ee.vadds.s32    q0,q0,q1
+    ee.vadds.s32    q4,q4,q1
+    addi    a11,a1,3
     j       .round_done
 
 .requant_lshift:
-    # REQUANT4 takes the left shift in a3, so park the bias pointer.
+    # REQUANT4 takes the left shift in a3, so park the lane pointer.
     s32i    a3,a1,24
     mov.n   a3,a11
     REQUANT4 q0,0,1
@@ -715,43 +679,43 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
 # store the 8 positions, out_channels apart, one byte each
     l16ui   a9,a1,256                   # out_channels
     ee.movi.32.a    q0,a14,0
-    ee.movi.32.a    q0,a11,1
+    ee.movi.32.a    q0,a13,1
     add     a10,a4,a9
     s8i     a14,a4,0
-    s8i     a11,a10,0
+    s8i     a13,a10,0
     ee.movi.32.a    q0,a14,2
-    ee.movi.32.a    q0,a11,3
+    ee.movi.32.a    q0,a13,3
     add     a12,a10,a9
     add     a10,a12,a9
     s8i     a14,a12,0
-    s8i     a11,a10,0
+    s8i     a13,a10,0
     ee.movi.32.a    q4,a14,0
-    ee.movi.32.a    q4,a11,1
+    ee.movi.32.a    q4,a13,1
     add     a12,a10,a9
     add     a10,a12,a9
     s8i     a14,a12,0
-    s8i     a11,a10,0
+    s8i     a13,a10,0
     ee.movi.32.a    q4,a14,2
-    ee.movi.32.a    q4,a11,3
+    ee.movi.32.a    q4,a13,3
     add     a12,a10,a9
     add     a10,a12,a9
     s8i     a14,a12,0
-    s8i     a11,a10,0
+    s8i     a13,a10,0
     j       .store_done
 
  # Transpose the 8x8 tile (rows = OCs) and store 8 OC bytes per position.
 .tile_flush:
-    addi    a11,a1,112
+    addi    a13,a1,112
     l16ui   a9,a1,256                   # out_channels
     addi    a12,a4,-7
-    ee.vld.l.64.ip  q0,a11,8
-    ee.vld.l.64.ip  q1,a11,8
-    ee.vld.h.64.ip  q0,a11,8
-    ee.vld.h.64.ip  q1,a11,8
-    ee.vld.l.64.ip  q2,a11,8
-    ee.vld.l.64.ip  q3,a11,8
-    ee.vld.h.64.ip  q2,a11,8
-    ee.vld.h.64.ip  q3,a11,0
+    ee.vld.l.64.ip  q0,a13,8
+    ee.vld.l.64.ip  q1,a13,8
+    ee.vld.h.64.ip  q0,a13,8
+    ee.vld.h.64.ip  q1,a13,8
+    ee.vld.l.64.ip  q2,a13,8
+    ee.vld.l.64.ip  q3,a13,8
+    ee.vld.h.64.ip  q2,a13,8
+    ee.vld.h.64.ip  q3,a13,0
     ee.vzip.8       q0,q1
     ee.vzip.16      q0,q1
     ee.vzip.8       q2,q3
@@ -767,11 +731,5 @@ esp_nn_conv_s8_mult8_1x1_esp32s3:  # 0xdbc
     ee.vst.l.64.xp  q3,a12,a9
     ee.vst.h.64.xp  q3,a12,a9
     j       .store_done
-
-.prepare_leftover:
-    l32i    a8,a1,76                    # [0]  gra_spill_temp_166, in_channels
-    movi.n  a15,0
-    s32i    a15,a1,72                   # [7]  gra_spill_temp_165, i_out
-    j   .process_leftover
 
     .size   esp_nn_conv_s8_mult8_1x1_esp32s3, . - esp_nn_conv_s8_mult8_1x1_esp32s3

@@ -96,12 +96,14 @@ void esp_nn_conv_s8_3x3_small_map(const int8_t *input, uint16_t input_wd,
         const int32_t *out_mult, int32_t activation_min,
         int32_t activation_max, void *scratch);
 
-/* Output positions staged per pass. One pass streams the filter once, so the
- * chunk only has to be long enough to amortise that; measured on ESP32-S3,
- * 8/16/32/48 land within a few percent of each other on yolo11n's shapes and
- * 16 is the best compromise across them. Filters over 64 KB use
- * ESP_NN_3X3_BATCH_POSITIONS_LARGE (below). */
-#define ESP_NN_3X3_BATCH_POSITIONS          16
+/* Output positions staged per pass. One pass streams the filter once, and
+ * longer chunks spread the per-call setup of the 1x1 asm. Measured on
+ * ESP32-S3, 32 beats 16 by 1-4% on yolo11n's shapes and 48 adds nothing.
+ * Filters over 64 KB use ESP_NN_3X3_BATCH_POSITIONS_LARGE (below). */
+#define ESP_NN_3X3_BATCH_POSITIONS          32
+
+/* Maps with fewer positions than this take the per-pixel path. */
+#define ESP_NN_3X3_BATCH_MIN_POSITIONS      16
 
 /* A filter over 64 KB cannot sit in internal RAM next to the arena, so every
  * chunk streams it from PSRAM again. Longer chunks stream it fewer times.
@@ -127,7 +129,8 @@ static inline int esp_nn_3x3_panel_work_bytes(int window_len_aligned,
                                               int in_channels, int out_channels)
 {
     if (!esp_nn_3x3_large_filter(in_channels, out_channels)) {
-        return esp_nn_conv_1x1_panel_scratch_size(window_len_aligned);
+        return esp_nn_conv_1x1_panel_scratch_size(window_len_aligned,
+                                                  out_channels);
     }
     const int tile = esp_nn_conv_1x1_panel_tile(window_len_aligned, out_channels);
     /* Plus the output staging for 32 positions of a panel, and slack. */
@@ -142,7 +145,7 @@ static inline int esp_nn_3x3_panel_work_bytes(int window_len_aligned,
  * layer - including ones whose filter fits the cache many times over. */
 static inline int esp_nn_conv_s8_3x3_use_batch(int out_wd, int out_ht)
 {
-    return ((int32_t)out_wd * out_ht) >= ESP_NN_3X3_BATCH_POSITIONS;
+    return ((int32_t)out_wd * out_ht) >= ESP_NN_3X3_BATCH_MIN_POSITIONS;
 }
 
 /*
@@ -317,7 +320,7 @@ static inline int esp_nn_conv_scratch_size_esp32s3_impl(const data_dims_t *input
         int batched_tail_size = esp_nn_conv_1x1_batched_work_bytes(in_ch, out_ch) +
                                 align_buf_size;
         /* OC-panel driver (filter > 24 KB): asm work + staging areas */
-        int panel_size = 24 * in_ch + 16 * 1024 + align_buf_size;
+        int panel_size = esp_nn_conv_1x1_panel_scratch_size(in_ch, out_ch);
         if ((int32_t)in_ch * out_ch <= 24 * 1024) {
             panel_size = 0;
         }
