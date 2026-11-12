@@ -19,6 +19,9 @@
 #ifndef max
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #endif
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 /* int8 depthwise for (K,1) filters on width-1 tensors, the shape a 1-D
  * convolutional encoder produces. Measured on ESP32-S3 with a 16-layer speech
@@ -217,6 +220,35 @@ static inline int esp_nn_conv_s8_3x3_scratch_size(int in_channels, int out_chann
 #endif
 }
 
+/* Short-row im2col path (esp_nn_conv_s8_im2col_s3() in esp_nn_conv_esp32s3.c):
+ * output positions staged per pass, and the window layout it uses. */
+#define ESP_NN_IM2COL_POSITIONS     64
+
+static inline int esp_nn_im2col_s3_slot(int row_bytes, int filter_ht)
+{
+    const int packed = (row_bytes * filter_ht + 15) & ~15;
+    if (row_bytes >= 8) {
+        return 8;
+    }
+    return (16 * filter_ht <= packed + 16) ? 16 : row_bytes;
+}
+
+static inline int esp_nn_im2col_s3_window_aligned(int row_bytes, int filter_ht)
+{
+    const int slot = esp_nn_im2col_s3_slot(row_bytes, filter_ht);
+    const int tail = row_bytes - min(row_bytes, slot);
+    return ((slot + tail) * filter_ht + 15) & ~15;
+}
+
+static inline int esp_nn_conv_s8_im2col_s3_scratch_size(int row_bytes,
+                                                        int filter_ht,
+                                                        int out_ch)
+{
+    const int wla = esp_nn_im2col_s3_window_aligned(row_bytes, filter_ht);
+    return out_ch * wla + ESP_NN_IM2COL_POSITIONS * wla +
+           esp_nn_conv_1x1_batched_work_bytes(wla, out_ch) + 64;
+}
+
 /* Scratch requirement of esp_nn_conv_s8_esp32s3(). The public getter in
  * esp_nn_scratch_sizes_esp32s3.c wraps this; the kernel calls it directly
  * so it stays inlined into the dispatch. */
@@ -296,10 +328,7 @@ static inline int esp_nn_conv_scratch_size_esp32s3_impl(const data_dims_t *input
 
         /* Im2col path: filter_wd * in_ch < 16 but window_len >= 16 */
         if (filter_row_size < 16 && window_len >= 16) {
-            int32_t window_len_aligned = (window_len + 15) & ~15;
-            /* filter_sum + aligned_filter_copy + im2col_buf + alignment padding */
-            int im2col_scratch = out_ch * 4 + 16 + out_ch * window_len_aligned + 16 + window_len_aligned;
-            return im2col_scratch + align_buf_size;
+            return esp_nn_conv_s8_im2col_s3_scratch_size(filter_row_size, filter_ht, out_ch);
         }
 
         new_channels = (in_ch + 15) & ~15;

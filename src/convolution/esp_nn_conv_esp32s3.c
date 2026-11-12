@@ -382,14 +382,104 @@ static void conv_1x1_panel_mt_worker(void *p)
  * Im2col convolution for small in_ch (filter_wd * in_ch < 16).
  *
  * Instead of padding channels to 16 (wasting 81% MACs for in_ch=3),
- * flatten the entire filter window into one contiguous vector:
- *   window_len = filter_wd * filter_ht * in_ch (e.g., 3*3*3 = 27)
+ * flatten the entire filter window into one contiguous vector.
  *
- * For each output pixel: copy the input window into a contiguous scratch
- * buffer, then use ACCX dot product. No wasted MACs.
+ * The windows of a chunk of output positions are staged as rows of
+ * window_len_aligned bytes. With its windows built, the conv is a 1x1 conv
+ * over window_len_aligned channels, so the batched mult8 1x1 asm runs it.
+ * That asm does 8 positions per filter pass and requantizes in place, which
+ * is much cheaper than one dot and one scalar requant per output.
+ * Pad cells hold -input_offset and the filter is zero where no tap is, so
+ * neither adds to the sum.
  *
- * Scratch layout: [filter_sum[out_ch] | im2col_buf[window_len_aligned]]
+ * Window layout. The tap order inside a window is free, as long as the
+ * filter copy uses the same one. Filter row fy (row_bytes < 16) is split:
+ * - its first min(row_bytes, slot) bytes at fy * slot,
+ * - the rest after all heads, at filter_ht * slot + fy * tail.
+ * The slot is chosen so heads can be copied with one vector store:
+ * - row_bytes >= 8: slot 8. Heads are 8-byte stores, tails are bytes.
+ *   The window stays as short as when packed.
+ * - otherwise slot 16 when that costs at most one extra 16-byte block.
+ * - otherwise slot = row_bytes: rows packed, copied bytewise.
+ *
+ * Scratch layout (16-byte aligned):
+ * [aligned_filter: out_ch * window_len_aligned]
+ * [staging: ESP_NN_IM2COL_POSITIONS * window_len_aligned]
+ * [asm work: 24 * window_len_aligned + 8 * out_ch]
+ * The sizes are in esp_nn_conv_dispatch_esp32s3.h.
  */
+/* Copy 16 (or the low 8) bytes from any address to an aligned one. Reads
+ * the two aligned blocks at and after src. */
+static inline void esp_nn_copy16_to_aligned(int8_t *dst, const int8_t *src)
+{
+    asm volatile (
+        "ee.ld.128.usar.ip  q0, %[s], 16    \n"
+        "ee.ld.128.usar.ip  q1, %[s], 0     \n"
+        "ee.src.q           q0, q0, q1      \n"
+        "ee.vst.128.ip      q0, %[d], 0     \n"
+        : [s] "+r" (src), [d] "+r" (dst)
+        :
+        : "memory"
+    );
+}
+
+static inline void esp_nn_copy8_to_aligned(int8_t *dst, const int8_t *src)
+{
+    asm volatile (
+        "ee.ld.128.usar.ip  q0, %[s], 16    \n"
+        "ee.ld.128.usar.ip  q1, %[s], 0     \n"
+        "ee.src.q           q0, q0, q1      \n"
+        "ee.vst.l.64.ip     q0, %[d], 0     \n"
+        : [s] "+r" (src), [d] "+r" (dst)
+        :
+        : "memory"
+    );
+}
+
+/* Three filter rows of 9 bytes (3x3 filter, 3 channels), the common first
+ * layer: heads to dst[0..23], tails to tails[0..2]. One asm block, so the
+ * row loop and its pointer updates cost nothing extra. */
+static inline void esp_nn_im2col_copy_3x9(int8_t *dst, int8_t *tails,
+                                          const int8_t *src, int32_t in_row)
+{
+    int32_t t;
+    const int32_t step = in_row - 16;
+    asm volatile (
+        "l8ui               %[t], %[s], 8           \n"
+        "ee.ld.128.usar.ip  q0, %[s], 16            \n"
+        "ee.ld.128.usar.xp  q1, %[s], %[step]       \n"
+        "s8i                %[t], %[tl], 0          \n"
+        "ee.src.q           q0, q0, q1              \n"
+        "l8ui               %[t], %[s], 8           \n"
+        "ee.ld.128.usar.ip  q1, %[s], 16            \n"
+        "ee.ld.128.usar.xp  q2, %[s], %[step]       \n"
+        "s8i                %[t], %[tl], 1          \n"
+        "ee.vst.l.64.ip     q0, %[d], 8             \n"
+        "ee.src.q           q1, q1, q2              \n"
+        "l8ui               %[t], %[s], 8           \n"
+        "ee.ld.128.usar.ip  q0, %[s], 16            \n"
+        "ee.ld.128.usar.ip  q2, %[s], 0             \n"
+        "s8i                %[t], %[tl], 2          \n"
+        "ee.vst.l.64.ip     q1, %[d], 8             \n"
+        "ee.src.q           q0, q0, q2              \n"
+        "ee.vst.l.64.ip     q0, %[d], 0             \n"
+        : [s] "+r" (src), [d] "+r" (dst), [t] "=&r" (t)
+        : [tl] "r" (tails), [step] "r" (step)
+        : "memory"
+    );
+}
+
+/* Byte copy. The empty asm keeps GCC from turning it into a memcpy call,
+ * which costs more than the few bytes copied here. */
+static inline void esp_nn_im2col_copy_bytes(int8_t *dst, const int8_t *src,
+                                            int32_t len)
+{
+    for (int32_t i = 0; i < len; i++) {
+        dst[i] = src[i];
+        asm volatile ("");
+    }
+}
+
 /* Floor division for a positive divisor (C '/' truncates towards zero). */
 static inline int32_t esp_nn_floor_div_s32(int32_t num, int32_t den)
 {
@@ -423,46 +513,40 @@ static void esp_nn_conv_s8_im2col_s3(
     const uint16_t stride_wd = conv_params->stride.width;
     const uint16_t stride_ht = conv_params->stride.height;
     const int32_t input_offset = conv_params->in_offset;
-    const int32_t out_offset = conv_params->out_offset;
-    const int32_t activation_min = conv_params->activation.min;
-    const int32_t activation_max = conv_params->activation.max;
 
-    const int32_t window_len = filter_wd * filter_ht * in_ch;
-    /* Align to 16 for SIMD: zero-padded tail doesn't affect dot product */
-    const int32_t window_len_aligned = (window_len + 15) & ~15;
+    const int32_t row_bytes = filter_wd * in_ch;
+    const int32_t slot = esp_nn_im2col_s3_slot(row_bytes, filter_ht);
+    const int32_t head = min(row_bytes, slot);
+    const int32_t tail = row_bytes - head;
+    const int32_t tail_base = filter_ht * slot;
+    const int32_t window_len_aligned =
+            esp_nn_im2col_s3_window_aligned(row_bytes, filter_ht);
     const int8_t pad_val = (int8_t)(-input_offset);
 
-    /* Scratch layout (16-byte aligned):
-     * [filter_sum: out_ch * 4]
-     * [aligned_filter: out_ch * window_len_aligned]  -- zero-padded copy
-     * [im2col_buf: window_len_aligned]
-     */
-    int32_t *filter_sum = (int32_t *)scratch;
-    int8_t *aligned_filter = (int8_t *)((uintptr_t)((int8_t *)scratch + out_ch * sizeof(int32_t) + 15) & ~15);
-    int8_t *im2col_buf = (int8_t *)((uintptr_t)(aligned_filter + out_ch * window_len_aligned + 15) & ~15);
+    int8_t *aligned_filter = (int8_t *)((uintptr_t)((int8_t *)scratch + 15) & ~15);
+    int8_t *staging = aligned_filter + out_ch * window_len_aligned;
+    void *work = staging + ESP_NN_IM2COL_POSITIONS * window_len_aligned;
 
-    /* Pre-compute filter_sum * input_offset AND copy filter with zero-padded tail */
+    /* Filter rows at the staged layout, zero elsewhere. */
+    memset(aligned_filter, 0, out_ch * window_len_aligned);
     const int8_t *fptr = filter_data;
-    int8_t *af_ptr = aligned_filter;
     for (int32_t oc = 0; oc < out_ch; oc++) {
-        int32_t sum = 0;
-        for (int32_t fi = 0; fi < window_len; fi++) {
-            sum += fptr[fi];
+        int8_t *dst = aligned_filter + oc * window_len_aligned;
+        for (int32_t fy = 0; fy < filter_ht; fy++) {
+            memcpy(dst + fy * slot, fptr, head);
+            memcpy(dst + tail_base + fy * tail, fptr + head, tail);
+            fptr += row_bytes;
         }
-        filter_sum[oc] = sum * input_offset;
-        /* Copy filter + zero-pad tail for safe SIMD reads */
-        memcpy(af_ptr, fptr, window_len);
-        memset(af_ptr + window_len, 0, window_len_aligned - window_len);
-        fptr += window_len;
-        af_ptr += window_len_aligned;
     }
+    /* Clear the parts of the windows that no copy writes. */
+    memset(staging, 0, ESP_NN_IM2COL_POSITIONS * window_len_aligned);
 
-    /* Zero the tail of im2col buffer once (for aligned SIMD reads) */
-    memset(im2col_buf + window_len, 0, window_len_aligned - window_len);
+    /* A vector row copy also reads the aligned block after src. It is in
+     * the input only while src is below the last block. */
+    const int8_t *last_blk = (const int8_t *)(((uintptr_t)(input_data +
+            (int32_t)input_wd * input_ht * in_ch - 1)) & ~(uintptr_t)15);
 
-    /* Compute safe interior region where no bounds checking needed.
-     * Interior: all filter taps fall within valid input. */
-    const int32_t row_bytes = filter_wd * in_ch;
+    /* Interior region: all filter taps fall within valid input. */
     int32_t safe_y_start = (pad_ht + stride_ht - 1) / stride_ht;
     /* floor, not C truncation: the numerator is negative when an input side
      * is smaller than the filter, and truncation would mark a row/column as
@@ -470,72 +554,110 @@ static void esp_nn_conv_s8_im2col_s3(
     int32_t safe_y_end = esp_nn_floor_div_s32(input_ht - filter_ht + pad_ht, stride_ht) + 1;
     int32_t safe_x_start = (pad_wd + stride_wd - 1) / stride_wd;
     int32_t safe_x_end = esp_nn_floor_div_s32(input_wd - filter_wd + pad_wd, stride_wd) + 1;
-    if (safe_y_start > out_ht) safe_y_start = out_ht;
+    /* An interior run must not cross into the next output row. */
     if (safe_y_end > out_ht) safe_y_end = out_ht;
-    if (safe_y_end < safe_y_start) safe_y_end = safe_y_start;
-    if (safe_x_start > out_wd) safe_x_start = out_wd;
     if (safe_x_end > out_wd) safe_x_end = out_wd;
-    if (safe_x_end < safe_x_start) safe_x_end = safe_x_start;
 
-    /* Process each output pixel */
-    int8_t *out_ptr = out_data;
-    for (int32_t out_y = 0; out_y < out_ht; out_y++) {
-        const int32_t base_y = out_y * stride_ht - pad_ht;
-        int is_safe_y = (out_y >= safe_y_start && out_y < safe_y_end);
-
-        for (int32_t out_x = 0; out_x < out_wd; out_x++) {
+    const int32_t total = (int32_t)out_wd * out_ht;
+    const int32_t in_row = input_wd * in_ch;
+    const int32_t x_step = stride_wd * in_ch;
+    const int rows_3x9 = (filter_ht == 3 && row_bytes == 9);
+    int32_t out_y = 0, out_x = 0;
+    for (int32_t pos0 = 0; pos0 < total; pos0 += ESP_NN_IM2COL_POSITIONS) {
+        const int32_t n = min(ESP_NN_IM2COL_POSITIONS, total - pos0);
+        int8_t *row = staging;
+        for (int32_t k = 0; k < n; k++) {
+            const int32_t base_y = out_y * stride_ht - pad_ht;
             const int32_t base_x = out_x * stride_wd - pad_wd;
-
-            /* Copy input window into contiguous im2col buffer */
-            int8_t *buf = im2col_buf;
-
-            if (is_safe_y && out_x >= safe_x_start && out_x < safe_x_end) {
-                /* FAST PATH: interior pixel, no bounds checking needed.
-                 * All filter taps guaranteed to be within valid input. */
-                for (int32_t fy = 0; fy < filter_ht; fy++) {
-                    const int8_t *src = input_data + ((base_y + fy) * input_wd + base_x) * in_ch;
-                    memcpy(buf, src, row_bytes);
-                    buf += row_bytes;
+            const int is_safe = out_y >= safe_y_start && out_y < safe_y_end &&
+                    out_x >= safe_x_start && out_x < safe_x_end;
+            /* Only interior pixels read through src; edge pixels build their
+             * rows from in-bounds taps below. */
+            const int8_t *src = is_safe
+                                ? input_data + (base_y * input_wd + base_x) * in_ch
+                                : input_data;
+            if (is_safe && slot != row_bytes) {
+                /* Interior run of this output row inside the chunk: vector
+                 * head copies, no bounds tests. It stops before any pixel
+                 * whose last row copy would read past the input. */
+                int32_t run = min(n - k, safe_x_end - out_x);
+                int32_t run_left;
+                const int8_t *last_src = src + (filter_ht - 1) * in_row;
+                while (run > 0 && last_src + (run - 1) * x_step >= last_blk) {
+                    run--;
                 }
-            } else {
-                /* SLOW PATH: edge pixel, per-element bounds checking */
-                for (int32_t fy = 0; fy < filter_ht; fy++) {
-                    int32_t in_y = base_y + fy;
-                    if (in_y >= 0 && in_y < input_ht) {
-                        for (int32_t fx = 0; fx < filter_wd; fx++) {
-                            int32_t in_x = base_x + fx;
-                            if (in_x >= 0 && in_x < input_wd) {
-                                const int8_t *src = input_data + (in_y * input_wd + in_x) * in_ch;
-                                memcpy(buf, src, in_ch);
-                            } else {
-                                memset(buf, pad_val, in_ch);
-                            }
-                            buf += in_ch;
-                        }
-                    } else {
-                        memset(buf, pad_val, row_bytes);
-                        buf += row_bytes;
+                if (rows_3x9) {
+                    for (int32_t i = 0; i < run; i++) {
+                        esp_nn_im2col_copy_3x9(row, row + tail_base, src, in_row);
+                        src += x_step;
+                        row += window_len_aligned;
                     }
+                    run_left = 0;
+                } else {
+                    run_left = run;
+                }
+                for (int32_t i = 0; i < run_left; i++) {
+                    const int8_t *s = src;
+                    int8_t *buf = row;
+                    for (int32_t fy = 0; fy < filter_ht; fy++) {
+                        if (slot == 16) {
+                            esp_nn_copy16_to_aligned(buf, s);
+                        } else {
+                            esp_nn_copy8_to_aligned(buf, s);
+                            esp_nn_im2col_copy_bytes(row + tail_base + fy * tail,
+                                                     s + 8, tail);
+                        }
+                        s += in_row;
+                        buf += slot;
+                    }
+                    src += x_step;
+                    row += window_len_aligned;
+                }
+                if (run > 0) {
+                    k += run - 1;
+                    out_x += run;
+                    if (out_x == out_wd) {
+                        out_x = 0;
+                        out_y++;
+                    }
+                    continue;
                 }
             }
-
-            /* Dot product against each output channel's filter (aligned copy) */
-            const int32_t *out_mult_ptr = quant_data->mult;
-            const int32_t *out_shift_ptr = quant_data->shift;
-            const int8_t *filter_ptr = aligned_filter;
-
-            for (int32_t oc = 0; oc < out_ch; oc++) {
-                int32_t conv_out = esp_nn_dot_s8_aligned_esp32s3(im2col_buf, filter_ptr, window_len_aligned);
-                conv_out += filter_sum[oc];
-                if (bias) conv_out += bias[oc];
-                conv_out = esp_nn_requantize(conv_out, *out_mult_ptr++, *out_shift_ptr++);
-                conv_out += out_offset;
-                conv_out = max(conv_out, activation_min);
-                conv_out = min(conv_out, activation_max);
-                *out_ptr++ = (int8_t) conv_out;
-                filter_ptr += window_len_aligned;
+            for (int32_t fy = 0; fy < filter_ht; fy++) {
+                const int8_t *row_src = src + fy * in_row;
+                int8_t tmp[16];
+                if (!is_safe) {
+                    /* Edge pixel: build the row with pad cells. */
+                    const int32_t in_y = base_y + fy;
+                    for (int32_t fx = 0; fx < filter_wd; fx++) {
+                        const int32_t in_x = base_x + fx;
+                        if (in_y >= 0 && in_y < input_ht &&
+                                in_x >= 0 && in_x < input_wd) {
+                            memcpy(tmp + fx * in_ch,
+                                   input_data + (in_y * input_wd + in_x) * in_ch,
+                                   in_ch);
+                        } else {
+                            memset(tmp + fx * in_ch, pad_val, in_ch);
+                        }
+                    }
+                    row_src = tmp;
+                }
+                esp_nn_im2col_copy_bytes(row + fy * slot, row_src, head);
+                esp_nn_im2col_copy_bytes(row + tail_base + fy * tail,
+                                         row_src + head, tail);
+            }
+            row += window_len_aligned;
+            if (++out_x == out_wd) {
+                out_x = 0;
+                out_y++;
             }
         }
+        esp_nn_conv_s8_mult8_1x1_batched_tail(
+                staging, n, (uint16_t)window_len_aligned, input_offset,
+                aligned_filter, bias, out_data + pos0 * out_ch, out_ch,
+                conv_params->out_offset, quant_data->shift, quant_data->mult,
+                conv_params->activation.min, conv_params->activation.max,
+                work);
     }
 }
 
