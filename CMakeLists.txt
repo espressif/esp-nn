@@ -27,6 +27,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/common/esp_nn_dot_s8_esp32s3.S"
         "src/common/esp_nn_multiply_by_quantized_mult_esp32s3.S"
         "src/convolution/esp_nn_depthwise_conv_s8_kx1_esp32s3.S"
+        "src/convolution/esp_nn_depthwise_conv_s8_kxk_esp32s3.c"
         "src/common/esp_nn_multiply_by_quantized_mult_ver1_esp32s3.S"
         "src/activation_functions/esp_nn_relu_s8_esp32s3.S"
         "src/activation_functions/esp_nn_hard_swish_s8_esp32s3.c"

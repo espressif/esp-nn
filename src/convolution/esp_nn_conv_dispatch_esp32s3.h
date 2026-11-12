@@ -199,6 +199,78 @@ static inline int esp_nn_conv_scratch_size_esp32s3_impl(const data_dims_t *input
     return align_buf_size;
 }
 
+/* int8 KxK depthwise for ch_mult 1 (esp_nn_depthwise_conv_s8_kxk_esp32s3.c).
+ * 31 taps of the largest product (-128 * -128) are the most that always fit
+ * the 20-bit QACC lanes. */
+#define ESP_NN_DW_S8_KXK_MAX_TAPS  31
+/* Per 16-channel group, 16 int32 each of: rounding mask, half mask, right
+ * shift, mult, left shift, bias. */
+#define ESP_NN_DW_S8_KXK_REQ_BLOCK (6 * 16)
+
+static inline int esp_nn_dw_s8_kxk_eligible_esp32s3(const data_dims_t *filter_dims,
+                                                    const data_dims_t *input_dims,
+                                                    const dw_conv_params_t *conv_params)
+{
+    const int fw = filter_dims->width, fh = filter_dims->height;
+    const int ch = input_dims->channels;
+    /* Padded taps hold (int8_t)-in_offset, so in_offset must be in
+     * [-127, 128]. The clamp bounds are activation - out_offset, so the
+     * activation limits must be int8: wider ones (such as INT32_MIN for
+     * "no clamp") can overflow there. */
+    return conv_params->ch_mult == 1 && ch % 8 == 0 && ch >= 16 &&
+           fw * fh <= ESP_NN_DW_S8_KXK_MAX_TAPS &&
+           conv_params->in_offset >= -127 && conv_params->in_offset <= 128 &&
+           conv_params->activation.min >= -128 && conv_params->activation.max <= 127 &&
+           conv_params->dilation.width <= 1 && conv_params->dilation.height <= 1;
+}
+
+typedef struct {
+    int cs, taps, pad_right, padded_wd, row_bytes;
+    int filter_bytes, req_bytes, tmp_bytes;
+} esp_nn_dw_s8_kxk_layout_t;
+
+static inline void esp_nn_dw_s8_kxk_layout_esp32s3(const data_dims_t *input_dims,
+                                                   const data_dims_t *filter_dims,
+                                                   const data_dims_t *output_dims,
+                                                   const dw_conv_params_t *cp,
+                                                   esp_nn_dw_s8_kxk_layout_t *l)
+{
+    const int fw = filter_dims->width;
+    l->cs = (input_dims->channels + 15) & ~15;
+    l->taps = fw * filter_dims->height;
+    l->pad_right = max(0, (output_dims->width - 1) * cp->stride.width + fw
+                          - cp->padding.width - input_dims->width);
+    l->padded_wd = cp->padding.width + input_dims->width + l->pad_right;
+    l->row_bytes = l->padded_wd * l->cs;
+    l->filter_bytes = l->taps * l->cs;
+    l->req_bytes = l->cs / 16 * ESP_NN_DW_S8_KXK_REQ_BLOCK * 4;
+    l->tmp_bytes = output_dims->width * 16;
+}
+
+static inline int esp_nn_dw_s8_kxk_scratch_size_esp32s3(const data_dims_t *input_dims,
+                                                        const data_dims_t *filter_dims,
+                                                        const data_dims_t *output_dims,
+                                                        const dw_conv_params_t *conv_params)
+{
+    esp_nn_dw_s8_kxk_layout_t l;
+    esp_nn_dw_s8_kxk_layout_esp32s3(input_dims, filter_dims, output_dims, conv_params, &l);
+    /* each region is 16-byte aligned, the base too */
+    return 16 + ((l.filter_bytes + 15) & ~15) + l.req_bytes +
+           l.tmp_bytes + filter_dims->height * l.row_bytes;
+}
+
+/* esp_nn_depthwise_conv_s8_kxk_esp32s3.c */
+void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
+                              const int8_t *input_data,
+                              const data_dims_t *filter_dims,
+                              const int8_t *filter_data,
+                              const int32_t *bias,
+                              const data_dims_t *output_dims,
+                              int8_t *out_data,
+                              const dw_conv_params_t *conv_params,
+                              const quant_data_t *quant_data,
+                              void *scratch);
+
 /* Scratch requirement of esp_nn_depthwise_conv_s8_esp32s3(); see above. */
 static inline int esp_nn_depthwise_conv_scratch_size_esp32s3_impl(const data_dims_t *input_dims,
                                                                   const data_dims_t *filter_dims,
@@ -228,6 +300,11 @@ static inline int esp_nn_depthwise_conv_scratch_size_esp32s3_impl(const data_dim
             (out_wd == 1) && (stride_wd == 1) &&
             (pad_wd == 0) && (channels % 16 == 0)) {
         return channels * 4 + 2 * filter_ht * channels + 64;
+    }
+
+    if (esp_nn_dw_s8_kxk_eligible_esp32s3(filter_dims, input_dims, conv_params)) {
+        return esp_nn_dw_s8_kxk_scratch_size_esp32s3(input_dims, filter_dims,
+                                                     output_dims, conv_params);
     }
 
     int filter_size = filter_wd * filter_ht * channels * ch_mult;
