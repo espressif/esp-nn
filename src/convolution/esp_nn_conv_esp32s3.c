@@ -202,6 +202,15 @@ static void esp_nn_conv_s8_mult8_1x1_rows(
     }
 }
 
+extern int esp_nn_conv_s8_1x1_accx_esp32s3(const int8_t *input, int spatial,
+                                           uint16_t in_ch, int32_t in_offset,
+                                           const int8_t *filter, const int32_t *bias,
+                                           int8_t *out_data, uint16_t out_ch,
+                                           int32_t out_offset,
+                                           const int32_t *out_mult,
+                                           const int32_t *out_shift,
+                                           int32_t act_min, int32_t act_max);
+
 extern void esp_nn_conv_s8_1x1_1pos_esp32s3(const int8_t *input,
         uint16_t in_channels, int32_t input_offset, const int8_t *filter_data,
         const int32_t *bias, int8_t *out_data, uint16_t out_channels,
@@ -226,6 +235,23 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
         int32_t activation_min, int32_t activation_max, void *scratch,
         int table_ready)
 {
+    /* in_ch % 16 == 0: s8 MACs into ACCX, no scratch. It returns 0 for
+     * shapes or requant params outside its fast path. The panel, staged 3x3
+     * and im2col paths all come through here. Callers pass table_ready = 1
+     * for later chunks of the same channels. A 0 depends only on
+     * in_channels, the input alignment and the requant params, so it stays
+     * the same across those chunks. It returns -1 when it declines only
+     * for a short chunk, and then the asm must rebuild its table. */
+    int accx = esp_nn_conv_s8_1x1_accx_esp32s3(input, spatial_size,
+            in_channels, input_offset, filter_data, bias, out_data,
+            out_channels, out_offset, out_mult, out_shift, activation_min,
+            activation_max);
+    if (accx > 0) {
+        return;
+    }
+    if (accx < 0) {
+        table_ready = 0;
+    }
     const int tail = spatial_size & 7;
     /* The asm needs a 16-byte aligned buffer. The getter reserves the margin. */
     uint8_t *work = (uint8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);

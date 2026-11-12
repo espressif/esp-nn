@@ -116,10 +116,22 @@ static inline int esp_nn_3x3_large_filter(int in_channels, int out_channels)
     return (uint32_t)in_channels * out_channels > (64 * 1024) / 9;
 }
 
+/* Short windows stage twice the positions per pass, which halves the per-OC
+ * setup per output. The staging stays small enough that the scratch keeps
+ * under the 64 KB that would push it to PSRAM. */
+#define ESP_NN_3X3_BATCH_POSITIONS_SHORT    64
+#define ESP_NN_3X3_SHORT_STAGING_BYTES      (24 * 1024)
+
 static inline int esp_nn_3x3_batch_positions(int in_channels, int out_channels)
 {
-    return esp_nn_3x3_large_filter(in_channels, out_channels)
-            ? ESP_NN_3X3_BATCH_POSITIONS_LARGE : ESP_NN_3X3_BATCH_POSITIONS;
+    if (esp_nn_3x3_large_filter(in_channels, out_channels)) {
+        return ESP_NN_3X3_BATCH_POSITIONS_LARGE;
+    }
+    if (9 * in_channels * ESP_NN_3X3_BATCH_POSITIONS_SHORT <=
+            ESP_NN_3X3_SHORT_STAGING_BYTES) {
+        return ESP_NN_3X3_BATCH_POSITIONS_SHORT;
+    }
+    return ESP_NN_3X3_BATCH_POSITIONS;
 }
 
 /* Panel work area for one chunk of staged windows. A large filter gets the
