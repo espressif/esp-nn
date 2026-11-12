@@ -148,11 +148,10 @@ build_bench_app:
     - idf.py $BENCH_IDF_FLAGS set-target $TARGET build
     - done
 
-# esp-emu models esp32c3/c5/c6/h2/p4/s31; the other targets (incl. the
-# RISC-V esp32c2) stay build-only. It boots esp32s3 too, but has no ee.* SIMD
-# yet, so the S3 kernels fault on their first vector instruction. The job
-# installs the esp-emu release in ESP_EMU_VERSION, or the latest one when it
-# is empty. That release has to run every PIE instruction the kernels and
+# esp-emu models esp32c3/c5/c6/h2/p4/s3/s31; the other targets (incl. the
+# RISC-V esp32c2) stay build-only. 0.51.0 runs the S3 ee.* SIMD kernels. The
+# job installs the esp-emu release in ESP_EMU_VERSION, or the latest one when
+# it is empty. That release has to run every PIE instruction the kernels and
 # tests use. The
 # verdict is the app's TEST_RESULT line.
 emulate_tests:
@@ -166,7 +165,8 @@ emulate_tests:
     DEBIAN_FRONTEND: noninteractive
     # The esp-emu release, such as 1.2.0. Empty installs the latest release.
     ESP_EMU_VERSION: "1.2.0"
-  # 23+ emulated runs of up to EMU_TIMEOUT each, four at a time.
+  # 38 emulated runs of up to EMU_TIMEOUT each, four at a time: at most
+  # ceil(38 / 4) * 600 s = 100 min, inside the timeout.
   timeout: 2h
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'

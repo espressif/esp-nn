@@ -144,6 +144,8 @@ jobs:
   emulate:
     needs: build
     runs-on: ubuntu-latest
+    # 33 emulated runs of up to EMU_TIMEOUT each, four at a time: at most
+    # ceil(33 / 4) * 600 s = 90 min, inside the timeout.
     timeout-minutes: 120
     env:
       EMU_TIMEOUT: "600"
