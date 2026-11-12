@@ -483,7 +483,8 @@ void accx_large(const int8_t *input, int spatial, int in_ch,
  * exactly 6 blocks. Output channels run outermost, so each filter window is
  * read from memory once. Per chunk the filter blocks sit in q0-q5 while the
  * positions of each output row stream at stride step_x, two blocks ahead,
- * with partial sums through part[] as in accx_large.
+ * with partial sums through part[] as in accx_large. It writes out_ch
+ * channels; output positions are out_stride bytes apart.
  */
 void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
                                        int32_t padded_row, int in_ch,
@@ -492,7 +493,7 @@ void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
                                        const int8_t *filter,
                                        const int32_t *bias, int32_t in_offset,
                                        int8_t *out_data, int out_ch,
-                                       int32_t out_offset,
+                                       int out_stride, int32_t out_offset,
                                        const int32_t *out_shift,
                                        const int32_t *out_mult,
                                        int32_t act_min, int32_t act_max)
@@ -559,17 +560,17 @@ void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
                 const int32_t corr = b0 + in_offset * sum;
                 for (int r = 0; r < rows; r++) {
                     int8_t *out = out_data + oc
-                                  + ((int32_t)(oy + r) * out_wd + ox0) * out_ch;
+                                  + ((int32_t)(oy + r) * out_wd + ox0) * out_stride;
                     const int64_t *pr = part + r * seg;
                     if (fast) {
                         const int32_t rs = -shift;
                         const int32_t rr = accx_round_term(rs, out_offset);
                         const int32_t b4 = (int32_t)((uint32_t)corr << 2);
                         const int even = seg & ~1;
-                        accx_requant_pairs(pr, out, even, out_ch, b4, mult, rr,
+                        accx_requant_pairs(pr, out, even, out_stride, b4, mult, rr,
                                            rs + 1, act_min, act_max);
                         if (seg > even) {
-                            out[even * out_ch] = accx_requant_one(pr[even], b4, mult, rr,
+                            out[even * out_stride] = accx_requant_one(pr[even], b4, mult, rr,
                                                                   rs, act_min, act_max);
                         }
                         continue;
@@ -580,7 +581,7 @@ void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
                         acc += out_offset;
                         acc = acc < act_min ? act_min
                               : acc > act_max ? act_max : acc;
-                        out[i * out_ch] = (int8_t)acc;
+                        out[i * out_stride] = (int8_t)acc;
                     }
                 }
                 ox0 += seg;
