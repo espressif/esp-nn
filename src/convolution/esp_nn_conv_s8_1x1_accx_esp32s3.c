@@ -23,11 +23,16 @@
  *
  * Positions run in blocks of about 16 KB of input and output, all output
  * channels per block, so both blocks stay in the cache when in PSRAM.
+ *
+ * The file also holds the MAC loop of the small-map 3x3 kernel, which
+ * shares the chunked ACCX loops below.
  */
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_nn_conv_inline_esp32s3.h"
+#include "esp_nn_conv_dispatch_esp32s3.h"
 
 #define ACCX_MAX_BLOCKS 6
 /* Input + output bytes of one position block, kept within the D-cache.
@@ -329,8 +334,10 @@ static void accx_part_pairs(int nb, int first, const int8_t *in, int npos,
     }
 }
 
-/* One position, no load past its nb (4 to 6) blocks. */
-static void accx_part_one(int nb, const int8_t *in, int64_t *p)
+/* One position, no load past its nb (4 to 6) blocks. Inlined, so its
+ * second caller (the small-map kernel) leaves accx_large unchanged. */
+static inline __attribute__((always_inline))
+void accx_part_one(int nb, const int8_t *in, int64_t *p)
 {
     __asm__ volatile(
         "ee.ld.accx.ip %[p], 0\n"
@@ -357,11 +364,12 @@ static void accx_part_one(int nb, const int8_t *in, int64_t *p)
         : "memory");
 }
 
-/* Requant of an even number of partial sums, two per step. */
-static void accx_requant_pairs(const int64_t *p, int8_t *out, int npos,
-                               int32_t stride, int32_t b4, int32_t mult,
-                               int32_t r, int32_t sar, int32_t amin,
-                               int32_t amax)
+/* Requant of an even number of partial sums, two per step. Inlined into
+ * both callers, as accx_part_one. */
+static inline __attribute__((always_inline))
+void accx_requant_pairs(const int64_t *p, int8_t *out, int npos,
+                        int32_t stride, int32_t b4, int32_t mult,
+                        int32_t r, int32_t sar, int32_t amin, int32_t amax)
 {
     int32_t cnt = npos / 2;
     int32_t ta, tb, m = sar;
@@ -467,13 +475,128 @@ void accx_large(const int8_t *input, int spatial, int in_ch,
     }
 }
 
+
+/*
+ * 3x3 conv on a padded map that fits the cache, filter in PSRAM (see
+ * esp_nn_conv_s8_3x3_small_map_esp32s3.c). in_ch % 32 == 0, so each window
+ * row (3 * in_ch bytes, contiguous in the padded map) splits into chunks of
+ * exactly 6 blocks. Output channels run outermost, so each filter window is
+ * read from memory once. Per chunk the filter blocks sit in q0-q5 while the
+ * positions of each output row stream at stride step_x, two blocks ahead,
+ * with partial sums through part[] as in accx_large.
+ */
+void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
+                                       int32_t padded_row, int in_ch,
+                                       int32_t step_x, int32_t step_y,
+                                       int out_wd, int out_ht,
+                                       const int8_t *filter,
+                                       const int32_t *bias, int32_t in_offset,
+                                       int8_t *out_data, int out_ch,
+                                       int32_t out_offset,
+                                       const int32_t *out_shift,
+                                       const int32_t *out_mult,
+                                       int32_t act_min, int32_t act_max)
+{
+    int64_t part[ACCX_LARGE_BLOCK] __attribute__((aligned(16)));
+    int8_t row_copy[96] __attribute__((aligned(16)));
+    static const int8_t one = 1;
+    const int aligned = ((uintptr_t)filter & 15) == 0;
+    const int window = 9 * in_ch;
+    const int nchunk = window / 96;
+    const int row_chunks = nchunk / 3;
+    const int32_t skip = step_x - 80;
+
+    for (int oc = 0; oc < out_ch; oc++) {
+        const int8_t *frow = filter + (int32_t)oc * window;
+        const int32_t b0 = bias ? bias[oc] : 0;
+        const int32_t mult = out_mult[oc];
+        const int32_t shift = out_shift[oc];
+        /* Same bound as the 1x1 fast requant: |acc| < (K << 15) + |bias|. */
+        const int fast = shift <= -1 && shift >= -21 &&
+                         accx_fast_bound_ok(window, b0);
+        /* Blocks of whole output rows, at most 64 positions (one row if
+         * the row is longer: then the row runs in pieces). */
+        for (int oy = 0; oy < out_ht; ) {
+            int rows = ACCX_LARGE_BLOCK / out_wd;
+            rows = rows < 1 ? 1 : rows;
+            rows = rows > out_ht - oy ? out_ht - oy : rows;
+            for (int ox0 = 0; ox0 < out_wd; ) {
+                int seg = out_wd - ox0;
+                seg = seg > ACCX_LARGE_BLOCK ? ACCX_LARGE_BLOCK : seg;
+                const int8_t *base = padded + oy * step_y + ox0 * step_x;
+                const int8_t *src = frow;
+                int32_t sum = 0;
+                for (int c = 0; c < nchunk; c++, src += 96) {
+                    const int8_t *row = src;
+                    if (!aligned) {
+                        memcpy(row_copy, src, 96);
+                        row = row_copy;
+                    }
+                    sum += accx_load_row(row, 6, &one);
+                    const int ky = c / row_chunks;
+                    const int8_t *rowin = base + ky * padded_row
+                                          + (c - ky * row_chunks) * 96;
+                    int64_t *p = part;
+                    for (int r = 0; r < rows; r++, rowin += step_y) {
+                        if (seg >= 2) {
+                            const int8_t *in = rowin;
+                            int32_t cnt = (seg >> 1) - 1;
+                            if (c == 0) {
+                                ACCX_PART_LOOP_6("ee.zero.accx\n");
+                            } else {
+                                ACCX_PART_LOOP_6("ee.ld.accx.ip %[p], 0\n");
+                            }
+                        }
+                        if (seg & 1) {
+                            if (c == 0) {
+                                *p = 0;
+                            }
+                            accx_part_one(6, rowin + (seg - 1) * step_x, p);
+                            p++;
+                        }
+                    }
+                }
+                const int32_t corr = b0 + in_offset * sum;
+                for (int r = 0; r < rows; r++) {
+                    int8_t *out = out_data + oc
+                                  + ((int32_t)(oy + r) * out_wd + ox0) * out_ch;
+                    const int64_t *pr = part + r * seg;
+                    if (fast) {
+                        const int32_t rs = -shift;
+                        const int32_t rr = accx_round_term(rs, out_offset);
+                        const int32_t b4 = (int32_t)((uint32_t)corr << 2);
+                        const int even = seg & ~1;
+                        accx_requant_pairs(pr, out, even, out_ch, b4, mult, rr,
+                                           rs + 1, act_min, act_max);
+                        if (seg > even) {
+                            out[even * out_ch] = accx_requant_one(pr[even], b4, mult, rr,
+                                                                  rs, act_min, act_max);
+                        }
+                        continue;
+                    }
+                    for (int i = 0; i < seg; i++) {
+                        int32_t acc = esp_nn_requant_s3((int32_t)pr[i] + corr,
+                                                        mult, shift);
+                        acc += out_offset;
+                        acc = acc < act_min ? act_min
+                              : acc > act_max ? act_max : acc;
+                        out[i * out_ch] = (int8_t)acc;
+                    }
+                }
+                ox0 += seg;
+            }
+            oy += rows;
+        }
+    }
+}
+
 int esp_nn_conv_s8_1x1_accx_esp32s3(const int8_t *input, int spatial,
                                     uint16_t in_ch, int32_t in_offset,
                                     const int8_t *filter, const int32_t *bias,
                                     int8_t *out_data, uint16_t out_ch,
                                     int32_t out_offset,
-                                    const int32_t *out_mult,
                                     const int32_t *out_shift,
+                                    const int32_t *out_mult,
                                     int32_t act_min, int32_t act_max)
 {
     if (in_ch < 16 || in_ch % 16 != 0 || spatial < 1 ||

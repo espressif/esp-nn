@@ -54,8 +54,8 @@ static inline int32_t esp_nn_conv_s8_3x3_small_map_bytes(int in_channels, int ou
  * so both stay resident across the position loop. It only pays when the
  * whole filter does not fit the cache: a cached filter is cheap to
  * re-stream, and the staged path's batched dot is faster on short rows.
- * The kernel works on rows of 3 * in_channels bytes in 16-byte blocks, so
- * it needs in_channels % 16 == 0. */
+ * The kernel runs each window row in chunks of 6 blocks, so it needs
+ * in_channels % 32 == 0. */
 static inline int esp_nn_conv_s8_3x3_small_map_fits(int in_channels, int out_channels,
                                                      int out_wd, int out_ht,
                                                      int stride_wd, int stride_ht,
@@ -64,7 +64,7 @@ static inline int esp_nn_conv_s8_3x3_small_map_fits(int in_channels, int out_cha
     const int32_t map_bytes = esp_nn_conv_s8_3x3_small_map_bytes(in_channels, out_wd, out_ht,
                                                                  stride_wd, stride_ht);
     const int32_t filter_bytes = (int32_t)9 * in_channels * out_channels;
-    return (in_channels % 16) == 0
+    return in_channels % 32 == 0
            && map_bytes + 9 * in_channels <= cache_bytes
            && filter_bytes > cache_bytes;
 }
@@ -77,14 +77,46 @@ static inline int esp_nn_conv_s8_3x3_small_map_can_use(int in_channels, int out_
                                              stride_wd, stride_ht, ESP_NN_S3_DCACHE_BYTES);
 }
 
-/* Padded input + one aligned filter row + alignment slack. */
+/* Padded input + alignment slack. */
 static inline int esp_nn_conv_s8_3x3_small_map_scratch_size(int in_channels, int out_wd,
                                                              int out_ht, int stride_wd,
                                                              int stride_ht)
 {
     return esp_nn_conv_s8_3x3_small_map_bytes(in_channels, out_wd, out_ht, stride_wd, stride_ht)
-           + 9 * in_channels + 32;
+           + 16;
 }
+
+/* esp_nn_conv_s8_1x1_accx_esp32s3.c: s8 MACs into ACCX for in_ch % 16 == 0.
+ * Returns 1 when it ran, 0 when it declines, and -1 when it declines only
+ * for a short chunk (the asm table must then be rebuilt). */
+int esp_nn_conv_s8_1x1_accx_esp32s3(const int8_t *input, int spatial,
+                                    uint16_t in_ch, int32_t in_offset,
+                                    const int8_t *filter, const int32_t *bias,
+                                    int8_t *out_data, uint16_t out_ch,
+                                    int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    int32_t act_min, int32_t act_max);
+
+void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
+                                       int32_t padded_row, int in_ch,
+                                       int32_t step_x, int32_t step_y,
+                                       int out_wd, int out_ht,
+                                       const int8_t *filter,
+                                       const int32_t *bias, int32_t in_offset,
+                                       int8_t *out_data, int out_ch,
+                                       int32_t out_offset,
+                                       const int32_t *out_shift,
+                                       const int32_t *out_mult,
+                                       int32_t act_min, int32_t act_max);
+
+/* esp_nn_conv_s8_1x1_1pos_esp32s3.c: one position as a matrix-vector
+ * product. `work` is 16-byte aligned and holds in_channels bytes. */
+void esp_nn_conv_s8_1x1_1pos_esp32s3(const int8_t *input,
+        uint16_t in_channels, int32_t input_offset, const int8_t *filter_data,
+        const int32_t *bias, int8_t *out_data, uint16_t out_channels,
+        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max, int8_t *work);
 
 /* esp_nn_conv_s8_3x3_small_map_esp32s3.c */
 void esp_nn_conv_s8_3x3_small_map(const int8_t *input, uint16_t input_wd,

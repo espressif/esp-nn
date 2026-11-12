@@ -202,21 +202,6 @@ static void esp_nn_conv_s8_mult8_1x1_rows(
     }
 }
 
-extern int esp_nn_conv_s8_1x1_accx_esp32s3(const int8_t *input, int spatial,
-                                           uint16_t in_ch, int32_t in_offset,
-                                           const int8_t *filter, const int32_t *bias,
-                                           int8_t *out_data, uint16_t out_ch,
-                                           int32_t out_offset,
-                                           const int32_t *out_mult,
-                                           const int32_t *out_shift,
-                                           int32_t act_min, int32_t act_max);
-
-extern void esp_nn_conv_s8_1x1_1pos_esp32s3(const int8_t *input,
-        uint16_t in_channels, int32_t input_offset, const int8_t *filter_data,
-        const int32_t *bias, int8_t *out_data, uint16_t out_channels,
-        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
-        int32_t activation_min, int32_t activation_max, int8_t *work);
-
 /*
  * The assembly kernel runs positions in groups of eight. A tail of 2 to 7
  * positions is padded to one more group, so the weights stream only once.
@@ -244,7 +229,7 @@ static void esp_nn_conv_s8_mult8_1x1_batched_tail(
      * for a short chunk, and then the asm must rebuild its table. */
     int accx = esp_nn_conv_s8_1x1_accx_esp32s3(input, spatial_size,
             in_channels, input_offset, filter_data, bias, out_data,
-            out_channels, out_offset, out_mult, out_shift, activation_min,
+            out_channels, out_offset, out_shift, out_mult, activation_min,
             activation_max);
     if (accx > 0) {
         return;
