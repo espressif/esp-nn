@@ -148,10 +148,10 @@ build_bench_app:
     - idf.py $BENCH_IDF_FLAGS set-target $TARGET build
     - done
 
-# esp-emu 0.46 models esp32c3/c5/c6/h2/p4/s31; the other targets (incl. the
-# RISC-V esp32c2) stay build-only. It boots esp32s3 too, but has no ee.* SIMD
-# yet, so the S3 kernels fault on their first vector instruction. 0.41 lacked
-# esp.movx.r.cfg (the PIE CFG read). The verdict is the app's TEST_RESULT line.
+# esp-emu runs the esp32c3/c5/c6/h2/p4/s31 images; the other targets (incl.
+# the RISC-V esp32c2 and esp32s3) stay build-only. 1.0.0 is the first release
+# that boots the esp32s31 image on IDF master without a reboot loop. The
+# verdict is the app's TEST_RESULT line.
 emulate_tests:
   stage: test
   # Must be a glibc image, esp-emulator ships no musl build.
@@ -159,7 +159,7 @@ emulate_tests:
   tags:
     - build
   variables:
-    ESP_EMU_VERSION: "0.46.0"
+    ESP_EMU_VERSION: "1.0.0"
     EMU_TIMEOUT: "600"
     DEBIAN_FRONTEND: noninteractive
   # 23+ emulated runs of up to EMU_TIMEOUT each, four at a time.
