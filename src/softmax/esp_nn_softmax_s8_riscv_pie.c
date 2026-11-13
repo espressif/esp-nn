@@ -124,7 +124,7 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
             if (input_diff >= diff_min) {
                 const int32_t exp_raw = exp_lut[-input_diff];
                 const int32_t shifted_output = SAT_HIGH_MUL(shifted_scale, exp_raw);
-                const int32_t result = DIV_POW2(shifted_output, bits_over_unit) - 128;
+                const int32_t result = SOFTMAX_DIV_POW2(shifted_output, bits_over_unit) - 128;
                 out_ptr[col] = (int8_t) esp_nn_saturate8(result);
             } else {
                 out_ptr[col] = -128;

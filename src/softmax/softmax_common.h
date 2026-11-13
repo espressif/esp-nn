@@ -21,6 +21,28 @@
 #define SAT_HIGH_MUL(x, y)              esp_nn_sat_round_doubling_high_mul((x), (y))
 #define DIV_POW2(x,y)                   esp_nn_div_by_power_of_two((x), (y))
 
+/**
+ * @brief   Rounding division of a softmax output by `2^exponent`
+ *
+ * @param   val         scaled exponential, in [0, 2^31)
+ * @param   exponent    `bits_over_unit` of the row, in [1, 35]
+ * @return  `int32_t` result, the same as `esp_nn_div_by_power_of_two()` where that one is defined
+ * @note    The exponent grows with the sum of the row: it is 31 when that sum is 256 or more,
+ *          and 32 or more from 512, i.e. for a row with 512 values at its maximum.
+ *          `esp_nn_div_by_power_of_two()` shifts an `int32_t` and is only defined up to 30.
+ *          From 32, `val / 2^exponent` is below one half, so the result is 0.
+ */
+__NN_FORCE_INLINE__ int32_t esp_nn_softmax_div_by_power_of_two(int32_t val, int32_t exponent)
+{
+    if (exponent > 31) {
+        return 0;
+    }
+    /* val is not negative: round half up. The sum is below 2^31 + 2^30. */
+    return (int32_t) (((uint32_t) val + (1u << (exponent - 1))) >> exponent);
+}
+
+#define SOFTMAX_DIV_POW2(x,y)           esp_nn_softmax_div_by_power_of_two((x), (y))
+
 __NN_FORCE_INLINE__ int32_t mul_power_of_2(int val, int exp)
 {
     const int32_t thresh = ((1 << (31 - exp)) - 1);

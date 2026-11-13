@@ -83,6 +83,60 @@ softmax_cleanup:
 #define SM_SHIFT    23
 #define SM_DIFF_MIN -248
 
+/* A row where every value is at the maximum or one step (1/16) below it, so
+ * the sum of the row is large: the kernels divide by 2^31 when it is 256 or
+ * more, and by 2^32 or more from 512. Unlike run_softmax_test(), this checks
+ * both kernels against known outputs: `expected` for the values at the
+ * maximum, `expected_below` for the others. */
+static void run_softmax_wide_row_test(int32_t width, int32_t below_every,
+                                      int8_t expected, int8_t expected_below, int iter)
+{
+    void *scratch_buf_orig = NULL;
+    int8_t *input = malloc(width);
+    int8_t *out_ansi = malloc(width);
+    int8_t *out_opt = malloc(width);
+    if (input == NULL || out_ansi == NULL || out_opt == NULL) {
+        TEST_SKIP("softmax [%d] allocations failed\n", iter);
+        goto softmax_wide_row_cleanup;
+    }
+
+    for (int i = 0; i < width; ++i) {
+        input[i] = (below_every && (i % below_every) == below_every - 1) ? 99 : 100;
+    }
+
+    esp_nn_softmax_s8_ansi(input, 1, width, SM_MULT, SM_SHIFT, SM_DIFF_MIN, out_ansi);
+
+    int32_t scratch_buf_size = esp_nn_get_softmax_scratch_size(width, 1);
+    if (scratch_buf_size) {
+        scratch_buf_orig = malloc(scratch_buf_size * 4 + 16);
+        if (scratch_buf_orig == NULL) {
+            TEST_SKIP("softmax [%d] scratch alloc failed size %"PRIi32"\n",
+                      iter, scratch_buf_size);
+            goto softmax_wide_row_cleanup;
+        }
+        esp_nn_set_softmax_scratch_buf((void *)(((uint32_t) scratch_buf_orig + 15) & ~15));
+    }
+    esp_nn_softmax_s8(input, 1, width, SM_MULT, SM_SHIFT, SM_DIFF_MIN, out_opt);
+
+    for (int i = 0; i < width; ++i) {
+        const int8_t want = input[i] == 100 ? expected : expected_below;
+        if (out_ansi[i] != want || out_opt[i] != want) {
+            TEST_FAIL("softmax [%d] failed [wide row, w %"PRIi32", below every %"PRIi32"]: "
+                      "index %d, ansi %d, optimized %d, expected %d\n",
+                      iter, width, below_every, i, out_ansi[i], out_opt[i], want);
+            goto softmax_wide_row_cleanup;
+        }
+    }
+    TEST_PASS("softmax [%2d] passed [wide row, w %"PRIi32", below every %"PRIi32"]\n",
+              iter, width, below_every);
+
+softmax_wide_row_cleanup:
+    if (input) free(input);
+    if (out_ansi) free(out_ansi);
+    if (out_opt) free(out_opt);
+    if (scratch_buf_orig) free(scratch_buf_orig);
+}
+
 void esp_nn_softmax_s8_test()
 {
     int iter = 0;
@@ -123,4 +177,15 @@ void esp_nn_softmax_s8_test()
      * find-max, which must not issue unaligned ee.vld.128 loads. */
     run_softmax_test(8, 36, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     run_softmax_test(4, 1000, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    /* Row sums from 256 (division by 2^31) and from 512 (by 2^32 and 2^33,
+     * where every probability is below half an output step). */
+    run_softmax_wide_row_test(256, 0, -127, -127, iter++);
+    run_softmax_wide_row_test(511, 0, -127, -127, iter++);
+    run_softmax_wide_row_test(511, 2, -127, -128, iter++);
+    run_softmax_wide_row_test(400, 2, -127, -127, iter++);
+    run_softmax_wide_row_test(512, 0, -128, -128, iter++);
+    run_softmax_wide_row_test(1000, 0, -128, -128, iter++);
+    run_softmax_wide_row_test(1000, 2, -128, -128, iter++);
+    run_softmax_wide_row_test(1024, 0, -128, -128, iter++);
+    run_softmax_wide_row_test(2048, 3, -128, -128, iter++);
 }

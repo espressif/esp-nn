@@ -76,7 +76,7 @@ void esp_nn_softmax_s8_ansi(const int8_t *input_data,
                 const int32_t input_diff_rescaled = SAT_HIGH_MUL(input_diff * mask, mult);
                 const int32_t exp_raw = esp_nn_exp_on_negative_values(input_diff_rescaled);
                 const int32_t shifted_output = SAT_HIGH_MUL(shifted_scale, exp_raw);
-                const int32_t result = DIV_POW2(shifted_output, bits_over_unit) - 128;
+                const int32_t result = SOFTMAX_DIV_POW2(shifted_output, bits_over_unit) - 128;
                 out_ptr[col] = (int8_t) esp_nn_saturate8(result);
             } else {
                 out_ptr[col] = -128;
