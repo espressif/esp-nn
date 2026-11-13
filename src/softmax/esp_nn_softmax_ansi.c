@@ -55,17 +55,18 @@ void esp_nn_softmax_s8_ansi(const int8_t *input_data,
         }
 
         int32_t input_diff = 0;
-        int32_t sum_of_exps = 0;
+        int64_t sum_of_exps_64 = 0; /* 4096 values at the maximum pass INT32_MAX */
 
         for (col = 0; col < width; col++) {
             input_diff = in_ptr[col] - max_in_row;
             if (input_diff >= diff_min) {
                 const int32_t input_diff_rescaled = SAT_HIGH_MUL(input_diff * mask, mult);
                 const int32_t exp_raw = esp_nn_exp_on_negative_values(input_diff_rescaled);
-                sum_of_exps += DIV_POW2(exp_raw, ACCUM_BITS);
+                sum_of_exps_64 += DIV_POW2(exp_raw, ACCUM_BITS);
             }
         }
 
+        const int32_t sum_of_exps = esp_nn_softmax_clamp_sum(sum_of_exps_64);
         const int32_t headroom_plus1 = esp_nn_clz32((uint32_t) sum_of_exps);
         const int32_t shifted_scale = ONE_OVER_ONE_X((int32_t) ((uint32_t) sum_of_exps << headroom_plus1) - INT32_MIN);
         const int32_t bits_over_unit = ACCUM_BITS - headroom_plus1 + 31 - sizeof(int8_t) * 8;

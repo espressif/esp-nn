@@ -108,7 +108,7 @@ static void run_softmax_wide_row_test(int32_t width, int32_t below_every,
 
     int32_t scratch_buf_size = esp_nn_get_softmax_scratch_size(width, 1);
     if (scratch_buf_size) {
-        scratch_buf_orig = malloc(scratch_buf_size * 4 + 16);
+        scratch_buf_orig = malloc(scratch_buf_size + 16);
         if (scratch_buf_orig == NULL) {
             TEST_SKIP("softmax [%d] scratch alloc failed size %"PRIi32"\n",
                       iter, scratch_buf_size);
@@ -188,4 +188,9 @@ void esp_nn_softmax_s8_test()
     run_softmax_wide_row_test(1000, 2, -128, -128, iter++);
     run_softmax_wide_row_test(1024, 0, -128, -128, iter++);
     run_softmax_wide_row_test(2048, 3, -128, -128, iter++);
+    /* 4096 values at the maximum and more: the row sum passes INT32_MAX,
+     * and 2^32 from 8192. */
+    run_softmax_wide_row_test(4096, 0, -128, -128, iter++);
+    run_softmax_wide_row_test(8192, 0, -128, -128, iter++);
+    run_softmax_wide_row_test(8193, 0, -128, -128, iter++);
 }

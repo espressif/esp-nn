@@ -109,12 +109,13 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
         }
 
         /* Phase 2: Sum the (precomputed) exp values */
-        int32_t sum_of_exps = 0;
+        int64_t sum_of_exps_64 = 0; /* 4096 values at the maximum pass INT32_MAX */
         for (col = 0; col < width; col++) {
-            sum_of_exps += exp_sum_lut[max_in_row - in_ptr[col]];
+            sum_of_exps_64 += exp_sum_lut[max_in_row - in_ptr[col]];
         }
 
         /* Phase 3: Normalize */
+        const int32_t sum_of_exps = esp_nn_softmax_clamp_sum(sum_of_exps_64);
         const int32_t headroom_plus1 = esp_nn_clz32((uint32_t) sum_of_exps);
         const int32_t shifted_scale = ONE_OVER_ONE_X((int32_t) ((uint32_t) sum_of_exps << headroom_plus1) - INT32_MIN);
         const int32_t bits_over_unit = ACCUM_BITS - headroom_plus1 + 31 - sizeof(int8_t) * 8;

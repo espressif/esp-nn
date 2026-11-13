@@ -43,6 +43,20 @@ __NN_FORCE_INLINE__ int32_t esp_nn_softmax_div_by_power_of_two(int32_t val, int3
 
 #define SOFTMAX_DIV_POW2(x,y)           esp_nn_softmax_div_by_power_of_two((x), (y))
 
+/**
+ * @brief   Bring the 64-bit sum of a row back to the `int32_t` the kernels work with
+ *
+ * @param   sum     sum of the scaled exponentials of the row, not negative
+ * @return  `sum`, or `INT32_MAX` when it is larger
+ * @note    Each value at the row maximum adds 2^19, so the sum passes `INT32_MAX` from 4096 of them.
+ *          Every output of the row is already -128 from a sum of 2^28 (`bits_over_unit` 32 and
+ *          above), so the clamp does not change the result.
+ */
+__NN_FORCE_INLINE__ int32_t esp_nn_softmax_clamp_sum(int64_t sum)
+{
+    return sum > INT32_MAX ? INT32_MAX : (int32_t) sum;
+}
+
 __NN_FORCE_INLINE__ int32_t mul_power_of_2(int val, int exp)
 {
     const int32_t thresh = ((1 << (31 - exp)) - 1);
