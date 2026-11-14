@@ -749,7 +749,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         for (int i = 0; i < B * row_len; i++)     input[i]  = rand() % 256 - 128;
         for (int i = 0; i < row_len * out_ch; i++) filter[i] = rand() % 256 - 128;
 
-        /* batched: one weight-stationary pass over all rows */
+        /* batched call. S3 is weight-stationary; P4 and S31 loop the per-row PIE kernel. */
         esp_nn_fully_connected_per_ch_s8_batch(input, input_offset, row_len, filter,
                 filter_offset, NULL, out_batched, out_ch, out_offset, out_shift,
                 out_mult, activation_min, activation_max, B);
@@ -849,14 +849,14 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         { "misalign_m16_k64_n64", 16, 64, 64, 128, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0 },
         { "noscratch_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 },
         { "tiny_m2_k32_n32",    2,  32,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "edge_m3_k8_n8",      3,   8,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
+        { "edge_m3_k8_n8",      3,   8,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0 },
         { "odd_m3_k40_n8",      3,  40,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
         { "out4_m4_k64_n4",     4,  64,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "m1_k8_n4",           1,   8,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "odd_m1_k40_n4",      1,  40,   4,   5, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "dual_m1_k128_n256",  1, 128, 256, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0 },
+        { "m1_k8_n4",           1,   8,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
+        { "odd_m1_k40_n4",      1,  40,   4,   5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
+        { "dual_m1_k128_n256",  1, 128, 256, 128, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0 },
         { "dual_m2_k256_n128",  2, 256, 128, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0 },
-        { "oddrow_m1_k41_n640", 1,  41, 640, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
+        { "oddrow_m1_k41_n640", 1,  41, 640, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
         { "nodual_m2_k128_n32", 2, 128,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
         { "below_m4_k7_n16",    4,   7,  16, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
         { "s3out_m4_k16_n7",    4,  16,   7, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
@@ -865,7 +865,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         { "short_m16_k64_n64", 16,  64,  64, 128, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0 },
         { "unsized_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 3, 1, 0, 0, 0, 0, 0 },
         { "misfilt_m16_k64_n64", 16, 64, 64, 128, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0 },
-        { "zero_in_m4_k8_n8",   4,   8,   8,   0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
+        { "zero_in_m4_k8_n8",   4,   8,   8,   0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0 },
         { "inoff_m3_k9_n8",     3,   9,   8,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
     };
     const int n_cfg = (int) (sizeof(cfg) / sizeof(cfg[0]));
