@@ -85,7 +85,8 @@ void esp_nn_fully_connected_per_ch_s8_ansi(const int8_t *input_data,
 }
 
 /* Portable reference for the batched per-channel FC API: loop the per-row
- * kernel. Optimized targets override the macro with a weight-stationary impl. */
+ * reference. S3 overrides the macro with a weight-stationary kernel. P4 and
+ * S31 override it with a loop of the per-row PIE kernel. */
 void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,

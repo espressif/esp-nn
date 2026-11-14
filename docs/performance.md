@@ -53,24 +53,20 @@ The "Memory" column says where the tensors were.
 
 ### Batched Fully Connected (Weight Zero-Point 0)
 
-Times are in microseconds (µs) for one batched call. Before uses the existing ESP-NN batched fully connected implementation: the optimized weight-stationary kernel on ESP32-S3 and the portable ANSI C implementation on ESP32-P4. The P4 also has an optimized single-row PIE kernel, but its existing batched API does not use it. After uses the optimized 1×1 convolution path for batched fully connected operations with weight zero-point 0. ESP32-S3 is revision v0.2 at 240 MHz. ESP32-P4 is revision v1.3 at 360 MHz.
-
-The Cores column indicates the number of cores used by the new 1×1 convolution path with multicore enabled. On ESP32-S3, the second core requires more than 24 KiB of int8 weights and at least 32 output channels. On ESP32-P4, it requires a batch of at least 4 rows. Both chips fall back to single-core execution if the worker cannot be claimed or its scratch buffer is insufficient.
-
-| Chip | Shape | Before (µs) | After (µs) | Gain | Cores |
-| ---- | ----- | ----------: | ---------: | ---: | ----: |
-| ESP32-S3 | 16×64×64 | 554 | 196 | 2.8× | 1 |
-| ESP32-S3 | 32×64×128 | 2149 | 771 | 2.8× | 1 |
-| ESP32-S3 | 4×128×192 | 563 | 385 | 1.5× | 1 |
-| ESP32-S3 | 4×128×200 | 586 | 283 | 2.1× | 2 |
-| ESP32-S3 | 48×160×32 | 993 | 441 | 2.3× | 1 |
-| ESP32-S3 | 64×128×256 | 9848 | 2615 | 3.8× | 2 |
-| ESP32-P4 | 16×64×64 | 1819 | 159 | 11.4× | 2 |
-| ESP32-P4 | 32×64×128 | 7281 | 325 | 22.4× | 2 |
-| ESP32-P4 | 4×128×192 | 2593 | 155 | 16.7× | 2 |
-| ESP32-P4 | 4×128×200 | 2701 | 161 | 16.8× | 2 |
-| ESP32-P4 | 48×160×32 | 6426 | 226 | 28.5× | 2 |
-| ESP32-P4 | 64×128×256 | 55326 | 1382 | 40.0× | 2 |
+| Chip | Data info | ANSI C | Optimized | Ratio | Cores | Memory |
+| ---- | --------- | -----: | --------: | ----: | ----: | ------ |
+| ESP32-S3 | batch: 16, len: 64, ch: 64 | 753650 | 47009 | 16.03 | 1 | Internal |
+| ESP32-S3 | batch: 32, len: 64, ch: 128 | 3014051 | 185091 | 16.28 | 1 | Internal |
+| ESP32-S3 | batch: 4, len: 128, ch: 192 | 1056319 | 92467 | 11.42 | 1 | Internal |
+| ESP32-S3 | batch: 4, len: 128, ch: 200 | 1101840 | 74237 | 14.84 | 2 | Internal |
+| ESP32-S3 | batch: 48, len: 160, ch: 32 | 2607913 | 105845 | 24.64 | 1 | Internal |
+| ESP32-S3 | batch: 64, len: 128, ch: 256 | 22544943 | 618391 | 36.46 | 2 | Internal |
+| ESP32-P4 | batch: 16, len: 64, ch: 64 | 657470 | 62621 | 10.50 | 2 | Internal |
+| ESP32-P4 | batch: 32, len: 64, ch: 128 | 2632680 | 131883 | 19.96 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 192 | 936243 | 61539 | 15.21 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 200 | 975182 | 63822 | 15.28 | 2 | Internal |
+| ESP32-P4 | batch: 48, len: 160, ch: 32 | 2318600 | 91881 | 25.23 | 2 | Internal |
+| ESP32-P4 | batch: 64, len: 128, ch: 256 | 19977571 | 516458 | 38.68 | 2 | Internal |
 
 ## Elementwise Add
 
