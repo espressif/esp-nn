@@ -861,6 +861,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         {  8,  80,  8, -3, 0,  0, 0, 0 },
         {  4,  33,  5,  7, 0,  0, 0, 0 },   /* non-multiple-of-16 row_len -> scalar tail */
         {  1, 128, 12, 11, 0,  0, 0, 0 },   /* single row */
+        {  1, 256, 16, 128, 0,  0, 0, 0 }, /* single row: per-row one-pass path */
         {  4,  64,  8,  5, 8,  4, 0, 0 },   /* neither operand 16-aligned: per-row s16 fallback */
         {  4,  64,  8, -3, 4,  4, 0, 0 },   /* input 4-mod-8: per-row ANSI fallback */
         {  4,  64,  8,  5, 0,  4, 0, 0 },   /* fast path, unaligned filter rows */

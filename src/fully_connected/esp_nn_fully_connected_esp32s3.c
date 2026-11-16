@@ -332,14 +332,14 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
-    /* Same eligibility as the per-row fast path, except that each filter-row
-     * sum is shared by all input rows here, so for batches > 1 its cost is
-     * amortised and the offset-free threshold applies. The dot needs one
-     * operand 16-byte aligned (input rows are the common case). Otherwise
-     * defer to the per-row kernel, which further dispatches to s16 asm / ansi
-     * as needed. */
-    const int32_t gate_offset = (batches > 1) ? 0 : input_offset;
-    if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, gate_offset)
+    /* One row has nothing to share, so it takes the per-row kernel and its
+     * one-pass path. For more rows, each filter-row sum is shared by all of
+     * them, so its cost is amortised and the offset-free threshold applies.
+     * The dot needs one operand 16-byte aligned (input rows are the common
+     * case). Otherwise defer to the per-row kernel, which further dispatches
+     * to s16 asm / ansi as needed. */
+    if (__builtin_expect(batches == 1 || filter_offset != 0
+        || !fc_dot_path_wins(row_len, 0)
         || (!input_aligned && !filter_rows_aligned), 0)) {
         for (int32_t b = 0; b < batches; b++) {
             esp_nn_fully_connected_per_ch_s8_esp32s3(
