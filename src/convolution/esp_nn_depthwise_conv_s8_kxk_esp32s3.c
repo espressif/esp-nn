@@ -27,6 +27,8 @@
  *   256 left_shift  320 bias with the offset folded in, times 2 when
  *   req_ctl bit 8 is clear (the fast requant takes 2x) */
 #define KXK_REQ_BLOCK       ESP_NN_DW_S8_KXK_REQ_BLOCK
+/* Index of the bias row in a requant block: 5 rows of 16 int32 come first */
+#define KXK_REQ_BIAS        (5 * 16)
 
 /* ------------------------------------------------------------ Row kernel --
  *
@@ -745,7 +747,7 @@ typedef struct {
     const int8_t *input;
     int input_wd, input_ht, channels, pad_wd, pad_ht, stride_ht, row_bytes;
     int8_t pad_val;
-    int req_general; /* some channel shifts left or has a large bias */
+    const uint8_t *req_general; /* per 16-channel group: some channel shifts left or has a large bias */
     const int8_t *filter;
     const int32_t *req;
     int8_t *out_data;
@@ -831,15 +833,21 @@ static void kxk_rows(dw_kxk_job_t *j)
         int8_t *out_row = j->out_data + out_y * out_wd * channels;
         for (int ch = 0; ch < cs; ch += r.g_left * 16) {
             const int n_ch = min(16, channels - ch);
-            /* Direct stores run all full groups in one call. The 8-channel
-             * tail group has its own req_ctl and store. */
-            const int ch_end = direct && n_ch == 16 ? channels & ~15 : ch + 16;
+            const int general = j->req_general[ch >> 4];
+            /* Direct stores run the full groups that share a requant in one
+             * call. The 8-channel tail group has its own req_ctl and store. */
+            int ch_end = ch + 16;
+            if (direct && n_ch == 16) {
+                while (ch_end < (channels & ~15) && j->req_general[ch_end >> 4] == general) {
+                    ch_end += 16;
+                }
+            }
             r.g_left = (ch_end - ch) >> 4;
             r.g_off = ch;
             r.g_req = j->req + (ch >> 4) * KXK_REQ_BLOCK;
             r.filter = j->filter + ch;
             /* an 8-channel group requants lanes 0-7 only */
-            r.req_ctl = (n_ch > 8 ? 4 : 2) | (j->req_general ? 1 << 8 : 0);
+            r.req_ctl = (n_ch > 8 ? 4 : 2) | (general ? 1 << 8 : 0);
             r.hstep = n_ch > 8 ? 32 : 0;
             if (direct) {
                 r.out = out_row + ch;
@@ -864,23 +872,31 @@ static void kxk_rows(dw_kxk_job_t *j)
     }
 }
 
-static uint32_t kxk_req_build(int32_t *req, int channels, int cs, const int32_t *bias,
-                              const quant_data_t *q, int32_t input_offset)
+/* Fills the requant blocks and, per 16-channel group, whether it takes the
+ * general requant. The fast requant takes 2 * (sum + bias), so a fast
+ * group's bias row holds 2 * bias. Choosing per group keeps a few channels
+ * that shift left (int4 weights have larger scales) from slowing the whole
+ * layer. */
+static void kxk_req_build(int32_t *req, uint8_t *general, int channels, int cs,
+                          const int32_t *bias, const quant_data_t *q, int32_t input_offset)
 {
     static const int32_t zeros[16];
-    uint32_t general = 0;
     for (int g = 0; g < cs; g += 16, req += KXK_REQ_BLOCK) {
         const int n = min(16, channels - g);
-        general |= kxk_req_lanes(req, q->mult + g, q->shift + g,
-                                 bias ? bias + g : zeros, n, input_offset);
+        general[g >> 4] = kxk_req_lanes(req, q->mult + g, q->shift + g,
+                                        bias ? bias + g : zeros, n, input_offset) != 0;
         /* padding lanes: mult 0 and no shift */
         for (int k = n; k < 16; k++) {
             for (int r = 0; r < KXK_REQ_BLOCK; r += 16) {
                 req[k + r] = 0;
             }
         }
+        if (!general[g >> 4]) {
+            for (int k = 0; k < 16; k++) {
+                req[KXK_REQ_BIAS + k] *= 2;
+            }
+        }
     }
-    return general;
 }
 
 static void kxk_worker(void *arg)
@@ -912,8 +928,9 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
 
     int8_t *base = (int8_t *)(((uintptr_t)scratch + 15) & ~(uintptr_t)15);
     int8_t *filt = base;
-    int32_t *req = (int32_t *)(filt + ((l.filter_bytes + 15) & ~15));
-    int8_t *tmp = (int8_t *)req + l.req_bytes;
+    int32_t *req = (int32_t *)(filt + l.filter_bytes);
+    uint8_t *req_general = (uint8_t *)req + l.req_bytes;
+    int8_t *tmp = (int8_t *)req_general + l.flag_bytes;
     /* the fh padded rows the current output row needs, in a ring */
     int8_t *ring = tmp + l.tmp_bytes;
 
@@ -934,20 +951,11 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
     for (int c = 0; c < cs; c += 16) {
         /* filter sums into the bias slot, 16 lanes per QACC pass */
         esp_nn_qacc_lane_sum_s8_esp32s3(filter + c, cs, l.taps,
-                                        req + (c >> 4) * KXK_REQ_BLOCK + 80);
+                                        req + (c >> 4) * KXK_REQ_BLOCK + KXK_REQ_BIAS);
     }
     /* The fast requant needs |x| < 2^30. The raw sum is below 2^19 (31 taps
      * of -128 * -128), so a bias within 2^29 is enough. */
-    const int req_general = kxk_req_build(req, channels, cs, bias, quant_data,
-                                          input_offset) != 0;
-    /* The fast requant takes 2 * (sum + bias), so its bias row holds 2 * bias. */
-    if (!req_general) {
-        for (int i = 80; i < cs / 16 * KXK_REQ_BLOCK; i += KXK_REQ_BLOCK) {
-            for (int k = 0; k < 16; k++) {
-                req[i + k] *= 2;
-            }
-        }
-    }
+    kxk_req_build(req, req_general, channels, cs, bias, quant_data, input_offset);
 
     dw_kxk_job_t job = {
         .input = input_data,
@@ -981,7 +989,7 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
      * half of the output rows with its own ring. Filter and requant blocks
      * are shared. */
     if (out_ht >= 2 && esp_nn_dual_core_begin()) {
-        int8_t *wbuf = esp_nn_dual_core_scratch(16 + l.tmp_bytes + fh * l.row_bytes);
+        int8_t *wbuf = esp_nn_dual_core_scratch(16 + l.tmp_bytes + l.ring_bytes);
         if (wbuf != NULL) {
             dw_kxk_job_t wjob = job;
             wjob.y_end = out_ht / 2;
