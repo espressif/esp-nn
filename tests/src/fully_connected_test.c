@@ -46,7 +46,7 @@ void esp_nn_fully_connected_s8_test()
     int32_t out_offset = 5;
     int32_t out_mult = 0x59e492c4;
     /* sweep input_offset over realistic TFLite range incl. boundaries */
-    const int32_t input_offsets[] = {0, 5, -1, 1, 127, -128, 110};
+    const int32_t input_offsets[] = {0, 5, -1, 1, 127, -128, 110, 128};
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     for (int itr = 0; itr < 15; itr++) {
         input_offset = input_offsets[itr % (int)(sizeof(input_offsets) / sizeof(input_offsets[0]))];
@@ -194,7 +194,7 @@ void esp_nn_fully_connected_per_ch_s8_test()
     int32_t* out_mult = NULL;
     int32_t* out_shift = NULL;
 
-    const int32_t input_offsets[] = {0, 5, -1, 1, 127, -128, 110};
+    const int32_t input_offsets[] = {0, 5, -1, 1, 127, -128, 110, 128};
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     for (int itr = 0;  itr < 15; itr++) {
         input_offset = input_offsets[itr % (int)(sizeof(input_offsets) / sizeof(input_offsets[0]))];
@@ -631,6 +631,8 @@ void esp_nn_fully_connected_large_s8_test()
         { 128, 256, -3 },
         {  64, 256, -3 },
         { 128, 256,  0 },
+        { 512, 128, 128 },
+        { 200,  64, 128 },
     };
     const int32_t filter_offset = 0;    /* symmetric weights, as real int8 models */
     const int32_t out_mult = 1355715584, out_shift = -6;
