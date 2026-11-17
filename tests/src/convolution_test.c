@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 53; itr++) {
+    for (int itr = 0; itr < 67; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -646,6 +646,36 @@ void esp_nn_depthwise_conv_s8_test()
             force_out_wd = 8;
             force_out_ht = 8;
             break;
+        /* 60-66: the P4/S31 ch_mult 1 kernel. 60-63 cover its square 5x5
+         * pipeline and partial channel blocks, whose 16-byte output stores
+         * land at odd addresses. 64-66 cover the edges of its vector requant. */
+        case 60: // 5x5, 32 channels, pad 2
+            input_wd = 9; input_ht = 9; filter_ht = 5; filter_wd = 5;
+            ch_mult = 1; channels = 32; pad_wd = 2; pad_ht = 2;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 61: // 5x5, 25 channels (a 9-channel last block), pad 2, stride 2
+            input_wd = 11; input_ht = 11; filter_ht = 5; filter_wd = 5;
+            ch_mult = 1; channels = 25; pad_wd = 2; pad_ht = 2;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 62: // 3x3, 20 channels (a 4-channel tail), pad 1
+            input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 20; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 63: // 3x3, 44 channels (a 12-channel last block), no pad
+            input_wd = 7; input_ht = 7; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 44; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 64: // 3x3 pad 1, shifts -15 to -20 and multipliers just inside the fast range
+        case 65: // as 64, multipliers past the fast range and one shift of -21
+        case 66: // 3x3 pad 1, in_offset 128: pad taps are -128
+            input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 32; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -750,6 +780,13 @@ void esp_nn_depthwise_conv_s8_test()
                 const int32_t step = ((i % 4) - 2) * 300000;
                 bias[i + 1] = (i & 1) ? (1 << 29) + step : -(1 << 29) - step;
             }
+            if (itr == 64) {
+                out_shift[i] = -15 - rand() % 6;
+                out_mult[i] = 0x7fff7f00 + rand() % 0x100;
+            } else if (itr == 65) {
+                out_shift[i] = -15 - rand() % 6;
+                out_mult[i] = 0x7fff8000 + rand() % 50;
+            }
         }
         if (itr == 42) {
             for (int i = 0; i < in_size; ++i) {
@@ -759,11 +796,14 @@ void esp_nn_depthwise_conv_s8_test()
                 filter_data[i] = -128;
             }
         }
+        if (itr == 65) {
+            out_shift[channels * ch_mult - 1] = -21;
+        }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
         data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
-        const int32_t test_input_offset = itr == 21 ? 0 : input_offset;
+        const int32_t test_input_offset = itr == 21 ? 0 : itr == 66 ? 128 : input_offset;
         const int32_t test_act_min = itr == 45 ? INT32_MIN : activation_min;
         const int32_t test_act_max = itr == 45 ? INT32_MAX : activation_max;
         dw_conv_params_t conv_params = {.in_offset = test_input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
