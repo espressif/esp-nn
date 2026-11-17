@@ -186,6 +186,22 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
     ); \
 } while(0)
 
+/** Load 16 int32 lanes into QACC from an array: the reverse of
+ * ESP_NN_QACC_EXTRACT_S32. src is 16-byte aligned. The "m" operand names
+ * the 64 bytes read, so the compiler keeps earlier stores to them before
+ * the load without treating it as a full memory barrier. */
+#define ESP_NN_QACC_LOAD_S32(src) do { \
+    asm volatile ( \
+        "mv                      x30, %0     \n\t" \
+        "esp.ld.qacc.l.l.128.ip  x30, 16     \n\t" \
+        "esp.ld.qacc.l.h.128.ip  x30, 16     \n\t" \
+        "esp.ld.qacc.h.l.128.ip  x30, 16     \n\t" \
+        "esp.ld.qacc.h.h.128.ip  x30, 0      \n\t" \
+        :: "r"(src), "m"(*(const int32_t (*)[16])(src)) \
+        : "x30" \
+    ); \
+} while(0)
+
 /*
  * Wrap an esp.lp.setup hardware loop in inline asm:
  *
