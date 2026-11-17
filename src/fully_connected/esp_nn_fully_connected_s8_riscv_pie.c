@@ -106,6 +106,20 @@ int32_t fc_dot_s8_pie(const int8_t *input, const int8_t *filter, int32_t row_len
     return result;
 }
 
+/* Requantize, add the output offset, clamp, and narrow to s8. Shared by
+ * the per-tensor, per-channel, and batch kernels so a fix to this step
+ * lands in one place. */
+static inline int8_t fc_requantize_s8(int32_t acc, int32_t mult, int32_t shift,
+                                      int32_t out_offset,
+                                      int32_t act_min, int32_t act_max)
+{
+    acc = esp_nn_requantize(acc, mult, shift);
+    acc += out_offset;
+    acc = max(acc, act_min);
+    acc = min(acc, act_max);
+    return (int8_t) acc;
+}
+
 
 void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t input_offset,
@@ -139,11 +153,9 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
             if (bias) {
                 result += bias[out_c];
             }
-            result = esp_nn_requantize(result, out_mult, out_shift);
-            result += out_offset;
-            result = max(result, activation_min);
-            result = min(result, activation_max);
-            out_data[out_c] = (int8_t) result;
+            out_data[out_c] = fc_requantize_s8(result, out_mult, out_shift,
+                                               out_offset, activation_min,
+                                               activation_max);
         }
         return;
     }
@@ -169,11 +181,9 @@ void esp_nn_fully_connected_s8_riscv_pie(const int8_t *input_data,
         }
         int32_t result = fc_dot_s8_pie(input_data, filter_row, row_len);
         result += corr;
-        result = esp_nn_requantize(result, out_mult, out_shift);
-        result += out_offset;
-        result = max(result, activation_min);
-        result = min(result, activation_max);
-        out_data[out_c] = (int8_t) result;
+        out_data[out_c] = fc_requantize_s8(result, out_mult, out_shift,
+                                           out_offset, activation_min,
+                                           activation_max);
     }
 }
 
@@ -205,11 +215,9 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
             if (bias) {
                 result += bias[out_c];
             }
-            result = esp_nn_requantize(result, out_mult[out_c], out_shift[out_c]);
-            result += out_offset;
-            result = max(result, activation_min);
-            result = min(result, activation_max);
-            out_data[out_c] = (int8_t) result;
+            out_data[out_c] = fc_requantize_s8(result, out_mult[out_c], out_shift[out_c],
+                                               out_offset, activation_min,
+                                               activation_max);
         }
         return;
     }
@@ -235,18 +243,103 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
         }
         int32_t result = fc_dot_s8_pie(input_data, filter_row, row_len);
         result += corr;
-        result = esp_nn_requantize(result, out_mult[out_c], out_shift[out_c]);
-        result += out_offset;
-        result = max(result, activation_min);
-        result = min(result, activation_max);
-        out_data[out_c] = (int8_t) result;
+        out_data[out_c] = fc_requantize_s8(result, out_mult[out_c], out_shift[out_c],
+                                           out_offset, activation_min,
+                                           activation_max);
+    }
+}
+
+/* Batched per-channel FC for P4 and S31. One call covers every input row
+ * against the same filter. Layout: input [batches][row_len],
+ * out_data [batches][out_channels].
+ *
+ * When filter_offset == 0 the loop is out-channel outer and batch inner,
+ * matching the S3 batch kernel:
+ *   1. input_offset * sum(filter_row) + bias does not depend on the batch,
+ *      so each filter row is summed once;
+ *   2. that filter row is then reused for every input row.
+ * Rows shorter than 16 keep that order and run the dot in scalar code,
+ * because the PIE dot is only used at 16 elements and above. A nonzero
+ * filter offset still needs a per-row input sum, so that case calls the
+ * per-row PIE kernel once per batch row. A single row has nothing to
+ * reuse, so it calls the per-row kernel too. Unlike the S3 batch kernel,
+ * the PIE path does not fall back when an operand is unaligned. That is
+ * safe because ESP_NN_PIE_ENABLE() below sets the unaligned-load bit.
+ * Without that bit, esp.vld.128 loads from the address rounded down to
+ * 16 bytes. The other paths return before that enable, and the per-row
+ * kernel sets the same bit. */
+void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t *out_shift,
+                                        const int32_t *out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max,
+                                        const int32_t batches)
+{
+    if (filter_offset != 0 || batches == 1) {
+        for (int32_t b = 0; b < batches; b++) {
+            esp_nn_fully_connected_per_ch_s8_riscv_pie(
+                    input_data + b * row_len, input_offset, row_len, filter_data,
+                    filter_offset, bias, out_data + b * out_channels, out_channels,
+                    out_offset, out_shift, out_mult, activation_min, activation_max);
+        }
+        return;
+    }
+
+    if (row_len < 16) {
+        for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
+            const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+            const int32_t mult = out_mult[out_c];
+            const int32_t shift = out_shift[out_c];
+            const int32_t bch = bias ? bias[out_c] : 0;
+            for (int32_t b = 0; b < batches; b++) {
+                const int8_t *in = input_data + (int32_t)b * row_len;
+                int32_t result = bch;
+                for (int32_t i = 0; i < row_len; i++) {
+                    result += (int32_t)filter_row[i] * ((int32_t)in[i] + input_offset);
+                }
+                out_data[(int32_t)b * out_channels + out_c] =
+                        fc_requantize_s8(result, mult, shift, out_offset,
+                                         activation_min, activation_max);
+            }
+        }
+        return;
+    }
+
+    ESP_NN_PIE_ENABLE();
+
+    for (int32_t out_c = 0; out_c < out_channels; ++out_c) {
+        const int8_t *filter_row = filter_data + (int32_t)row_len * out_c;
+        int32_t corr = 0;
+        if (input_offset != 0) {
+            corr = esp_nn_filter_sum_s8_riscv_pie(filter_row, row_len) * input_offset;
+        }
+        if (bias) {
+            corr += bias[out_c];
+        }
+        const int32_t mult = out_mult[out_c];
+        const int32_t shift = out_shift[out_c];
+        for (int32_t b = 0; b < batches; b++) {
+            int32_t result = fc_dot_s8_pie(input_data + (int32_t)b * row_len,
+                                           filter_row, row_len);
+            result += corr;
+            out_data[(int32_t)b * out_channels + out_c] =
+                    fc_requantize_s8(result, mult, shift, out_offset,
+                                     activation_min, activation_max);
+        }
     }
 }
 
 #if ESP_NN_FC_BATCH_VIA_CONV
 /* Weight zero-point 0 on a shape the per-chip gate accepts runs as the 1x1
- * convolution in scratch. Anything else loops the per-row reference, as
- * esp_nn_fully_connected_per_ch_s8_batch does on this target. */
+ * convolution in scratch. Anything else runs the batch kernel above. */
 void esp_nn_fully_connected_per_ch_s8_batch_scratch_riscv_pie(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,
@@ -272,7 +365,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_scratch_riscv_pie(const int8_t *inpu
                                            scratch, scratch_size)) {
         return;
     }
-    esp_nn_fully_connected_per_ch_s8_batch_ansi(input_data, input_offset, row_len,
+    esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(input_data, input_offset, row_len,
             filter_data, filter_offset, bias, out_data, out_channels,
             out_offset, out_shift, out_mult, activation_min, activation_max,
             batches);

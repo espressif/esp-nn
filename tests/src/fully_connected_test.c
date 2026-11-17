@@ -693,37 +693,51 @@ void esp_nn_fully_connected_large_s8_test()
 void esp_nn_fully_connected_per_ch_s8_batch_test()
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    /* (batches, row_len, out_ch, input_offset, input misalign, filter misalign).
+    /* (batches, row_len, out_ch, input_offset, input misalign, filter misalign,
+     * filter_offset, with_bias).
      * row_len a multiple of 16 keeps the s8 fast path; 33 exercises the scalar
      * tail and, since its rows then start at differing offsets, mixed row
-     * alignments; in_off 0 skips the correction.  Batching is only eligible
-     * when the fast path is, so a misaligned input (or filter) must
-     * transparently fall back to the per-row kernel instead of reading
-     * garbage.  Batched output must match the per-row ANSI reference. */
+     * alignments; in_off 0 skips the correction. On P4 and S31, a row shorter
+     * than 16 with more than one batch and filter offset 0 stays in the batch
+     * scalar loop. A single batch, or a nonzero filter offset, calls the
+     * per-row kernel once per batch. with_bias passes one bias array to the
+     * batch call and to the ANSI reference. On S3, batching is only eligible
+     * when the fast
+     * path is, so a misaligned input (or filter), a short row, or a nonzero
+     * filter offset falls back to the per-row kernel instead of reading
+     * garbage. On P4 and S31 the batch kernel stays in place for a
+     * misaligned input or filter. Batched output must match the per-row
+     * ANSI reference. */
     const struct {
         int batches, row_len, out_ch;
         int32_t in_off;
         int in_align, f_align;
+        int32_t filt_off;
+        int with_bias;
     } cfg[] = {
-        { 48, 160, 32,  5, 0,  0 },   /* conformer FFN-d1 shape */
-        { 48,  64, 16,  0, 0,  0 },   /* input_offset 0 */
-        {  8,  80,  8, -3, 0,  0 },
-        {  4,  33,  5,  7, 0,  0 },   /* non-multiple-of-16 row_len -> scalar tail */
-        {  1, 128, 12, 11, 0,  0 },   /* single row */
-        {  4,  64,  8,  5, 8,  4 },   /* neither operand 16-aligned: per-row s16 fallback */
-        {  4,  64,  8, -3, 4,  4 },   /* input 4-mod-8: per-row ANSI fallback */
-        {  4,  64,  8,  5, 0,  4 },   /* fast path, unaligned filter rows */
-        {  4,  64,  8, -3, 8,  0 },   /* fast path, filter supplied as aligned operand */
-        {  4,  64, 128,  5, 8, 12 },  /* wide out_ch + both misaligned (fallback) */
-        {  4,  64, 128,  5, 0,  0 },  /* wide out_ch fast path: the VLA shape */
+        { 48, 160, 32,  5, 0,  0, 0, 0 },   /* conformer FFN-d1 shape */
+        { 48,  64, 16,  0, 0,  0, 0, 0 },   /* input_offset 0 */
+        {  8,  80,  8, -3, 0,  0, 0, 0 },
+        {  4,  33,  5,  7, 0,  0, 0, 0 },   /* non-multiple-of-16 row_len -> scalar tail */
+        {  1, 128, 12, 11, 0,  0, 0, 0 },   /* single row */
+        {  4,  64,  8,  5, 8,  4, 0, 0 },   /* neither operand 16-aligned: per-row s16 fallback */
+        {  4,  64,  8, -3, 4,  4, 0, 0 },   /* input 4-mod-8: per-row ANSI fallback */
+        {  4,  64,  8,  5, 0,  4, 0, 0 },   /* fast path, unaligned filter rows */
+        {  4,  64,  8, -3, 8,  0, 0, 0 },   /* fast path, filter supplied as aligned operand */
+        {  4,  64, 128,  5, 8, 12, 0, 0 },  /* wide out_ch + both misaligned (fallback) */
+        {  4,  64, 128,  5, 0,  0, 0, 0 },  /* wide out_ch fast path: the VLA shape */
+        {  4,   7,  8,  5, 0,  0, 0, 1 },   /* row_len < 16 scalar loop, with bias */
+        {  4,  64,  8,  5, 0,  0, 0, 1 },   /* fast-path bias add */
+        {  4,  64,  8,  5, 0,  0, 7, 1 },   /* nonzero filter offset; same bias as ANSI */
     };
     const int n_cfg = (int)(sizeof(cfg) / sizeof(cfg[0]));
     const int32_t activation_min = -128, activation_max = 127;
-    const int32_t out_offset = 7, filter_offset = 0;
+    const int32_t out_offset = 7;
 
     for (int c = 0; c < n_cfg; c++) {
         const int B = cfg[c].batches, row_len = cfg[c].row_len, out_ch = cfg[c].out_ch;
         const int32_t input_offset = cfg[c].in_off;
+        const int32_t filter_offset = cfg[c].filt_off;
         const int in_align = cfg[c].in_align;
         const int f_align  = cfg[c].f_align;
 
@@ -733,7 +747,12 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         int8_t  *or_o  = ESP_NN_TEST_ALLOC(B * out_ch + 16);
         int32_t *out_mult  = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
         int32_t *out_shift = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
-        if (!in_o || !flt_o || !ob_o || !or_o || !out_mult || !out_shift) {
+        int32_t *bias = NULL;
+        if (cfg[c].with_bias) {
+            bias = ESP_NN_TEST_ALLOC((size_t) out_ch * sizeof(int32_t));
+        }
+        if (!in_o || !flt_o || !ob_o || !or_o || !out_mult || !out_shift ||
+                (cfg[c].with_bias && !bias)) {
             TEST_SKIP("%s alloc failed\n", __FUNCTION__);
             goto fc_batch_cleanup;
         }
@@ -745,31 +764,35 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         for (int i = 0; i < out_ch; i++) {
             out_mult[i]  = INT32_MAX / row_len + rand() % INT16_MAX;
             out_shift[i] = -10 + rand() % 5;
+            if (bias) {
+                bias[i] = (rand() % 256 - 128) * 64;
+            }
         }
         for (int i = 0; i < B * row_len; i++)     input[i]  = rand() % 256 - 128;
         for (int i = 0; i < row_len * out_ch; i++) filter[i] = rand() % 256 - 128;
 
         /* batched: one weight-stationary pass over all rows */
         esp_nn_fully_connected_per_ch_s8_batch(input, input_offset, row_len, filter,
-                filter_offset, NULL, out_batched, out_ch, out_offset, out_shift,
+                filter_offset, bias, out_batched, out_ch, out_offset, out_shift,
                 out_mult, activation_min, activation_max, B);
 
         /* reference: the per-row kernel, once per row */
         for (int b = 0; b < B; b++) {
             esp_nn_fully_connected_per_ch_s8_ansi(input + b * row_len, input_offset,
-                    row_len, filter, filter_offset, NULL, out_ref + b * out_ch, out_ch,
+                    row_len, filter, filter_offset, bias, out_ref + b * out_ch, out_ch,
                     out_offset, out_shift, out_mult, activation_min, activation_max);
         }
 
         if (CHECK_EQUAL(out_ref, out_batched, B * out_ch) == false) {
-            TEST_FAIL("[%3d] failed [B %d, row_len %d, out_ch %d, in_align %d, f_align %d]\n",
-                   c, B, row_len, out_ch, in_align, f_align);
+            TEST_FAIL("[%3d] failed [B %d, row_len %d, out_ch %d, filt_off %"PRId32", bias %d, in_align %d, f_align %d]\n",
+                   c, B, row_len, out_ch, filter_offset, bias != NULL, in_align, f_align);
         } else {
-            TEST_PASS("[%3d] passed [B %d, row_len %d, out_ch %d, in_off %"PRId32", in_align %d, f_align %d]\n",
-                   c, B, row_len, out_ch, input_offset, in_align, f_align);
+            TEST_PASS("[%3d] passed [B %d, row_len %d, out_ch %d, in_off %"PRId32", filt_off %"PRId32", bias %d, in_align %d, f_align %d]\n",
+                   c, B, row_len, out_ch, input_offset, filter_offset, bias != NULL, in_align, f_align);
         }
     fc_batch_cleanup:
         free(in_o); free(flt_o); free(ob_o); free(or_o); free(out_mult); free(out_shift);
+        free(bias);
     }
 }
 
@@ -796,12 +819,16 @@ static int fc_1x1_no_conv(const int8_t *input, int32_t input_offset,
 #endif
 
 /* A weight zero-point of 0 is the same product as a 1x1 convolution.
- * expect_s3 is that path with one core, expect_s3_dual is that path after
- * esp_nn_dual_core_enable(), and expect_p4 and expect_other are the other
- * two targets. Optimized ESP32-P4 and ESP32-S31 both use expect_p4.
- * 1 means the 1x1 convolution. The numbers are written on the
- * row. A batch of 1 or 2 whose row length is not a multiple of 8 stays on
- * fully connected even when the worker is active. Scratch mode is 0 none,
+ * expect_s3 and expect_p4 are that path with one core. expect_s3_dual and
+ * expect_p4_dual are that path after esp_nn_dual_core_enable().
+ * expect_other is every remaining target. Optimized ESP32-P4 and
+ * ESP32-S31 both use the P4 columns. 1 means the 1x1 convolution. The
+ * numbers are written on the row. On S3, a batch of 1 or 2 whose row
+ * length is not a multiple of 8 stays on fully connected even when the
+ * worker is active. On P4 and S31 one floor applies with the worker on
+ * or off: a row shorter than 8 stays on fully connected, a row of 8
+ * needs a batch of at least 8, a longer row needs a batch of at least 2,
+ * and there must be at least 4 outputs. Scratch mode is 0 none,
  * 1 a scratch argument of the required size, 2 one byte short, 3 only the
  * convolution setter, which the scratch batch call does not read. */
 static void fc_1x1_arm(int scratch_mode, void *scratch, int scratch_bytes,
@@ -837,36 +864,45 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         int expect_s3;
         int expect_s3_dual;
         int expect_p4;
+        int expect_p4_dual;
         int expect_other;
     } cfg[] = {
-        { "m16_k64_n64",       16,  64,  64, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "m32_k64_n128",      32,  64, 128, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "m4_k128_n192",       4, 128, 192, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "m4_k128_n200",       4, 128, 200, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "m64_k128_n256",     64, 128, 256, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "m48_k160_n32",      48, 160,  32,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1 },
-        { "filt7_m16_k64_n64", 16,  64,  64, 128, 7, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
-        { "misalign_m16_k64_n64", 16, 64, 64, 128, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0 },
-        { "noscratch_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 },
-        { "tiny_m2_k32_n32",    2,  32,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "edge_m3_k8_n8",      3,   8,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
-        { "odd_m3_k40_n8",      3,  40,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
-        { "out4_m4_k64_n4",     4,  64,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "m1_k8_n4",           1,   8,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "odd_m1_k40_n4",      1,  40,   4,   5, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "dual_m1_k128_n256",  1, 128, 256, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0 },
-        { "dual_m2_k256_n128",  2, 256, 128, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0 },
-        { "oddrow_m1_k41_n640", 1,  41, 640, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "nodual_m2_k128_n32", 2, 128,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "below_m4_k7_n16",    4,   7,  16, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0 },
-        { "s3out_m4_k16_n7",    4,  16,   7, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0 },
-        { "nobias_m4_k64_n16",  4,  64,  16, 128, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1 },
-        { "clamp_m4_k16_n16",   4,  16,  16, 128, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0 },
-        { "short_m16_k64_n64", 16,  64,  64, 128, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0 },
-        { "unsized_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 3, 1, 0, 0, 0, 0, 0 },
-        { "misfilt_m16_k64_n64", 16, 64, 64, 128, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0 },
-        { "zero_in_m4_k8_n8",   4,   8,   8,   0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
-        { "inoff_m3_k9_n8",     3,   9,   8,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 0 },
+        { "m16_k64_n64",       16,  64,  64, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m32_k64_n128",      32,  64, 128, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m4_k128_n192",       4, 128, 192, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m4_k128_n200",       4, 128, 200, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m16_k128_n200",     16, 128, 200, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m64_k128_n256",     64, 128, 256, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "m48_k160_n32",      48, 160,  32,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1 },
+        { "filt7_m16_k64_n64", 16,  64,  64, 128, 7, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "misalign_m16_k64_n64", 16, 64, 64, 128, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "noscratch_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 },
+        { "tiny_m2_k32_n32",    2,  32,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
+        { "edge_m3_k8_n8",      3,   8,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0 },
+        { "odd_m3_k40_n8",      3,  40,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0 },
+        { "odd_m16_k40_n8",    16,  40,   8, 128, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0 },
+        { "out4_m4_k64_n4",     4,  64,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
+        { "m1_k8_n4",           1,   8,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "odd_m1_k40_n4",      1,  40,   4,   5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "dual_m1_k128_n256",  1, 128, 256, 128, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0 },
+        { "dual_m2_k256_n128",  2, 256, 128, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0 },
+        { "oddrow_m1_k41_n640", 1,  41, 640, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "nodual_m2_k128_n32", 2, 128,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
+        { "below_m4_k7_n16",    4,   7,  16, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "s3out_m4_k16_n7",    4,  16,   7, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
+        { "nobias_m4_k64_n16",  4,  64,  16, 128, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1 },
+        { "nobias_m16_k64_n16", 16,  64,  16, 128, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1 },
+        { "clamp_m4_k16_n16",   4,  16,  16, 128, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0 },
+        { "clamp_m16_k16_n16", 16,  16,  16, 128, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0 },
+        { "short_m16_k64_n64", 16,  64,  64, 128, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0 },
+        { "unsized_m16_k64_n64", 16, 64, 64, 128, 0, 0, 0, 3, 1, 0, 0, 0, 0, 0, 0 },
+        { "misfilt_m16_k64_n64", 16, 64, 64, 128, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "zero_in_m4_k8_n8",   4,   8,   8,   0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0 },
+        { "zero_in_m16_k8_n8", 16,   8,   8,   0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0 },
+        { "inoff_m3_k9_n8",     3,   9,   8,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0 },
+        { "inoff_m16_k9_n8",   16,   9,   8,   5, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0 },
+        { "m16_k4_n8",         16,   4,   8, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
+        { "m32_k7_n16",        32,   7,  16, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
     };
     const int n_cfg = (int) (sizeof(cfg) / sizeof(cfg[0]));
     const int32_t out_offset = 5;
@@ -884,7 +920,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         const int expect = dual ? cfg[c].expect_s3_dual : cfg[c].expect_s3;
 #elif defined(CONFIG_NN_OPTIMIZED) && \
         (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))
-        const int expect = cfg[c].expect_p4;
+        const int expect = dual ? cfg[c].expect_p4_dual : cfg[c].expect_p4;
 #else
         const int expect = cfg[c].expect_other;
 #endif

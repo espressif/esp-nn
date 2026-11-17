@@ -5,7 +5,9 @@
  */
 
 /* Batched per-channel fully connected as a 1x1 convolution. Built for the
- * S3 and PIE targets, whose 1x1 kernels win over the fully connected one. */
+ * S3 and PIE targets. Each target takes that path only from its own floor.
+ * The S3 floor is where the 1x1 kernel is the faster of the two. The P4
+ * and S31 floor is the rev v3.2 sweep. */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,12 +39,21 @@ enum {
     ESP_NN_FC_S3_DUAL_MIN_FILTER_BYTES = 24 * 1024,
 };
 
-/* Measured ESP32-P4 floors. ESP32-S31 uses the same PIE kernels, so it
- * uses these floors too. Batch 1 already wins. Widths under 8 were not
- * measured. Output 4 wins. The shared convolution still starts its second
- * core at batch 4; this gate does not change that. */
+/* ESP32-P4 floors. Floor sweep on rev v3.2. 504 shapes on an ESP32-P4
+ * rev v3.2 at 400 MHz with bench_app. A row shorter than 8 stays off this
+ * path. A row of exactly 8 needs a batch of at least 8. A longer row needs
+ * a batch of at least 2. Outputs need to be at least 4. The shared
+ * convolution still starts its second core at batch 4; this gate does not
+ * change that.
+ *
+ * ESP32-S31 uses the same PIE kernels and these floors. It was not swept:
+ * no S31 board was available. The P4 numbers are the starting point, and a
+ * sweep there is the right next check. A floor that does not match the S31
+ * only selects the other kernel. The output is the same, and the call can
+ * be slower than that other kernel. */
 enum {
-    ESP_NN_FC_P4_MIN_BATCH = 1,
+    ESP_NN_FC_P4_MIN_BATCH = 2,
+    ESP_NN_FC_P4_ROW8_MIN_BATCH = 8,
     ESP_NN_FC_P4_MIN_ROW = 8,
     ESP_NN_FC_P4_MIN_OUT = 4,
 };
@@ -83,9 +94,14 @@ static int fc_conv_shape_wins(int32_t batches, uint16_t row_len,
     return 0;
 #elif defined(CONFIG_NN_OPTIMIZED) && \
         (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))
-    return batches >= ESP_NN_FC_P4_MIN_BATCH &&
-            row_len >= ESP_NN_FC_P4_MIN_ROW &&
-            out_channels >= ESP_NN_FC_P4_MIN_OUT;
+    if (row_len < ESP_NN_FC_P4_MIN_ROW || out_channels < ESP_NN_FC_P4_MIN_OUT) {
+        return 0;
+    }
+    /* A row of exactly 8 needs a larger batch than a longer row. */
+    if (row_len == ESP_NN_FC_P4_MIN_ROW) {
+        return batches >= ESP_NN_FC_P4_ROW8_MIN_BATCH;
+    }
+    return batches >= ESP_NN_FC_P4_MIN_BATCH;
 #else
 #error "esp_nn_fc_batch_conv.c is built only for the optimized S3 and PIE targets"
 #endif
@@ -122,9 +138,12 @@ static int fc_scratch_fits(int bytes, const void *scratch, size_t scratch_size)
  * sweeps. On S3 the output must also be 8-byte aligned (fc_out_aligned).
  * The S3 fast assembly still requires channels % 8 inside the convolution
  * kernel and uses its existing fallback for other widths.
- * Batch 1 and 2 require that multiple of 8 here as well. A live worker
+ * On S3, batch 1 and 2 require that multiple of 8 as well. A live worker
  * is also required, and the convolution can still decline the split and
- * finish on one core. */
+ * finish on one core. On P4 and S31 the floor does not look at the worker.
+ * A row shorter than 8 stays on fully connected, a row of 8 needs a batch
+ * of at least 8, a longer row needs a batch of at least 2, and there must
+ * be at least 4 outputs. */
 int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,
