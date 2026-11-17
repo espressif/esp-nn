@@ -131,8 +131,9 @@ void esp_nn_set_conv_scratch_buf_ansi(const void *buf);
  * @brief       Bytes of scratch for one batched fully connected 1x1 call
  *
  * @note        The same value as esp_nn_get_conv_scratch_size for height =
- *              batches, width = 1, in_ch = row_len, out_ch = out_ch.
- *              ANSI and the generic targets return 0. A non-positive batch
+ *              batches, width = 1, in_ch = row_len, out_ch = out_ch,
+ *              on S3, P4 and S31. Other targets, and ANSI builds, have no
+ *              1x1 path and return 0. A non-positive batch
  *              count, a batch above UINT16_MAX, or a zero row or output
  *              count returns 0.
  */

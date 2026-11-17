@@ -12,7 +12,7 @@ The library contains optimised NN (Neural Network) functions for various Espress
    * ESP32-S3 (Assembly versions optimised to benefit from vector instructions of ESP32-S3)
    * ESP32-P4 (Optimised using PIE/QACC SIMD instructions)
    * ESP32-S31 (Optimised using PIE/QACC SIMD instructions, shares ESP32-P4 kernels)
-   * ESP32 (Generic optimisations)
+   * ESP32 (conv and depthwise on the MAC16 unit with `CONFIG_NN_ESP32_MAC16`, generic optimisations elsewhere)
    * ESP32-C3 (Generic optimisations)
 
 ## Performance

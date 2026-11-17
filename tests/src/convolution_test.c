@@ -19,6 +19,159 @@
 #define SCRATCH_GUARD_SZ    (16 * 1024)
 #define SCRATCH_GUARD_BYTE  0x5a
 
+/*
+ * Gate cases of the ESP32 MAC16 fused requant: per layer (conv) or per
+ * channel (depthwise), bias and shift on both sides of each limit. Inputs
+ * are 127 with in_offset 128, and each filter has the sign of its bias, so
+ * |sum + bias| is at its largest. An overflow past a limit flips the sign
+ * of the result, which the reference compare catches. Other targets run
+ * the same cases against the reference.
+ */
+typedef struct {
+    const char *name;
+    int in_wd, in_ht, in_ch, out_ch, f_wd, f_ht, pad;
+    int32_t bias[8];        /* repeated over the output channels */
+    int32_t shift[8];       /* repeated over the output channels */
+} gate_case_t;
+
+static void *gate_alloc(size_t n)
+{
+    return ESP_NN_TEST_ALLOC(n + 16);
+}
+
+static void run_gate_case(const gate_case_t *g, bool depthwise)
+{
+    const int out_wd = g->pad ? g->in_wd : g->in_wd - g->f_wd + 1;
+    const int out_ht = g->pad ? g->in_ht : g->in_ht - g->f_ht + 1;
+    const int f_ch = depthwise ? 1 : g->in_ch;
+    const int in_size = g->in_wd * g->in_ht * g->in_ch;
+    const int out_size = out_wd * out_ht * g->out_ch;
+    const int f_size = g->f_wd * g->f_ht * f_ch * g->out_ch;
+    int8_t *input = gate_alloc(in_size), *filter = gate_alloc(f_size);
+    int8_t *out_c = gate_alloc(out_size), *out_opt = gate_alloc(out_size);
+    int32_t *bias = gate_alloc(g->out_ch * 4), *shift = gate_alloc(g->out_ch * 4);
+    int32_t *mult = gate_alloc(g->out_ch * 4);
+    void *scratch = NULL;
+    if (!input || !filter || !out_c || !out_opt || !bias || !shift || !mult) {
+        TEST_SKIP("gate [%s] allocations failed\n", g->name);
+        goto gate_cleanup;
+    }
+    for (int oc = 0; oc < g->out_ch; oc++) {
+        bias[oc] = g->bias[oc % 8];
+        shift[oc] = g->shift[oc % 8];
+        mult[oc] = 0x7fff0000 - oc;
+    }
+    memset(input, 127, in_size);
+    /* filter layout: conv [oc][fy][fx][ic], depthwise [fy][fx][oc] */
+    for (int i = 0; i < f_size; i++) {
+        const int oc = depthwise ? i % g->out_ch : i / (f_size / g->out_ch);
+        filter[i] = bias[oc] < 0 ? -128 : 127;
+    }
+    const data_dims_t in_dims = {.width = g->in_wd, .height = g->in_ht, .channels = g->in_ch, 1};
+    const data_dims_t out_dims = {.width = out_wd, .height = out_ht, .channels = g->out_ch, 1};
+    const data_dims_t f_dims = {.width = g->f_wd, .height = g->f_ht, .channels = f_ch, 1};
+    const quant_data_t q = {.shift = shift, .mult = mult};
+    int size;
+    if (depthwise) {
+        const dw_conv_params_t prm = {.in_offset = 128, .out_offset = -128, .ch_mult = 1,
+                                      .stride = {1, 1}, .padding = {g->pad, g->pad},
+                                      .dilation = {0, 0}, .activation = {-128, 127}};
+        size = esp_nn_get_depthwise_conv_scratch_size(&in_dims, &f_dims, &out_dims, &prm);
+        scratch = size > 0 ? gate_alloc(size) : NULL;
+        if (size > 0 && !scratch) {
+            TEST_SKIP("gate [%s] scratch allocation failed\n", g->name);
+            goto gate_cleanup;
+        }
+        esp_nn_set_depthwise_conv_scratch_buf(scratch);
+        esp_nn_depthwise_conv_s8_ansi(&in_dims, input, &f_dims, filter, bias, &out_dims,
+                                      out_c, &prm, &q);
+        esp_nn_depthwise_conv_s8(&in_dims, input, &f_dims, filter, bias, &out_dims,
+                                 out_opt, &prm, &q);
+        esp_nn_set_depthwise_conv_scratch_buf(NULL);
+    } else {
+        const conv_params_t prm = {.in_offset = 128, .out_offset = -128,
+                                   .stride = {1, 1}, .padding = {g->pad, g->pad},
+                                   .dilation = {0, 0}, .activation = {-128, 127}};
+        size = esp_nn_get_conv_scratch_size(&in_dims, &f_dims, &out_dims, &prm);
+        scratch = size > 0 ? gate_alloc(size) : NULL;
+        if (size > 0 && !scratch) {
+            TEST_SKIP("gate [%s] scratch allocation failed\n", g->name);
+            goto gate_cleanup;
+        }
+        esp_nn_set_conv_scratch_buf(scratch);
+        esp_nn_conv_s8_ansi(&in_dims, input, &f_dims, filter, bias, &out_dims, out_c, &prm, &q);
+        esp_nn_conv_s8(&in_dims, input, &f_dims, filter, bias, &out_dims, out_opt, &prm, &q);
+        esp_nn_set_conv_scratch_buf(NULL);
+    }
+    if (CHECK_EQUAL(out_c, out_opt, out_size)) {
+        TEST_PASS("gate [%s] passed\n", g->name);
+    } else {
+        TEST_FAIL("gate [%s] failed\n", g->name);
+    }
+gate_cleanup:
+    free(input); free(filter); free(out_c); free(out_opt);
+    free(bias); free(shift); free(mult); free(scratch);
+}
+
+/* x256 bias limit of a conv layer: (1 << 23) - filter_len * 255 * 128 */
+#define GATE_LIM256(flen) ((1 << 23) - (flen) * 255 * 128)
+/* the same for the 3x3 depthwise (DW_BIAS256_MAX) */
+#define GATE_DW_LIM ((1 << 23) - 9 * 255 * 128)
+
+static void run_conv_gate_cases(void)
+{
+    const int32_t l = GATE_LIM256(8);           /* 1x1 on 8 channels */
+    const int32_t w = (1 << 28);                /* wide path: |bias| <= 2^28 */
+    const gate_case_t cases[] = {
+        {"conv x256 bias lim - 1", 4, 4, 8, 8, 1, 1, 0,
+         {l - 1, -(l - 1), l - 1, -(l - 1), l - 1, -(l - 1), l - 1, -(l - 1)},
+         {-15, -15, -15, -15, -15, -15, -15, -15}},
+        {"conv x256 bias +lim", 4, 4, 8, 8, 1, 1, 0,
+         {l, l - 1, l - 1, l - 1, l - 1, l - 1, l - 1, l - 1},
+         {-15, -15, -15, -15, -15, -15, -15, -15}},
+        {"conv x256 bias -lim", 4, 4, 8, 8, 1, 1, 0,
+         {-l, -(l - 1), -(l - 1), -(l - 1), -(l - 1), -(l - 1), -(l - 1), -(l - 1)},
+         {-15, -15, -15, -15, -15, -15, -15, -15}},
+        {"conv x256 bias +-(lim + 1)", 4, 4, 8, 8, 1, 1, 0,
+         {l + 1, -(l + 1), 0, 0, 0, 0, 0, 0},
+         {-15, -15, -15, -15, -15, -15, -15, -15}},
+        {"conv shift -15 and -16", 4, 4, 8, 8, 1, 1, 0,
+         {1000, -1000, 1000, -1000, 1000, -1000, 1000, -1000},
+         {-15, -16, -15, -16, -15, -16, -15, -16}},
+        {"conv wide shift -20, bias +-2^28", 5, 5, 32, 8, 3, 3, 1,
+         {w, -w, w - 1, -(w - 1), 0, 1, -1, 7},
+         {-20, -20, -20, -20, -20, -20, -20, -20}},
+        {"conv wide shift -21", 5, 5, 32, 8, 3, 3, 1,
+         {w, -w, 0, 0, 0, 0, 0, 0},
+         {-20, -21, -20, -21, -20, -21, -20, -21}},
+        {"conv wide bias +-(2^28 + 1)", 5, 5, 32, 8, 3, 3, 1,
+         {w + 1, -(w + 1), w, -w, 0, 0, 0, 0},
+         {-20, -20, -20, -20, -20, -20, -20, -20}},
+        {"conv shift 0 and 1", 4, 4, 8, 8, 1, 1, 0,
+         {100, -100, 100, -100, 100, -100, 100, -100},
+         {0, 1, 0, 1, 0, 1, 0, 1}},
+    };
+    for (int i = 0; i < (int) (sizeof(cases) / sizeof(cases[0])); i++) {
+        run_gate_case(&cases[i], false);
+    }
+}
+
+static void run_dw_gate_cases(void)
+{
+    const int32_t m = GATE_DW_LIM;
+    const gate_case_t cases[] = {
+        {"depthwise bias +-(lim - 1), +-lim, +-(lim + 1)", 6, 6, 16, 16, 3, 3, 1,
+         {m - 1, -(m - 1), m, -m, m + 1, -(m + 1), 0, 0},
+         {-15, -15, -15, -15, -15, -15, -15, -15}},
+        {"depthwise shift -15, -16, -20, -21, 0, 1", 6, 6, 16, 16, 3, 3, 1,
+         {1000, -1000, 1000, -1000, 1000, -1000, 1000, -1000},
+         {-15, -16, -20, -21, 0, 1, -15, -16}},
+    };
+    for (int i = 0; i < (int) (sizeof(cases) / sizeof(cases[0])); i++) {
+        run_gate_case(&cases[i], true);
+    }
+}
+
 void esp_nn_depthwise_conv_s8_test()
 {
     int8_t *input = NULL, *filter_data = NULL;
@@ -42,6 +195,10 @@ void esp_nn_depthwise_conv_s8_test()
     // silently produced incorrect results above that limit.
     for (int itr = 0; itr < 85; itr++) {
         bool no_bias = false;
+        /* Defaults. 53-56 use the full activation range and other offsets. */
+        out_offset = 7;
+        activation_min = -125;
+        activation_max = 120;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
          * (top/left) padding is passed in and trailing padding is implicit. */
@@ -646,6 +803,53 @@ void esp_nn_depthwise_conv_s8_test()
             force_out_wd = 8;
             force_out_ht = 8;
             break;
+        /* 53-56: the ESP32 MAC16 3x3 depthwise with its fused requant
+         * (activation [-128, 127], |out_offset| <= 128). */
+        case 53: // stride 1, out_offset -128, in_offset 128, 10 channels,
+                 // 9 output rows and 10 columns (not a multiple of 3)
+            input_wd = 10; input_ht = 9; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 10; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 54: // stride 2, out_offset -128, 24 channels
+            input_wd = 13; input_ht = 11; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 24; pad_wd = 1; pad_ht = 1;
+            stride_wd = 2; stride_ht = 2;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 55: // stride 1, out_offset 3, 36 channels, no pad
+            input_wd = 12; input_ht = 12; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 36; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = 3; activation_min = -128; activation_max = 127;
+            break;
+        case 56: // ch_mult 2, out_offset -128, stride 1
+            input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
+            ch_mult = 2; channels = 6; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 57: // in_offset -128, every input and filter -128, bias 8094000:
+                 // |in + offset| = 256 must not overflow the x256 fused dot
+            input_wd = 5; input_ht = 5; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 8; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 58: // in_offset 128, 16 channels: the 4-channel u8 widen
+                 // (esp_nn_dw_widen_u8_esp32), stride 1, out_offset -128
+            input_wd = 9; input_ht = 7; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 16; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 59: // in_offset 128, 8 channels, stride 2: the u8 widen
+            input_wd = 11; input_ht = 9; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 8; pad_wd = 1; pad_ht = 1;
+            stride_wd = 2; stride_ht = 2;
+            out_offset = 3; activation_min = -128; activation_max = 127;
+            break;
         /* 60-66: the P4/S31 ch_mult 1 kernel. 60-63 cover its square 5x5
          * pipeline and partial channel blocks, whose 16-byte output stores
          * land at odd addresses. 64-66 cover the edges of its vector requant. */
@@ -1041,11 +1245,20 @@ void esp_nn_depthwise_conv_s8_test()
         } else if (itr == 83) {
             out_mult[1020] = 0x7fffffff;
         }
+        if (itr == 57) {
+            memset(input, -128, in_size);
+            memset(filter_arg, -128, filter_wd * filter_ht * channels * ch_mult);
+            for (int i = 0; i < channels * ch_mult; ++i) {
+                bias[i + 1] = 8094000;
+            }
+        }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
         data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
-        const int32_t test_input_offset = itr == 21 ? 0 : itr == 66 ? 128 : input_offset;
+        const int32_t test_input_offset = itr == 21 ? 0 :
+                                          itr == 53 || itr == 58 || itr == 59 || itr == 66 ? 128 :
+                                          itr == 57 ? -128 : input_offset;
         const int32_t test_act_min = itr == 45 ? INT32_MIN : activation_min;
         const int32_t test_act_max = itr == 45 ? INT32_MAX : activation_max;
         dw_conv_params_t conv_params = {.in_offset = test_input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
@@ -1194,6 +1407,7 @@ void esp_nn_depthwise_conv_s8_test()
         }
         esp_nn_set_depthwise_conv_scratch_buf(NULL);
     }
+    run_dw_gate_cases();
 }
 
 void esp_nn_conv_s8_test()
@@ -1219,7 +1433,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 91; itr++) {
+    for (int itr = 0; itr < 103; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -2054,6 +2268,89 @@ void esp_nn_conv_s8_test()
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
             break;
+        /* 91-95: the ESP32 MAC16 conv with its fused requant (activation
+         * [-128, 127], |out_offset| <= 128). */
+        case 91: // 3x3 pad 1, out_offset -128, in_offset 128, 8 channels
+            in_wd = 10; in_ht = 10; in_channels = 8; out_channels = 16;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = 128; out_offset = -128;
+            activation_min = -128; activation_max = 127;
+            break;
+        case 92: // as 91 with stride 2 and in_offset 5
+            in_wd = 11; in_ht = 11; in_channels = 8; out_channels = 16;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 2; stride_ht = 2;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 93: // 1x1, 32-sample rows, out_offset -128, in_offset 128
+            in_wd = 6; in_ht = 6; in_channels = 32; out_channels = 24;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = 128; out_offset = -128;
+            activation_min = -128; activation_max = 127;
+            break;
+        case 94: // 3x3, out_offset 7, in_offset -3, 16 channels
+            in_wd = 9; in_ht = 9; in_channels = 16; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -3; out_offset = 7;
+            activation_min = -128; activation_max = 127;
+            break;
+        case 95: // 1x1, 128-sample rows, out_offset -128
+            in_wd = 5; in_ht = 4; in_channels = 128; out_channels = 16;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        case 96: // 1x1, 4x4x8 input, explicit 4x5 output: the last output row
+                 // is past the input, so it is bias only. ESP32 only: the
+                 // generic 1x1 kernel of other targets reads past the input
+                 // for such dims, which TFLite does not produce.
+            in_wd = 4; in_ht = 4; in_channels = 8; out_channels = 8;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            force_out_wd = 4; force_out_ht = 5;
+#if !CONFIG_IDF_TARGET_ESP32 || (CONFIG_NN_OPTIMIZED && !CONFIG_NN_ESP32_MAC16)
+            TEST_SKIP("[%3d] ESP32 only\n", itr);
+            continue;
+#endif
+            break;
+        case 97: // 1x1, 256 channels, in_offset -128, every input and filter
+                 // -128, bias 32767, shift -10: |in + offset| = 256 must not
+                 // overflow the x256 filter
+            in_wd = 2; in_ht = 2; in_channels = 256; out_channels = 8;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            input_offset = -128; out_offset = -128;
+            activation_min = -128; activation_max = 127;
+            break;
+        case 98: // 1x1, 8-sample rows (len4 2), out_offset -128: the unrolled
+                 // .rept loop of esp_nn_conv_rq256s_oc_esp32
+        case 99: // as 98, 16-sample rows (len4 4)
+        case 100: // as 98, 64-sample rows (len4 16)
+            in_wd = 6; in_ht = 5; out_channels = 16;
+            in_channels = itr == 98 ? 8 : itr == 99 ? 16 : 64;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            out_offset = -128; activation_min = -128; activation_max = 127;
+            break;
+        /* 101-102: no output or no input channels. The ESP32 getter returns 0
+         * and the kernel runs the generic path. ESP32 MAC16 only: other
+         * kernels do not take such shapes. */
+        case 101: // 3x3 pad 1, 8 input channels, no output channels
+        case 102: // 1x1, no input channels, 8 output channels (bias only)
+            in_wd = 4; in_ht = 4;
+            in_channels = itr == 101 ? 8 : 0;
+            out_channels = itr == 101 ? 0 : 8;
+            filter_ht = filter_wd = itr == 101 ? 3 : 1;
+            pad_wd = pad_ht = itr == 101 ? 1 : 0;
+            stride_wd = 1; stride_ht = 1;
+#if !CONFIG_IDF_TARGET_ESP32 || (CONFIG_NN_OPTIMIZED && !CONFIG_NN_ESP32_MAC16)
+            TEST_SKIP("[%3d] ESP32 only\n", itr);
+            continue;
+#endif
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -2097,7 +2394,8 @@ void esp_nn_conv_s8_test()
         input_orig = ESP_NN_TEST_ALLOC(in_size + 32); /* case 69 offsets it */
         out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
-        filter_data = ESP_NN_TEST_ALLOC(filter_size + filter_prefix);
+        /* + 4: cases 84-85 have no filter, and a 0-byte alloc fails. */
+        filter_data = ESP_NN_TEST_ALLOC(filter_size + filter_prefix + 4);
         bias = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
         out_shift = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
         out_mult = ESP_NN_TEST_ALLOC(128 + sizeof (int32_t) * out_channels);
@@ -2147,6 +2445,15 @@ void esp_nn_conv_s8_test()
         for (int i = 0; i < out_channels; ++i) {
             out_shift[i] = -10 + rand() % 2;
             out_mult[i] = 0x7f67f4f8 + rand() % 50;
+        }
+
+        if (itr == 97) {
+            memset(input, -128, in_size);
+            memset(filter_data, -128, filter_size);
+            for (int i = 0; i < out_channels; ++i) {
+                bias[i] = 32767;
+                out_shift[i] = -10;
+            }
         }
 
         /* Case 17: use small out_shift to expose transpose cross-position contamination.
@@ -2268,6 +2575,11 @@ void esp_nn_conv_s8_test()
 
         int scratch_buf_size = esp_nn_get_conv_scratch_size(&input_dims, &filter_dims,
                                                             &output_dims, &conv_params);
+        if ((itr == 101 || itr == 102) && scratch_buf_size != 0) {
+            TEST_FAIL("[%3d] scratch %d bytes for a conv without channels\n",
+                      itr, scratch_buf_size);
+            goto conv_s8_cleanup;
+        }
         if (scratch_buf_size > 0) {
             /* Case 60: the scratch pointer is not 16-byte aligned. */
             const int scratch_misalign = itr == 60 ? 4 : 0;
@@ -2388,4 +2700,5 @@ void esp_nn_conv_s8_test()
         }
         esp_nn_set_conv_scratch_buf(NULL);
     }
+    run_conv_gate_cases();
 }

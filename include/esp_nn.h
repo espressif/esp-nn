@@ -40,6 +40,8 @@ extern "C" {
 #include "esp_nn_riscv_pie.h"
 #elif defined(ARCH_ESP32_S3)
 #include "esp_nn_esp32s3.h"
+#elif defined(ARCH_ESP32) && defined(CONFIG_NN_ESP32_MAC16)
+#include "esp_nn_esp32.h"
 #else // for other platforms use generic optimisations
 #include "esp_nn_generic_opt.h"
 #endif // #if defined(ARCH_ESP32_S3)

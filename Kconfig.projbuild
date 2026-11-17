@@ -8,7 +8,9 @@ choice NN_OPTIMIZATIONS
       Optimisations are automatically picked up for a chipset.
       For ESP32-S3, assembly optimisations are selected.
       For ESP32-P4 and ESP32-S31, PIE (SIMD) optimisations are selected.
-      For other platforms(viz., ESP32, ESP32-C3), generic optimisations are used.
+      For ESP32, conv and depthwise run on the MAC16 unit (NN_ESP32_MAC16),
+      and the other kernels use generic optimisations.
+      For other platforms (viz., ESP32-C3), generic optimisations are used.
 
 config NN_ANSI_C
    bool "ANSI C"
@@ -20,7 +22,9 @@ config NN_OPTIMIZED
       Optimisations are automatically picked up for a chipset.
       For ESP32-S3, assembly optimisations are selected.
       For ESP32-P4 and ESP32-S31, PIE (SIMD) optimisations are selected.
-      For other platforms(viz., ESP32, ESP32-C3), generic optimisations are used.
+      For ESP32, conv and depthwise run on the MAC16 unit (NN_ESP32_MAC16),
+      and the other kernels use generic optimisations.
+      For other platforms (viz., ESP32-C3), generic optimisations are used.
 endchoice
 
 config NN_OPTIMIZATIONS
@@ -39,6 +43,19 @@ config NN_SKIP_NUDGE
       requantize for ~20% speedup.
       Leave disabled for bit-exact behavior (recommended for tests and
       for matching reference outputs).
+
+config NN_ESP32_MAC16
+   bool "ESP32: conv and depthwise on the MAC16 unit"
+   depends on NN_OPTIMIZED && IDF_TARGET_ESP32
+   default y
+   help
+      Conv and 3x3 depthwise run on the ESP32 MAC16 unit. They ask for up
+      to about 16 KB of scratch per layer.
+      Turn this off to keep the generic kernels and the smaller scratch of
+      esp-nn 1.5.x, for example when the tensor arena was sized for them.
+      With CONFIG_SPIRAM_CACHE_WORKAROUND, layers with tensors or scratch
+      in PSRAM run the generic kernels, but the getters still ask for the
+      MAC16 scratch. Turn this off there when the arena is in PSRAM.
 
 menu "Dual-core worker"
    depends on NN_OPTIMIZED && (IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4) && !FREERTOS_UNICORE
