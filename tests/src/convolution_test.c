@@ -1219,7 +1219,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 81; itr++) {
+    for (int itr = 0; itr < 91; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -1989,6 +1989,71 @@ void esp_nn_conv_s8_test()
             filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
             break;
+        /* 81-84: the P4/S31 lanes-as-channels kernel (window row of 2 to 31
+         * bytes, 16 to 48 output channels, at least 256 output pixels). The
+         * maps keep at least 256 pixels in each half of the dual-core row
+         * split, so the kernel runs with the worker active too.
+         * 85-86: 8-byte tile stores to an output that is not 8-byte
+         * aligned. */
+        case 81: // 8x1 filter on 2 channels: a 2-byte window row and a
+                 // 16-byte window, the shortest the kernel takes, pad 1,
+                 // 532 pixels
+            in_wd = 19; in_ht = 28; in_channels = 2; out_channels = 16;
+            filter_ht = 8; filter_wd = 1; pad_wd = 0; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 82: // 2x1 filter on 31 channels: a 31-byte window row, 520
+                 // pixels
+            in_wd = 13; in_ht = 40; in_channels = 31; out_channels = 32;
+            filter_ht = 2; filter_wd = 1; pad_wd = 0; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 83: // 3x3 on 3 channels, SAME stride 2 with only a trailing pad
+            in_wd = 32; in_ht = 64; in_channels = 3; out_channels = 16;
+            filter_ht = 3; filter_wd = 3; pad_wd = 0; pad_ht = 0;
+            stride_wd = 2; stride_ht = 2;
+            force_out_wd = 16; force_out_ht = 32;
+            break;
+        case 84: // as 83 padded, 48 channels, last shift out of the fast range
+            in_wd = 33; in_ht = 65; in_channels = 3; out_channels = 48;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 85: // 1x1, out_ch 20, output 4 bytes off a 16-byte boundary
+            in_wd = 6; in_ht = 6; in_channels = 16; out_channels = 20;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 86: // 1x1, in_ch 33, out_ch 24, output 1 byte off a 16-byte boundary
+            in_wd = 6; in_ht = 6; in_channels = 33; out_channels = 24;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        /* 87-90: the limits of the P4/S31 lanes-as-channels kernel. 3x3
+         * on 3 channels, pad 1. */
+        case 87: // 16x32 = 512 pixels on 32 channels: takes the kernel, and
+                 // so does each 256-pixel half of the dual-core row split
+            in_wd = 16; in_ht = 32; in_channels = 3; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 88: // 17x15 = 255 pixels, one under: takes the 16-pixel batch
+            in_wd = 17; in_ht = 15; in_channels = 3; out_channels = 32;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 89: // 16x16 on 64 channels: takes the 16-pixel batch
+            in_wd = 16; in_ht = 16; in_channels = 3; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 90: // 16x20 = 320 pixels take the kernel. With the dual-core
+                 // row split, each half has 160 pixels and takes the
+                 // 16-pixel batch in scratch sized for the kernel.
+            in_wd = 16; in_ht = 20; in_channels = 3; out_channels = 16;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -2051,6 +2116,10 @@ void esp_nn_conv_s8_test()
         }
         int8_t *out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         int8_t *out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+        if (itr == 85 || itr == 86) { /* the 16 spare bytes hold the offset */
+            out_data_c += itr == 85 ? 4 : 1;
+            out_data_opt += itr == 85 ? 4 : 1;
+        }
 
         /* Generate input data between -128 -> +127 */
         for (int i = 0; i < in_size; ++i) {
@@ -2106,6 +2175,11 @@ void esp_nn_conv_s8_test()
                     bias[i] = rand() % (1 << 30) - (1 << 29);
                 }
             }
+        }
+
+        /* Case 84: one shift outside the fast requant range */
+        if (itr == 84) {
+            out_shift[out_channels - 1] = -23;
         }
 
         /* Case 16: override ALL data with exact YOLO Op[8] values */
