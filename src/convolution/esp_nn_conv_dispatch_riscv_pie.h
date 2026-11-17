@@ -16,6 +16,28 @@
 #include <stdint.h>
 #include <esp_nn_defs.h>
 
+#include "esp_nn_conv_oc16_riscv_pie.h"
+
+/*
+ * Im2col batch paths: offset of the fast requant table in the 16-byte
+ * aligned work area. The table follows the 16-pixel staging, or the oc16
+ * work area when that kernel runs (oc16). The kernel and the scratch
+ * getter both use this.
+ */
+static inline int32_t esp_nn_conv_im2col_tab_offset(bool oc16, int32_t out_ch,
+                                                    int32_t window_len)
+{
+    return oc16 ? esp_nn_conv_oc16_work_size(window_len, out_ch) :
+           16 * window_len;
+}
+
+/* Words per output channel of that table: 4 for the oc16 kernel (it
+ * keeps e1 there too), else 3. */
+static inline int32_t esp_nn_conv_im2col_tab_words(bool oc16)
+{
+    return oc16 ? ESP_NN_CONV_OC16_TAB_WORDS : 3;
+}
+
 /* L1D cache budget: use half of 64KB to leave room for filter streaming */
 #define L1D_BUDGET 32768
 
@@ -162,7 +184,12 @@ static inline int esp_nn_conv_scratch_size_riscv_pie_impl(const data_dims_t *inp
             int window_len = filter_wd * filter_ht * in_ch;
             int im2col_scratch = window_len;  /* one window buffer */
             if (window_len <= ESP_NN_IM2COL_BATCH_MAX_WINDOW) {
-                im2col_scratch += window_len * 16 + 16;
+                /* 16 bytes to align the work area, then the table. */
+                const bool oc16 = esp_nn_conv_oc16_ok(filter_wd, in_ch,
+                        out_ch, output_dims->width * output_dims->height);
+                im2col_scratch += 16 + esp_nn_conv_im2col_tab_offset(oc16,
+                        out_ch, window_len) + 4 * out_ch *
+                        esp_nn_conv_im2col_tab_words(oc16);
             }
             return offset_acc_scratch + im2col_scratch + align_buf_size;
         }

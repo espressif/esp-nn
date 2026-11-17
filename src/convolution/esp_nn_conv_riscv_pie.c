@@ -55,6 +55,9 @@
 #include <common_functions.h>
 #include "../common/esp_nn_filter_sum_riscv_pie.h"
 #include "esp_nn_conv_dispatch_riscv_pie.h"
+#include "esp_nn_conv_requant_riscv_pie.h"
+#include "esp_nn_conv_tile_requant_riscv_pie.h"
+#include "esp_nn_conv_oc16_riscv_pie.h"
 #include <esp_nn_multicore.h>
 
 void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
@@ -232,6 +235,15 @@ static void conv_1x1_filter_major(const data_dims_t *input_dims,
 
     for (int32_t out_ch = 0; out_ch < out_channels; ++out_ch) {
         const int8_t *filter = filter_data + out_ch * in_channels;
+        if (out_ch + 1 < out_channels) {
+            /* Touch the next row, one load per 64-byte line. This layer
+             * is bound by PSRAM latency. Without the touch its time moved
+             * by 2% with the placement of code and data between builds. */
+            const int8_t *next = filter + in_channels;
+            for (int32_t i = 0; i < in_channels; i += 64) {
+                asm volatile ("lb x0, 0(%0)" :: "r"(next + i));
+            }
+        }
         int32_t filter_sum = 0;
         if (input_offset != 0) {
             /* Vectorized like the other prepasses. It matters more here: this
@@ -255,268 +267,131 @@ static void conv_1x1_filter_major(const data_dims_t *input_dims,
     }
 }
 
-/**
- * Batched 1x1 conv using QACC per-lane: processes 16 pixels simultaneously.
- * Transposes input so each QACC lane = one pixel, then broadcasts filter
- * coefficients for per-lane accumulation. Critical for small in_ch where
- * XACC can't be used (in_ch < 16).
- *
- * For in_ch=8: 4.5x faster than scalar per-pixel approach.
+/*
+ * qacc += sum over k < cnt of trans[16 k .. 16 k + 15] * filt[k] (broadcast).
+ * The QACC is not zeroed here. The core issues one instruction per cycle,
+ * so the code counts instructions: a fused MAC + load and a broadcast load
+ * per tap, with loads ahead in register pairs (no load-use stall).
+ * An odd tap runs first. The pipeline then holds two taps; the remaining
+ * tap pairs run as 1, 2 and 4 pairs by their bits, then 8 pairs per
+ * hardware-loop pass. The loop ends on its last load (ESP_NN_HWLOOP_LAST).
+ * No load runs past the last tap.
  */
-__attribute__((noinline))
-static void conv_1x1_batch16(const int8_t *pixel_ptrs[16],
-                      const int8_t *filter_data,
-                      const int32_t *filter_sum,
-                      const int32_t *bias,
-                      int8_t *out_ptrs[16],
-                      int32_t in_ch, int32_t out_ch,
-                      int32_t out_offset,
-                      const int32_t *out_mult, const int32_t *out_shift,
-                      int32_t act_min, int32_t act_max)
+#define QACC16_MAC_PAIR \
+        "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t" \
+        "esp.vldbc.8.xp  q1, x31, t3         \n\t" \
+        "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q2, q3 \n\t" \
+        "esp.vldbc.8.xp  q3, x31, t3         \n\t"
+#define QACC16_MAC_QUAD \
+        "esp.vmulas.s8.qacc.ld.ip q4, x30, 16, q0, q1 \n\t" \
+        "esp.vldbc.8.xp  q5, x31, t3         \n\t" \
+        "esp.vmulas.s8.qacc.ld.ip q6, x30, 16, q2, q3 \n\t" \
+        "esp.vldbc.8.xp  q7, x31, t3         \n\t" \
+        "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q4, q5 \n\t" \
+        "esp.vldbc.8.xp  q1, x31, t3         \n\t" \
+        "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q6, q7 \n\t" \
+        "esp.vldbc.8.xp  q3, x31, t3         \n\t"
+
+static inline __attribute__((always_inline))
+void qacc16_mac_continue(const int8_t *trans, const int8_t *filt, int32_t cnt)
 {
-    /* Transpose: arrange 16 pixels' data as ch0[p0..p15], ch1[p0..p15], ... */
-    int8_t transposed[16 * 16] __attribute__((aligned(16)));  /* in_ch <= 16 for this path */
-    for (int c = 0; c < in_ch; c++) {
-        for (int p = 0; p < 16; p++) {
-            transposed[c * 16 + p] = pixel_ptrs[p][c];
-        }
-    }
-
-    /* For each output channel: QACC per-lane MAC with broadcast filter.
-     * Use single asm block for zero + accumulate loop to prevent
-     * q register clobber between separate asm blocks. */
-    const int8_t *filt = filter_data;
-    for (int32_t oc = 0; oc < out_ch; oc++) {
-        /* QACC accumulate over in_ch. Hardware loop (esp.lp.setup) is deliberately
-         * not used - trip count (< 16) is too small to amortize its arming cost;
-         * software-pipelined instead: esp.vmulas.s8.qacc.ld.ip folds the next pixel
-         * load into the MAC, and esp.vldbc.8.xp advances the filter pointer in the
-         * load (no addi, assembler-safe). Prologue loads pair 0; a tail MAC finishes
-         * the last pair. ~4.06 vs 6.0 cyc/iter on S31. */
-        asm volatile (
-            "li     t3, 1                        \n\t"  /* filter byte-stride */
-            "esp.zero.qacc                       \n\t"
-            "mv     x30, %[trans]                \n\t"  /* transposed base */
-            "mv     x31, %[flt]                  \n\t"  /* filter base */
-            "mv     s7,  %[cnt]                  \n\t"  /* in_ch count */
-            "esp.vld.128.ip  q0, x30, 16         \n\t"  /* prologue: pixel[0] */
-            "esp.vldbc.8.xp  q1, x31, t3         \n\t"  /* prologue: filter[0], x31 += 1 */
-            "addi   s7, s7, -1                   \n\t"  /* fused-loop trip = in_ch - 1 */
-            "beqz   s7, 2f                       \n\t"  /* in_ch == 1: straight to tail */
-            "1:                                  \n\t"
-            "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t"  /* mac pair; load next pixel */
-            "esp.vldbc.8.xp  q1, x31, t3         \n\t"            /* load next filter, x31 += 1 */
-            "addi   s7, s7, -1                   \n\t"
-            "bnez   s7, 1b                       \n\t"
-            "2:                                  \n\t"
-            "esp.vmulas.s8.qacc q0, q1           \n\t"            /* tail: last pair */
-            :
-            : [trans] "r"(transposed), [flt] "r"(filt), [cnt] "r"(in_ch)
-            : "x30", "x31", "s7", "t3"
-        );
-
-        /* Extract 16 results */
-        int32_t results[16] __attribute__((aligned(16)));
-        ESP_NN_QACC_EXTRACT_S32(results);
-
-        /* Add filter_sum + bias, requant, clamp, store for each pixel */
-        int32_t fs = filter_sum[oc];
-        int32_t b = bias ? bias[oc] : 0;
-        int32_t combined = fs + b;
-        int32_t m = out_mult[oc];
-        int32_t s = out_shift[oc];
-
-        for (int p = 0; p < 16; p++) {
-            int32_t r = results[p] + combined;
-            r = esp_nn_multiply_by_quantized_mult(r, m, s);
-            r += out_offset;
-            r = max(r, act_min);
-            r = min(r, act_max);
-            out_ptrs[p][oc] = (int8_t) r;
-        }
-
-        filt += in_ch;
-    }
-}
-
-
-
-/* MAC continuation for the woven pass: same double-buffered accumulate as
- * the plain loop but WITHOUT zeroing the QACC (partial sums are live). */
-static void qacc16_mac_continue(const int8_t *trans, const int8_t *filt,
-                                int32_t cnt)
-{
-    if (cnt & 1) {
-        /* Odd tap first: the paired loop below loads one pair ahead and
-         * would otherwise read one chunk past the end of trans/filt. */
-        asm volatile (
-            "li     t3, 1                        \n\t"
-            "mv     x30, %[trans]                \n\t"
-            "mv     x31, %[flt]                  \n\t"
-            "esp.vld.128.ip  q0, x30, 16         \n\t"
-            "esp.vldbc.8.xp  q1, x31, t3         \n\t"
-            "esp.vmulas.s8.qacc q0, q1           \n\t"
-            :
-            : [trans] "r"(trans), [flt] "r"(filt)
-            : "x30", "x31", "t3"
-        );
-        trans += 16;
-        filt += 1;
-        cnt -= 1;
-        if (cnt == 0) {
-            return;
-        }
-    }
-    /* cnt is even and >= 2: pairs = cnt / 2, the last pair is MAC'd after
-     * the loop so no load runs past the end. */
+    /* Tap pairs after the two taps the pipeline preloads. */
+    const int32_t rest = (cnt >> 1) - 1;
     asm volatile (
         "li     t3, 1                        \n\t"
         "mv     x30, %[trans]                \n\t"
         "mv     x31, %[flt]                  \n\t"
+        "beqz   %[odd], 1f                   \n\t"
+        "esp.vld.128.ip  q0, x30, 16         \n\t"
+        "esp.vldbc.8.xp  q1, x31, t3         \n\t"
+        "esp.vmulas.s8.qacc q0, q1           \n\t"
+        "1:                                  \n\t"
+        "bltz   %[rest], 9f                  \n\t"
         "esp.vld.128.ip  q0, x30, 16         \n\t"
         "esp.vldbc.8.xp  q1, x31, t3         \n\t"
         "esp.vld.128.ip  q2, x30, 16         \n\t"
         "esp.vldbc.8.xp  q3, x31, t3         \n\t"
-        "beqz   %[cpair], 2f                 \n\t"
-        /* for (k = 0; k < 2 * cpair; k++) qacc += trans[16 * k..] * filt[k]; */
-        ESP_NN_HWLOOP_BEGIN
-        "esp.lp.setup 0, %[cpair], 1f        \n\t"
-        "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q0, q1 \n\t"
-        "esp.vldbc.8.xp  q1, x31, t3         \n\t"
-        "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q2, q3 \n\t"
-        ESP_NN_HWLOOP_LAST("esp.vldbc.8.xp  q3, x31, t3", 1)
-        ESP_NN_HWLOOP_END
+        "beqz   %[p1], 2f                    \n\t"
+        QACC16_MAC_PAIR
         "2:                                  \n\t"
+        "beqz   %[p2], 3f                    \n\t"
+        QACC16_MAC_QUAD
+        "3:                                  \n\t"
+        "beqz   %[p4], 4f                    \n\t"
+        QACC16_MAC_QUAD
+        QACC16_MAC_QUAD
+        "4:                                  \n\t"
+        "beqz   %[p8], 5f                    \n\t"
+        /* for (j = 0; j < p8; j++) sixteen taps */
+        ESP_NN_HWLOOP_BEGIN
+        "esp.lp.setup 0, %[p8], 1f           \n\t"
+        QACC16_MAC_QUAD
+        QACC16_MAC_QUAD
+        QACC16_MAC_QUAD
+        "esp.vmulas.s8.qacc.ld.ip q4, x30, 16, q0, q1 \n\t"
+        "esp.vldbc.8.xp  q5, x31, t3         \n\t"
+        "esp.vmulas.s8.qacc.ld.ip q6, x30, 16, q2, q3 \n\t"
+        "esp.vldbc.8.xp  q7, x31, t3         \n\t"
+        "esp.vmulas.s8.qacc.ld.ip q0, x30, 16, q4, q5 \n\t"
+        "esp.vldbc.8.xp  q1, x31, t3         \n\t"
+        "esp.vmulas.s8.qacc.ld.ip q2, x30, 16, q6, q7 \n\t"
+        ESP_NN_HWLOOP_LAST("esp.vldbc.8.xp  q3, x31, t3", 0)
+        ESP_NN_HWLOOP_END
+        "5:                                  \n\t"
         "esp.vmulas.s8.qacc q0, q1           \n\t"
         "esp.vmulas.s8.qacc q2, q3           \n\t"
+        "9:                                  \n\t"
         :
-        : [trans] "r"(trans), [flt] "r"(filt),
-          [cpair] "r"(cnt / 2 - 1)
-        : "x30", "x31", "t3"
+        : [trans] "r"(trans), [flt] "r"(filt), [odd] "r"(cnt & 1),
+          [rest] "r"(rest), [p1] "r"(rest & 1), [p2] "r"(rest & 2),
+          [p4] "r"(rest & 4), [p8] "r"(rest >> 3)
+        : "x30", "x31", "t3", "memory"
     );
 }
 
-/*
- * Software-pipelined variant of the deep 16-pixel QACC pass: while the
- * current output channel's MACs stream through the PIE slot, the PREVIOUS
- * channel's 16 results are requantized in the scalar slot (the core
- * dual-issues one PIE and one scalar op per cycle, and PIE loads/MACs have
- * multi-cycle latency the scalar stream hides in).
- *
- * The requant uses the doubling-high-multiply with an unconditional
- * +2^30 nudge; a 200M-trial host sweep shows it bit-identical to
- * esp_nn_multiply_by_quantized_mult for |acc + combined| < 2^27 and
- * shift <= 0, which the caller guarantees before selecting this path.
- *
- * Consumes exactly 8 * min(in_ch / 8, 16) input channels and requantizes
- * min(in_ch / 8, 16) elements of prev_res; the caller MACs the remaining
- * channels and drains the remaining elements. Requires in_ch % 8 == 0.
- */
-static int32_t qacc16_mac_woven_requant(const int8_t *trans,
-                                        const int8_t *filt, int32_t in_ch,
-                                        const int32_t *prev_res,
-                                        int32_t combined, int32_t mult,
-                                        int32_t rs, int32_t out_offset,
-                                        int32_t act_min, int32_t act_max,
-                                        int8_t *prev_out, int32_t out_stride)
+/* Fills tab[words * oc ..] with the fast-requant constants of each
+ * channel and returns tab when every channel in [0, n_oc) takes the fast
+ * requant, else NULL. words is 3, or 4 to add e1 = 1 - shift for the oc16
+ * kernel. Built once per call, so the per-channel loop below only loads. */
+static inline __attribute__((always_inline))
+const int32_t *qacc16_requant_table_w(const int32_t *filter_sum,
+                                      const int32_t *bias,
+                                      const int32_t *mult,
+                                      const int32_t *shift, int32_t n_oc,
+                                      int32_t count, int32_t out_offset,
+                                      int32_t *tab, int32_t words)
 {
-    int32_t woven = in_ch >> 3;          /* iterations: 8 channels each */
-    if (woven > 16) {
-        woven = 16;
+    int32_t *p = tab;
+    for (int32_t oc = 0; oc < n_oc; oc++, p += words) {
+        const int32_t comb = filter_sum[oc] + (bias ? bias[oc] : 0);
+        if (!esp_nn_conv_requant_fast_ok(comb, mult[oc], shift[oc],
+                                         count * 128 * 128, out_offset)) {
+            return NULL;
+        }
+        esp_nn_conv_requant_params(comb, mult[oc], shift[oc], out_offset, p);
+        if (words == 4) {
+            p[3] = 1 - shift[oc];
+        }
     }
-    const int32_t rnd = rs ? (1 << (rs - 1)) : 0;
-    const int32_t rsnz = rs ? 1 : 0;
-    const int32_t *rp = prev_res;
-    int8_t *op = prev_out;
-    int32_t n = woven;
-    asm volatile (
-        "li     t3, 1                          \n\t"
-        "mv     x30, %[tp]                     \n\t"
-        "mv     x31, %[fp]                     \n\t"
-        "1:                                    \n\t"
-        /* group 1 (channels k, k+1) + requant head */
-        "esp.vld.128.ip  q0, x30, 16           \n\t"
-        "lw     t0, 0(%[rp])                   \n\t"
-        "esp.vldbc.8.xp  q1, x31, t3           \n\t"
-        "add    t0, t0, %[comb]                \n\t"
-        "esp.vld.128.ip  q2, x30, 16           \n\t"
-        "mulh   t1, t0, %[mult]                \n\t"
-        "esp.vldbc.8.xp  q3, x31, t3           \n\t"
-        "mul    t0, t0, %[mult]                \n\t"
-        "esp.vmulas.s8.qacc q0, q1             \n\t"
-        "add    t2, t0, %[nud]                 \n\t"
-        "esp.vmulas.s8.qacc q2, q3             \n\t"
-        "sltu   t0, t2, t0                     \n\t"
-        /* group 2 (channels k+2, k+3) + doubling-high compose */
-        "esp.vld.128.ip  q0, x30, 16           \n\t"
-        "add    t1, t1, t0                     \n\t"
-        "esp.vldbc.8.xp  q1, x31, t3           \n\t"
-        "slli   t1, t1, 1                      \n\t"
-        "esp.vld.128.ip  q2, x30, 16           \n\t"
-        "srli   t2, t2, 31                     \n\t"
-        "esp.vldbc.8.xp  q3, x31, t3           \n\t"
-        "or     t1, t1, t2                     \n\t"
-        "esp.vmulas.s8.qacc q0, q1             \n\t"
-        "srli   t0, t1, 31                     \n\t"
-        "esp.vmulas.s8.qacc q2, q3             \n\t"
-        "and    t0, t0, %[rsnz]                \n\t"
-        /* group 3 (channels k+4, k+5) + rounding shift */
-        "esp.vld.128.ip  q0, x30, 16           \n\t"
-        "add    t1, t1, %[rnd]                 \n\t"
-        "esp.vldbc.8.xp  q1, x31, t3           \n\t"
-        "sub    t1, t1, t0                     \n\t"
-        "esp.vld.128.ip  q2, x30, 16           \n\t"
-        "sra    t1, t1, %[rs]                  \n\t"
-        "esp.vldbc.8.xp  q3, x31, t3           \n\t"
-        "add    t1, t1, %[ooff]                \n\t"
-        "esp.vmulas.s8.qacc q0, q1             \n\t"
-        "blt    t1, %[amax], 2f                \n\t"
-        "mv     t1, %[amax]                    \n\t"
-        "2:                                    \n\t"
-        "esp.vmulas.s8.qacc q2, q3             \n\t"
-        "blt    %[amin], t1, 3f                \n\t"
-        "mv     t1, %[amin]                    \n\t"
-        "3:                                    \n\t"
-        /* group 4 (channels k+6, k+7) + store/advance */
-        "esp.vld.128.ip  q0, x30, 16           \n\t"
-        "sb     t1, 0(%[op])                   \n\t"
-        "esp.vldbc.8.xp  q1, x31, t3           \n\t"
-        "addi   %[rp], %[rp], 4                \n\t"
-        "esp.vld.128.ip  q2, x30, 16           \n\t"
-        "add    %[op], %[op], %[ostr]          \n\t"
-        "esp.vldbc.8.xp  q3, x31, t3           \n\t"
-        "addi   %[n], %[n], -1                 \n\t"
-        "esp.vmulas.s8.qacc q0, q1             \n\t"
-        "esp.vmulas.s8.qacc q2, q3             \n\t"
-        "bnez   %[n], 1b                       \n\t"
-        : [rp] "+r"(rp), [op] "+r"(op), [n] "+r"(n)
-        : [tp] "r"(trans), [fp] "r"(filt), [comb] "r"(combined),
-          [mult] "r"(mult), [nud] "r"(0x40000000), [rnd] "r"(rnd),
-          [rsnz] "r"(rsnz), [rs] "r"(rs), [ooff] "r"(out_offset),
-          [amin] "r"(act_min), [amax] "r"(act_max), [ostr] "r"(out_stride)
-        : "x30", "x31", "t0", "t1", "t2", "t3", "memory"
-    );
-    return woven;
+    return tab;
 }
 
-
-/*
- * Position-batched 1x1 for in_ch >= 16: 16 consecutive pixels are
- * transposed to channel-major in scratch, then each output channel runs
- * one QACC pass (16 lanes = 16 pixels, broadcast filter byte per input
- * channel). Two instructions per input channel move 16 MACs, and the
- * per-pixel dot setup of the XACC path disappears. Accumulation order per
- * output element (input channels ascending) and the scalar requant are
- * unchanged: bit-identical results.
- */
+static const int32_t *qacc16_requant_table(const int32_t *filter_sum,
+                                           const int32_t *bias,
+                                           const int32_t *mult,
+                                           const int32_t *shift,
+                                           int32_t n_oc, int32_t count,
+                                           int32_t out_offset, int32_t *tab)
+{
+    return qacc16_requant_table_w(filter_sum, bias, mult, shift, n_oc,
+                                  count, out_offset, tab, 3);
+}
 
 /*
  * Runs output channels [oc_start, oc_end) of a 16-pixel channel-major
  * staging: one QACC pass per channel (dot length `count`), requantize,
- * scatter to out_base[pixel * out_stride + oc]. Pipelines the previous
- * channel's requant into the current channel's MAC stream when the fast
- * requant is provably exact (see qacc16_mac_woven_requant); otherwise a
- * plain double-buffered pass per channel.
+ * scatter to out_base[pixel * out_stride + oc]. `tab` comes from
+ * qacc16_requant_table (NULL: generic requant).
  */
 static void qacc16_run_channels(const int8_t *t, const int8_t *filt_base,
                                 int32_t count, int32_t oc_start,
@@ -525,97 +400,90 @@ static void qacc16_run_channels(const int8_t *t, const int8_t *filt_base,
                                 const int32_t *out_shift, int8_t *out_base,
                                 int32_t out_stride, int32_t out_offset,
                                 int32_t act_min, int32_t act_max,
-                                int32_t lanes)
+                                int32_t lanes, const int32_t *tab)
 {
     /* The MAC asm reads t and filt_base through pointers and has no memory
      * operands. Every store that staged t must land before it. */
     asm volatile ("" ::: "memory");
-    const int8_t *filt = filt_base;
-
-    /* The woven requant writes all 16 lanes, so partial batches take the
-     * plain path (which stores `lanes` results). */
-    if (lanes == 16 && (count & 7) == 0 && count >= 128) {
-        bool woven_ok = true;
-        const int32_t acc_bound = count * 127 * 128;
-        for (int32_t oc = oc_start; oc < oc_end; oc++) {
-            const int32_t comb = filter_sum[oc] + (bias ? bias[oc] : 0);
-            const int32_t acomb = comb < 0 ? -comb : comb;
-            if (out_shift[oc] > 0 || acc_bound + acomb >= (1 << 27)) {
-                woven_ok = false;
-                break;
-            }
-        }
-        if (woven_ok) {
-            int32_t resA[16] __attribute__((aligned(16)));
-            int32_t resB[16] __attribute__((aligned(16)));
-            int32_t *prev = NULL, *cur = resA;
-            int32_t prev_oc = -1;
-            for (int32_t oc = oc_start; oc < oc_end; oc++) {
+    const int8_t *filt = filt_base + oc_start * count;
+    int32_t results[16] __attribute__((aligned(16)));
+    int32_t oc = oc_start;
+    if (tab && lanes == 16) {
+        /* Full batches: eight channels per tile, requantized on PIE and
+         * stored as one 8-byte row per pixel. */
+        int8_t tile[8 * 16] __attribute__((aligned(16)));
+        const int32_t *prm = tab + 3 * oc;
+        for (; oc + 8 <= oc_end; oc += 8) {
+            for (int32_t j = 0; j < 8; j++, prm += 3) {
                 asm volatile ("esp.zero.qacc\n\t");
-                if (prev == NULL) {
-                    qacc16_mac_continue(t, filt, count);
-                } else {
-                    const int32_t comb = filter_sum[prev_oc]
-                            + (bias ? bias[prev_oc] : 0);
-                    const int32_t w = qacc16_mac_woven_requant(
-                            t, filt, count, prev, comb,
-                            out_mult[prev_oc], -out_shift[prev_oc],
-                            out_offset, act_min, act_max,
-                            out_base + prev_oc, out_stride);
-                    if (8 * w < count) {
-                        qacc16_mac_continue(t + 8 * w * 16, filt + 8 * w,
-                                            count - 8 * w);
-                    }
-                    for (int32_t e = w; e < 16; e++) {
-                        int32_t r = prev[e] + comb;
-                        r = esp_nn_requantize(r, out_mult[prev_oc],
-                                              out_shift[prev_oc]);
-                        r += out_offset;
-                        r = max(r, act_min);
-                        r = min(r, act_max);
-                        out_base[e * out_stride + prev_oc] = (int8_t) r;
-                    }
-                }
-                ESP_NN_QACC_EXTRACT_S32(cur);
-                prev = cur;
-                cur = (cur == resA) ? resB : resA;
-                prev_oc = oc;
+                qacc16_mac_continue(t, filt, count);
+                esp_nn_conv_requant_tile_row(results, prm,
+                        1 - out_shift[oc + j], act_min, act_max,
+                        tile + 16 * j);
                 filt += count;
             }
-            const int32_t comb = filter_sum[prev_oc]
-                    + (bias ? bias[prev_oc] : 0);
-            for (int32_t e = 0; e < 16; e++) {
-                int32_t r = prev[e] + comb;
-                r = esp_nn_requantize(r, out_mult[prev_oc],
-                                      out_shift[prev_oc]);
-                r += out_offset;
-                r = max(r, act_min);
-                r = min(r, act_max);
-                out_base[e * out_stride + prev_oc] = (int8_t) r;
-            }
-            return;
+            esp_nn_conv_tile8x16_store(tile, out_base + oc, out_stride);
         }
     }
-
-    for (int32_t oc = oc_start; oc < oc_end; oc++) {
+    /* Channel tails and partial batches: one channel at a time, with
+     * strided byte stores. |in * filter| <= 128 * 128 per tap. */
+    const int32_t acc_bound = count * 128 * 128;
+    for (; oc < oc_end; oc++) {
         asm volatile ("esp.zero.qacc\n\t");
         qacc16_mac_continue(t, filt, count);
-        int32_t results[16] __attribute__((aligned(16)));
         ESP_NN_QACC_EXTRACT_S32(results);
-        const int32_t combined = filter_sum[oc] + (bias ? bias[oc] : 0);
-        const int32_t m = out_mult[oc];
-        const int32_t sh = out_shift[oc];
-        int8_t *out_ptr = out_base + oc;
-        for (int p = 0; p < lanes; p++) {
-            int32_t r = results[p] + combined;
-            r = esp_nn_requantize(r, m, sh);
-            r += out_offset;
-            r = max(r, act_min);
-            r = min(r, act_max);
-            out_ptr[p * out_stride] = (int8_t) r;
+        if (tab) {
+            esp_nn_conv_requant_lanes_fast(results, lanes, tab + 3 * oc,
+                    out_shift[oc], out_base + oc, out_stride, act_min,
+                    act_max);
+        } else {
+            const int32_t combined = filter_sum[oc] + (bias ? bias[oc] : 0);
+            esp_nn_conv_requant_lanes_pie(results, lanes, combined,
+                    out_mult[oc], out_shift[oc], acc_bound, out_base + oc,
+                    out_stride, out_offset, act_min, act_max);
         }
         filt += count;
     }
+}
+
+static void im2col_stage_lanes16(const int8_t *const *bases, int32_t off,
+                                 int32_t n, int8_t *dst);
+
+/* Transpose 16 contiguous pixels to channel-major: t[c * 16 + p] =
+ * in[p * in_ch + c]. The PIE zip transpose of the im2col staging does
+ * 8-byte multiples (about 0.3 instructions per byte), bytes do the rest. */
+static void qacc16_stage_pixels(const int8_t *input, int32_t in_ch, int8_t *t)
+{
+    const int8_t *bases[16];
+    for (int p = 0; p < 16; p++) {
+        bases[p] = input + p * in_ch;
+    }
+    im2col_stage_lanes16(bases, 0, in_ch, t);
+    for (int32_t c = in_ch & ~7; c < in_ch; c++) {
+        for (int p = 0; p < 16; p++) {
+            t[c * 16 + p] = input[p * in_ch + c];
+        }
+    }
+}
+
+/*
+ * 1x1 for in_ch < 16: 16 pixels are transposed to channel-major on the
+ * stack, then each output channel runs one QACC pass (lanes = pixels).
+ * The 16 pixels are contiguous, so their outputs are out[p * out_ch].
+ */
+__attribute__((noinline))
+static void conv_1x1_batch16(const int8_t *input, const int8_t *filter_data,
+                             const int32_t *filter_sum, const int32_t *bias,
+                             int8_t *out, int32_t in_ch, int32_t out_ch,
+                             int32_t out_offset, const int32_t *out_mult,
+                             const int32_t *out_shift, int32_t act_min,
+                             int32_t act_max, const int32_t *tab)
+{
+    int8_t transposed[16 * 16] __attribute__((aligned(16)));
+    qacc16_stage_pixels(input, in_ch, transposed);
+    qacc16_run_channels(transposed, filter_data, in_ch, 0, out_ch,
+                        filter_sum, bias, out_mult, out_shift, out, out_ch,
+                        out_offset, act_min, act_max, 16, tab);
 }
 
 /*
@@ -722,6 +590,10 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
     const int32_t activation_min = conv_params->activation.min;
     const int32_t activation_max = conv_params->activation.max;
 
+    /* Unaligned vld/vst in the staging and the tile stores. CFG is per core
+     * and not saved per task, and the dual-core worker enters here. */
+    ESP_NN_PIE_ENABLE();
+
     const int32_t filter_bytes = in_channels * out_channels;
     const int32_t output_pixels = out_wd * out_ht;
     if (filter_bytes >= 64 * 1024 && output_pixels <= 16) {
@@ -749,17 +621,17 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
         int32_t pix = 0;
 
         /* Process batches of 16 pixels using QACC per-lane */
+        /* filter_sum, then the requant table: 16 of the 20 bytes per
+         * channel the getter gives this path. */
+        const int32_t *tab = qacc16_requant_table(filter_sum, bias,
+                quant_data->mult, quant_data->shift, out_channels,
+                in_channels, out_offset, filter_sum + out_channels);
         for (; pix <= total_pixels - 16; pix += 16) {
-            const int8_t *pp[16];
-            int8_t *op[16];
-            for (int p = 0; p < 16; p++) {
-                pp[p] = input_data + (pix + p) * in_channels;
-                op[p] = out_data + (pix + p) * out_channels;
-            }
-            conv_1x1_batch16(pp, filter_data, filter_sum, bias, op,
+            conv_1x1_batch16(input_data + pix * in_channels, filter_data,
+                             filter_sum, bias, out_data + pix * out_channels,
                              in_channels, out_channels, out_offset,
                              quant_data->mult, quant_data->shift,
-                             activation_min, activation_max);
+                             activation_min, activation_max, tab);
         }
 
         /* Remaining pixels (< 16): scalar fallback */
@@ -811,8 +683,14 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
         const int32_t total_pixels = (int32_t)out_wd * out_ht;
         const int32_t batched = total_pixels & ~15;
         if (batched > 0) {
+            /* Scratch: filter_sum, the requant table (12 bytes per
+             * channel), then the staging. The getter's filter_scratch is
+             * at least 16 bytes per channel here (in_ch >= 16). */
+            const int32_t *tab = qacc16_requant_table(filter_sum, bias,
+                    quant_data->mult, quant_data->shift, out_channels,
+                    in_channels, out_offset, filter_sum + out_channels);
             int8_t *transposed = (int8_t *)(((uintptr_t)((int8_t *)scratch
-                    + out_channels * 4 + 15)) & ~(uintptr_t)15);
+                    + out_channels * 16 + 15)) & ~(uintptr_t)15);
             for (int32_t pix = 0; pix < batched; pix += 16) {
                 int8_t *out_batch = out_data + pix * out_channels;
                 /* Staged once per batch, then used by every panel. */
@@ -821,12 +699,12 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
                 for (int32_t oc_base = 0; oc_base < out_channels;
                         oc_base += oc_tile) {
                     const int32_t oc_end = min(oc_base + oc_tile, out_channels);
-                    qacc16_run_channels(transposed,
-                                        filter_data + oc_base * in_channels,
-                                        in_channels, oc_base, oc_end, filter_sum,
-                                        bias, quant_data->mult, quant_data->shift,
+                    qacc16_run_channels(transposed, filter_data, in_channels,
+                                        oc_base, oc_end, filter_sum, bias,
+                                        quant_data->mult, quant_data->shift,
                                         out_batch, out_channels, out_offset,
-                                        activation_min, activation_max, 16);
+                                        activation_min, activation_max, 16,
+                                        tab);
                 }
             }
             if (batched == total_pixels) {
@@ -1221,18 +1099,159 @@ skip_asm_pad0:
 
 
 
+/*
+ * Stages 16 window bytes [off, off + 16) of 8 lanes, transposed:
+ * dst[i * 16 + p] = bases[p][off + i] for i < 16, p < 8. Eight unaligned
+ * loads, a 3-stage zip network (8, 16, 32 bit) and sixteen 8-byte stores:
+ * about 0.3 instructions per byte against about 3 for byte copies.
+ * Each load stays inside its lane's window row, so inside the input.
+ */
+static inline __attribute__((always_inline))
+void im2col_stage8x16(const int8_t *const *bases, int32_t off, int8_t *dst)
+{
+    asm volatile (
+        "mv     x29, %[b]                    \n\t"
+        "lw     x30, 0(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q0, x30, 0          \n\t"
+        "lw     x30, 4(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q1, x30, 0          \n\t"
+        "lw     x30, 8(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q2, x30, 0          \n\t"
+        "lw     x30, 12(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q3, x30, 0          \n\t"
+        "lw     x30, 16(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q4, x30, 0          \n\t"
+        "lw     x30, 20(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q5, x30, 0          \n\t"
+        "lw     x30, 24(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q6, x30, 0          \n\t"
+        "lw     x30, 28(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.128.ip  q7, x30, 0          \n\t"
+        "mv     x31, %[dst]                  \n\t"
+        ESP_NN_PIE_ZIP8X16
+        /* Window bytes 0-1, 2-3, ... 14-15 are in q0 q4 q2 q6 q1 q5 q3 q7. */
+        "esp.vst.l.64.ip q0, x31, 16         \n\t"
+        "esp.vst.h.64.ip q0, x31, 16         \n\t"
+        "esp.vst.l.64.ip q4, x31, 16         \n\t"
+        "esp.vst.h.64.ip q4, x31, 16         \n\t"
+        "esp.vst.l.64.ip q2, x31, 16         \n\t"
+        "esp.vst.h.64.ip q2, x31, 16         \n\t"
+        "esp.vst.l.64.ip q6, x31, 16         \n\t"
+        "esp.vst.h.64.ip q6, x31, 16         \n\t"
+        "esp.vst.l.64.ip q1, x31, 16         \n\t"
+        "esp.vst.h.64.ip q1, x31, 16         \n\t"
+        "esp.vst.l.64.ip q5, x31, 16         \n\t"
+        "esp.vst.h.64.ip q5, x31, 16         \n\t"
+        "esp.vst.l.64.ip q3, x31, 16         \n\t"
+        "esp.vst.h.64.ip q3, x31, 16         \n\t"
+        "esp.vst.l.64.ip q7, x31, 16         \n\t"
+        "esp.vst.h.64.ip q7, x31, 16         \n\t"
+        :
+        : [b] "r"(bases), [off] "r"(off), [dst] "r"(dst)
+        : "x29", "x30", "x31", "memory"
+    );
+}
+
+/* As im2col_stage8x16 for 8 window bytes: 8-byte loads, so a 9-byte
+ * row (3x3, in_ch 3) is read without passing its end. */
+static inline __attribute__((always_inline))
+void im2col_stage8x8(const int8_t *const *bases, int32_t off, int8_t *dst)
+{
+    asm volatile (
+        "mv     x29, %[b]                    \n\t"
+        "lw     x30, 0(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q0, x30, 0          \n\t"
+        "lw     x30, 4(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q1, x30, 0          \n\t"
+        "lw     x30, 8(x29)                  \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q2, x30, 0          \n\t"
+        "lw     x30, 12(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q3, x30, 0          \n\t"
+        "lw     x30, 16(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q4, x30, 0          \n\t"
+        "lw     x30, 20(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q5, x30, 0          \n\t"
+        "lw     x30, 24(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q6, x30, 0          \n\t"
+        "lw     x30, 28(x29)                 \n\t"
+        "add    x30, x30, %[off]             \n\t"
+        "esp.vld.l.64.ip q7, x30, 0          \n\t"
+        "mv     x31, %[dst]                  \n\t"
+        "esp.vzip.8  q0, q1                  \n\t"
+        "esp.vzip.8  q2, q3                  \n\t"
+        "esp.vzip.8  q4, q5                  \n\t"
+        "esp.vzip.8  q6, q7                  \n\t"
+        "esp.vzip.16 q0, q2                  \n\t"
+        "esp.vzip.16 q4, q6                  \n\t"
+        "esp.vzip.32 q0, q4                  \n\t"
+        "esp.vzip.32 q2, q6                  \n\t"
+        /* Window bytes 0-1, 2-3, 4-5, 6-7 are in q0 q4 q2 q6. */
+        "esp.vst.l.64.ip q0, x31, 16         \n\t"
+        "esp.vst.h.64.ip q0, x31, 16         \n\t"
+        "esp.vst.l.64.ip q4, x31, 16         \n\t"
+        "esp.vst.h.64.ip q4, x31, 16         \n\t"
+        "esp.vst.l.64.ip q2, x31, 16         \n\t"
+        "esp.vst.h.64.ip q2, x31, 16         \n\t"
+        "esp.vst.l.64.ip q6, x31, 16         \n\t"
+        "esp.vst.h.64.ip q6, x31, 16         \n\t"
+        :
+        : [b] "r"(bases), [off] "r"(off), [dst] "r"(dst)
+        : "x29", "x30", "x31", "memory"
+    );
+}
+
+/* dst[i * 16 + p] = bases[p][off + i] for i < (n & ~7), p < 16: 16-byte
+ * chunks, then one 8-byte chunk. Not inlined, so the asm clobbers stay
+ * out of the callers' staging loops. Callers pass a copy of their pointer
+ * array: an array whose address escapes stays in memory in their
+ * byte-copy loops (about 10% on the in_ch 3 first layers). */
+__attribute__((noinline))
+static void im2col_stage_lanes16(const int8_t *const *bases, int32_t off,
+                                 int32_t n, int8_t *dst)
+{
+    for (; n >= 16; n -= 16, off += 16, dst += 256) {
+        im2col_stage8x16(bases, off, dst);
+        im2col_stage8x16(bases + 8, off, dst + 8);
+    }
+    if (n >= 8) {
+        im2col_stage8x8(bases, off, dst);
+        im2col_stage8x8(bases + 8, off, dst + 8);
+    }
+}
+
 /**
- * Im2col convolution for small in_ch where filter_wd * in_ch < 16.
+ * Im2col convolution: the whole filter window is one contiguous vector,
+ * window_len = filter_wd * filter_ht * in_ch (e.g. 3 * 3 * 3 = 27), so
+ * small in_ch wastes no MACs on channel padding.
  *
- * Instead of padding channels (81% wasted MACs for in_ch=3),
- * concatenates the entire filter window into one contiguous vector:
- *   window_len = filter_wd * filter_ht * in_ch (e.g., 3*3*3 = 27)
+ * - Short window rows on 16 to 48 output channels and large maps run the
+ *   oc16 kernel (esp_nn_conv_oc16_ok).
+ * - Windows up to ESP_NN_IM2COL_BATCH_MAX_WINDOW run in 16-pixel QACC
+ *   batches.
+ * - Other pixels copy their window into im2col_buf and run a PIE dot
+ *   product.
  *
- * For each output pixel: copy the input window into a contiguous scratch
- * buffer, then use PIE dot product on the full window. No wasted MACs.
- *
- * Scratch layout: [filter_sum | im2col_buf]
- *   im2col_buf = filter_wd * filter_ht * in_ch bytes
+ * Scratch layout:
+ * - filter_sum: 4 bytes per output channel.
+ * - im2col_buf: window_len bytes.
+ * - Batch paths only: a 16-byte aligned work area. It holds the 16-pixel
+ *   staging or the oc16 work, then the requant table
+ *   (esp_nn_conv_im2col_tab_offset).
  */
 __attribute__ ((noinline))
 static void esp_nn_conv_s8_im2col(
@@ -1267,6 +1286,9 @@ static void esp_nn_conv_s8_im2col(
     const int32_t window_len = filter_wd * filter_ht * in_ch;
     const int8_t pad_val = (int8_t)(-input_offset);
 
+    /* Unaligned vld in the staging: CFG is per core and not saved per task. */
+    ESP_NN_PIE_ENABLE();
+
     /* Scratch: filter_sum[out_ch] + im2col_buf[window_len] */
     int32_t *filter_sum = (int32_t *)scratch;
     int8_t *im2col_buf = (int8_t *)scratch + out_ch * sizeof(int32_t);
@@ -1279,148 +1301,149 @@ static void esp_nn_conv_s8_im2col(
 
     const int32_t total_pixels = (int32_t)out_wd * out_ht;
 
-    /* QACC batch path. A pixel's window is fully inside the input when
-     *   0 <= ox*stride_wd - pad_wd  and  ox*stride_wd - pad_wd + filter_wd <= input_wd
-     * (same in y). Batch 16 consecutive pixels along each interior output
-     * row - padded layers keep a fast path for their interior, which is the
-     * bulk of the work (a 24x24 output with pad 1 is 84% interior); only the
-     * border pixels fall to the per-pixel path below. Accumulation order per
-     * output element is unchanged: bit-identical. */
-    int32_t bx_lo = (pad_wd + stride_wd - 1) / stride_wd;
-    int32_t by_lo = (pad_ht + stride_ht - 1) / stride_ht;
-    /* Last output column/row whose window lies entirely inside the input.
-     * C division truncates toward zero, so a negative numerator (input
-     * narrower than the filter, TFLite SAME on e.g. 2x2 -> 3x3 s2) would
-     * yield 0 and batch pixel 0 as "interior" although its window overruns
-     * the input; there is no interior at all in that case. */
-    int32_t bx_hi = (input_wd + pad_wd >= filter_wd)
-                    ? (input_wd + pad_wd - filter_wd) / stride_wd : -1;
-    int32_t by_hi = (input_ht + pad_ht >= filter_ht)
-                    ? (input_ht + pad_ht - filter_ht) / stride_ht : -1;
-    if (bx_hi > out_wd - 1) {
-        bx_hi = out_wd - 1;
+    /* The work area: the 16-pixel staging or the oc16 work, then the
+     * requant table (see esp_nn_conv_im2col_tab_offset). */
+    int8_t *work = NULL;
+    const int32_t *tab = NULL;
+    if (window_len <= ESP_NN_IM2COL_BATCH_MAX_WINDOW) {
+        work = (int8_t *)(((uintptr_t)(im2col_buf + window_len) + 15)
+                          & ~(uintptr_t)15);
+        const bool oc16 = esp_nn_conv_oc16_ok(filter_wd, in_ch, out_ch,
+                                              total_pixels);
+        int32_t *tab_buf = (int32_t *)(work + esp_nn_conv_im2col_tab_offset(
+                oc16, out_ch, window_len));
+        if (oc16) {
+            /* Short window rows: lanes are output channels. */
+            tab = qacc16_requant_table_w(filter_sum, bias, quant_data->mult,
+                    quant_data->shift, out_ch, window_len, out_offset,
+                    tab_buf, ESP_NN_CONV_OC16_TAB_WORDS);
+            if (tab) {
+                esp_nn_conv_s8_oc16_pie(input_dims, input_data, filter_dims,
+                                        filter_data, output_dims, out_data,
+                                        conv_params, tab, work);
+                return;
+            }
+        } else {
+            tab = qacc16_requant_table(filter_sum, bias, quant_data->mult,
+                    quant_data->shift, out_ch, window_len, out_offset,
+                    tab_buf);
+        }
     }
-    if (by_hi > out_ht - 1) {
-        by_hi = out_ht - 1;
-    }
-    /* number of whole 16-pixel groups per interior row, and where they end */
-    int32_t row_groups = (bx_hi >= bx_lo) ? 1 : 0;   /* any interior width */
-    int32_t bx_end = (bx_hi >= bx_lo) ? (bx_hi + 1) : bx_lo;  /* exclusive */
 
-    /* When the whole tensor is interior (no padding at all) the batch can run
-     * over pixels in raster order, which also covers outputs narrower than
-     * 16. Padded layers batch per interior row instead. */
-    const bool all_interior = (pad_wd == 0 && pad_ht == 0 &&
-            (int32_t)(out_wd - 1) * stride_wd + filter_wd <= input_wd &&
-            (int32_t)(out_ht - 1) * stride_ht + filter_ht <= input_ht);
+    /* QACC batch path: 16 consecutive output pixels (raster order, across
+     * rows) per batch. Their windows are staged transposed, t[tap * 16 + p],
+     * with pad_val for taps outside the input, so padded layers keep all 16
+     * lanes busy and no pixel falls to the per-pixel path. Accumulation
+     * order per output element is unchanged: bit-identical. */
     int32_t raster_end = 0;     /* exclusive, in pixels */
-
-    if (all_interior && window_len <= ESP_NN_IM2COL_BATCH_MAX_WINDOW &&
-            total_pixels >= 16) {
+    if (window_len <= ESP_NN_IM2COL_BATCH_MAX_WINDOW) {
         const int32_t row_size = filter_wd * in_ch;
-        int8_t *t = (int8_t *)(((uintptr_t)(im2col_buf + window_len) + 15)
-                               & ~(uintptr_t)15);
-        raster_end = (total_pixels / 16) * 16;
+        int8_t *t = work;
+        /* A tail of fewer than 8 pixels costs less per pixel below. */
+        raster_end = total_pixels;
+        if ((total_pixels & 15) != 0 && (total_pixels & 15) < 8) {
+            raster_end = total_pixels & ~15;
+        }
+        /* The per-pixel window buffer is free here: it holds the pad row. */
+        int8_t *pad_row = im2col_buf;
+        memset(pad_row, pad_val, in_ch);
         for (int32_t pix = 0; pix < raster_end; pix += 16) {
+            const int32_t lanes = min(16, raster_end - pix);
+            /* Window origin of each lane; lanes past `lanes` repeat pixel
+             * pix - they are multiplied but never stored. */
             const int8_t *bases[16];
+            int32_t org_y[16], org_x[16];
+            bool interior = true;
             for (int p = 0; p < 16; p++) {
-                const int32_t px = pix + p;
+                const int32_t px = pix + ((p < lanes) ? p : 0);
                 const int32_t oy = px / out_wd;
                 const int32_t ox = px % out_wd;
-                bases[p] = input_data + ((int32_t)(oy * stride_ht) * input_wd
-                                         + ox * stride_wd) * in_ch;
+                org_y[p] = oy * stride_ht - pad_ht;
+                org_x[p] = ox * stride_wd - pad_wd;
+                interior = interior && org_y[p] >= 0 && org_x[p] >= 0 &&
+                        org_y[p] + filter_ht <= input_ht &&
+                        org_x[p] + filter_wd <= input_wd;
+                bases[p] = input_data +
+                        ((int32_t)org_y[p] * input_wd + org_x[p]) * in_ch;
             }
-            for (int32_t fy = 0; fy < filter_ht; fy++) {
-                const int32_t row_off = (int32_t)fy * input_wd * in_ch;
-                int8_t *dst = t + (int32_t)fy * row_size * 16;
-                for (int32_t i = 0; i < row_size; i++, dst += 16) {
-                    const int32_t off = row_off + i;
-                    dst[0]  = bases[0][off];   dst[1]  = bases[1][off];
-                    dst[2]  = bases[2][off];   dst[3]  = bases[3][off];
-                    dst[4]  = bases[4][off];   dst[5]  = bases[5][off];
-                    dst[6]  = bases[6][off];   dst[7]  = bases[7][off];
-                    dst[8]  = bases[8][off];   dst[9]  = bases[9][off];
-                    dst[10] = bases[10][off];  dst[11] = bases[11][off];
-                    dst[12] = bases[12][off];  dst[13] = bases[13][off];
-                    dst[14] = bases[14][off];  dst[15] = bases[15][off];
+            if (interior) {
+                /* Tap-outer so each tap's 16 stores fill one 16-byte line. */
+                for (int32_t fy = 0; fy < filter_ht; fy++) {
+                    const int32_t row_off = (int32_t)fy * input_wd * in_ch;
+                    int8_t *dst = t + (int32_t)fy * row_size * 16;
+                    if (row_size >= 8) {
+                        const int8_t *vb[16];
+                        for (int p = 0; p < 16; p++) {
+                            vb[p] = bases[p];
+                        }
+                        im2col_stage_lanes16(vb, row_off, row_size, dst);
+                    }
+                    const int32_t i0 = row_size & ~7;
+                    dst += i0 * 16;
+                    for (int32_t i = i0; i < row_size; i++, dst += 16) {
+                        const int32_t off = row_off + i;
+                        dst[0]  = bases[0][off];   dst[1]  = bases[1][off];
+                        dst[2]  = bases[2][off];   dst[3]  = bases[3][off];
+                        dst[4]  = bases[4][off];   dst[5]  = bases[5][off];
+                        dst[6]  = bases[6][off];   dst[7]  = bases[7][off];
+                        dst[8]  = bases[8][off];   dst[9]  = bases[9][off];
+                        dst[10] = bases[10][off];  dst[11] = bases[11][off];
+                        dst[12] = bases[12][off];  dst[13] = bases[13][off];
+                        dst[14] = bases[14][off];  dst[15] = bases[15][off];
+                    }
+                }
+            } else {
+                /* Border batch: per filter tap, each lane reads its input
+                 * pixel or the pad_val row. Only in-bounds bytes are read. */
+                int8_t *dst = t;
+                for (int32_t fy = 0; fy < filter_ht; fy++) {
+                    for (int32_t fx = 0; fx < filter_wd; fx++) {
+                        const int8_t *src[16];
+                        for (int p = 0; p < 16; p++) {
+                            const int32_t iy = org_y[p] + fy;
+                            const int32_t ix = org_x[p] + fx;
+                            src[p] = (iy >= 0 && iy < input_ht && ix >= 0 &&
+                                      ix < input_wd)
+                                    ? input_data + ((int32_t)iy * input_wd
+                                                    + ix) * in_ch
+                                    : pad_row;
+                        }
+                        if (in_ch >= 8) {
+                            const int8_t *vb[16];
+                            for (int p = 0; p < 16; p++) {
+                                vb[p] = src[p];
+                            }
+                            im2col_stage_lanes16(vb, 0, in_ch, dst);
+                        }
+                        const int32_t c0 = in_ch & ~7;
+                        dst += c0 * 16;
+                        for (int32_t c = c0; c < in_ch; c++, dst += 16) {
+                            dst[0]  = src[0][c];   dst[1]  = src[1][c];
+                            dst[2]  = src[2][c];   dst[3]  = src[3][c];
+                            dst[4]  = src[4][c];   dst[5]  = src[5][c];
+                            dst[6]  = src[6][c];   dst[7]  = src[7][c];
+                            dst[8]  = src[8][c];   dst[9]  = src[9][c];
+                            dst[10] = src[10][c];  dst[11] = src[11][c];
+                            dst[12] = src[12][c];  dst[13] = src[13][c];
+                            dst[14] = src[14][c];  dst[15] = src[15][c];
+                        }
+                    }
                 }
             }
             qacc16_run_channels(t, filter_data, window_len, 0, out_ch,
                                 filter_sum, bias, quant_data->mult,
                                 quant_data->shift,
                                 out_data + (int32_t)pix * out_ch, out_ch,
-                                out_offset, activation_min, activation_max, 16);
+                                out_offset, activation_min, activation_max,
+                                lanes, tab);
         }
-        row_groups = 0;          /* per-pixel skips by raster_end instead */
-        bx_end = bx_lo;
-    } else if (window_len <= ESP_NN_IM2COL_BATCH_MAX_WINDOW && row_groups > 0) {
-        const int32_t row_size = filter_wd * in_ch;
-        int8_t *t = (int8_t *)(((uintptr_t)(im2col_buf + window_len) + 15)
-                               & ~(uintptr_t)15);
-        for (int32_t oy = by_lo; oy <= by_hi; oy++) {
-            const int32_t base_y = oy * stride_ht - pad_ht;
-            for (int32_t ox = bx_lo; ox < bx_end; ox += 16) {
-                const int32_t lanes = min(16, bx_end - ox);
-                /* Stage the windows transposed: t[tap * 16 + p]. Tap-outer so
-                 * each tap's 16 stores fill one contiguous 16-byte line.
-                 * Lanes past `lanes` repeat pixel 0 - they are multiplied but
-                 * never stored, and reading in-bounds keeps it safe. */
-                const int8_t *bases[16];
-                for (int p = 0; p < 16; p++) {
-                    const int32_t src_x = (p < lanes) ? (ox + p) : ox;
-                    bases[p] = input_data +
-                            ((int32_t)base_y * input_wd
-                             + src_x * stride_wd - pad_wd) * in_ch;
-                }
-                for (int32_t fy = 0; fy < filter_ht; fy++) {
-                    const int32_t row_off = (int32_t)fy * input_wd * in_ch;
-                    int8_t *dst = t + (int32_t)fy * row_size * 16;
-                    for (int32_t i = 0; i < row_size; i++, dst += 16) {
-                        const int32_t off = row_off + i;
-                        dst[0]  = bases[0][off];
-                        dst[1]  = bases[1][off];
-                        dst[2]  = bases[2][off];
-                        dst[3]  = bases[3][off];
-                        dst[4]  = bases[4][off];
-                        dst[5]  = bases[5][off];
-                        dst[6]  = bases[6][off];
-                        dst[7]  = bases[7][off];
-                        dst[8]  = bases[8][off];
-                        dst[9]  = bases[9][off];
-                        dst[10] = bases[10][off];
-                        dst[11] = bases[11][off];
-                        dst[12] = bases[12][off];
-                        dst[13] = bases[13][off];
-                        dst[14] = bases[14][off];
-                        dst[15] = bases[15][off];
-                    }
-                }
-                qacc16_run_channels(t, filter_data, window_len, 0, out_ch,
-                                    filter_sum, bias, quant_data->mult,
-                                    quant_data->shift,
-                                    out_data + ((int32_t)oy * out_wd + ox) * out_ch,
-                                    out_ch, out_offset,
-                                    activation_min, activation_max, lanes);
-            }
-        }
-    } else {
-        row_groups = 0;      /* nothing batched: per-pixel covers everything */
-        bx_end = bx_lo;
     }
 
-    /* Per-pixel path: border pixels the interior batch above did not cover
-     * (and everything, when no batch ran). */
-    for (int32_t pixel = 0; pixel < total_pixels; pixel++) {
+    /* Per-pixel path: short tails and windows too long for the batch. */
+    for (int32_t pixel = raster_end; pixel < total_pixels; pixel++) {
         {
             const int32_t out_y = pixel / out_wd;
             const int32_t out_x = pixel % out_wd;
-            if (pixel < raster_end) {
-                continue;       /* produced by the raster batch */
-            }
-            if (row_groups > 0 && out_y >= by_lo && out_y <= by_hi &&
-                    out_x >= bx_lo && out_x < bx_end) {
-                continue;       /* produced by the interior-row batch */
-            }
             int8_t *out_ptr = out_data + (int32_t)pixel * out_ch;
             const int32_t base_y = out_y * stride_ht - pad_ht;
             const int32_t base_x = out_x * stride_wd - pad_wd;
@@ -1899,8 +1922,8 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
         /* Dense no-pad conv whose window fits the 16-pixel QACC batch: the
          * per-element XACC path below pays a dot setup and a requant per
          * output element, while the batch stages 16 windows once and
-         * amortizes both across them (and weaves the requant into the MAC
-         * stream). Same accumulation order per output: bit-identical. */
+         * amortizes both across them. Same accumulation order per output:
+         * bit-identical. */
         esp_nn_conv_s8_im2col(input_dims, input, filter_dims, filter_data, bias,
                               output_dims, out_data, conv_params, quant_data,
                               scratch_buffer);
