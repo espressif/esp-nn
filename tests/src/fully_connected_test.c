@@ -53,7 +53,6 @@ void esp_nn_fully_connected_s8_test()
         /* TFLite weights are symmetric (filter_offset == 0) almost always;
          * a couple of iterations exercise the non-zero filter_offset SIMD path. */
         filter_offset = (itr == 9 || itr == 12) ? 5 : 0;
-        out_mult = INT32_MAX / row_len + rand() % INT16_MAX;
         switch (itr) {
         case 0:
             out_shift = -10;
@@ -97,6 +96,11 @@ void esp_nn_fully_connected_s8_test()
             out_channels = 8;
             out_shift = -10 + rand() % 5;
             break;
+        }
+        /* After row_len is set. Clamped: INT32_MAX / 1 + more overflows. */
+        {
+            const int64_t m = (int64_t) INT32_MAX / row_len + rand() % INT16_MAX;
+            out_mult = (int32_t) (m > INT32_MAX ? INT32_MAX : m);
         }
         if (itr == 0) {
             out_shift = SHIFT_MAX;
@@ -392,10 +396,9 @@ static void fc_align_run_point(int8_t *input, int8_t *filter_data,
                                int8_t *out_region, int8_t *out_ref,
                                uint16_t row_len, uint16_t out_channels,
                                int32_t *out_mult, int32_t *out_shift,
-                               fc_align_result_t *res)
+                               int32_t input_offset, fc_align_result_t *res)
 {
     /* Quantization params taken from the esp-nn#34 report. */
-    const int32_t input_offset = -3;
     const int32_t filter_offset = 0;    /* TFLite int8 weights are symmetric */
     const int32_t out_offset = -128;
     const int32_t activation_min = -128;
@@ -526,7 +529,7 @@ void esp_nn_fully_connected_align_s8_test()
     for (int off = 0; off < 16; off++) {
         fc_align_result_t res = {0};
         fc_align_run_point(input_base + off, filter_base, out_region, out_ref,
-                           FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, &res);
+                           FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, -3, &res);
         fc_align_report("input off", off, &res);
     }
 
@@ -535,7 +538,7 @@ void esp_nn_fully_connected_align_s8_test()
     for (int off = 0; off < 16; off++) {
         fc_align_result_t res = {0};
         fc_align_run_point(input_base, filter_base + off, out_region, out_ref,
-                           FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, &res);
+                           FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, -3, &res);
         fc_align_report("filter off", off, &res);
     }
 
@@ -550,7 +553,7 @@ void esp_nn_fully_connected_align_s8_test()
             fc_align_result_t res = {0};
             fc_align_run_point(input_base + off, filter_base, out_region, out_ref,
                                FC_ALIGN_ROW_LEN, out_chs[i], out_mult, out_shift,
-                               &res);
+                               -3, &res);
             fc_align_report("out_ch", out_chs[i], &res);
         }
     }
@@ -565,7 +568,7 @@ void esp_nn_fully_connected_align_s8_test()
             const int off = (int[]){0, 1, 8}[j];
             fc_align_result_t res = {0};
             fc_align_run_point(input_base + off, filter_base, out_region, out_ref,
-                               small_rows[i], 2, out_mult, out_shift, &res);
+                               small_rows[i], 2, out_mult, out_shift, -3, &res);
             printf("  row_len %2u / in off %d: ", small_rows[i], off);
             fc_align_report(NULL, 0, &res);
         }
@@ -578,7 +581,7 @@ void esp_nn_fully_connected_align_s8_test()
     for (int i = 0; i < (int)(sizeof(align_offs) / sizeof(align_offs[0])); i++) {
         fc_align_result_t res = {0};
         fc_align_run_point(input_base + align_offs[i], filter_base, out_region,
-                           out_ref, 1271, 2, out_mult, out_shift, &res);
+                           out_ref, 1271, 2, out_mult, out_shift, -3, &res);
         fc_align_report("input off", align_offs[i], &res);
     }
 
@@ -589,9 +592,32 @@ void esp_nn_fully_connected_align_s8_test()
             fc_align_result_t res = {0};
             fc_align_run_point(input_base + align_offs[i],
                                filter_base + align_offs[j], out_region, out_ref,
-                               FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, &res);
+                               FC_ALIGN_ROW_LEN, 2, out_mult, out_shift, -3, &res);
             printf("  in off %d / filt off %d: ", align_offs[i], align_offs[j]);
             fc_align_report(NULL, 0, &res);
+        }
+    }
+
+    /* Sweep F: the S3 one-pass kernel (16-byte aligned input,
+     * filter_offset 0) at the edges of its input offset handling. 128 runs
+     * as 127 + 1. 129 and -129 are past the API range: the kernel still
+     * splits them into two s8 broadcasts. Row lengths: one vector, an odd
+     * number of vectors, and two that are not whole vectors. Filter offset 4
+     * makes every row unaligned. */
+    const int32_t f_ins[] = {128, 127, -128, 0, 129, -129};
+    const uint16_t f_rows[] = {16, 48, 33, 271};
+    printf("-- sweep F: input offset 128/127/-128/0/129/-129, row_len 16/48/33/271, filter off 0/4 --\n");
+    for (int i = 0; i < (int)(sizeof(f_ins) / sizeof(f_ins[0])); i++) {
+        for (int j = 0; j < (int)(sizeof(f_rows) / sizeof(f_rows[0])); j++) {
+            for (int k = 0; k < 2; k++) {
+                fc_align_result_t res = {0};
+                fc_align_run_point(input_base, filter_base + 4 * k, out_region,
+                                   out_ref, f_rows[j], 3, out_mult, out_shift,
+                                   f_ins[i], &res);
+                printf("  in_off %4d / row_len %3u / filt off %d: ",
+                       (int) f_ins[i], f_rows[j], 4 * k);
+                fc_align_report(NULL, 0, &res);
+            }
         }
     }
 
@@ -836,9 +862,10 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
     printf("\n######## Running %s ##########\n", __FUNCTION__);
     /* (batches, row_len, out_ch, input_offset, input misalign, filter misalign,
      * filter_offset, with_bias).
-     * row_len a multiple of 16 keeps the s8 fast path; 33 exercises the scalar
-     * tail and, since its rows then start at differing offsets, mixed row
-     * alignments; in_off 0 skips the correction. On P4 and S31, a row shorter
+     * row_len a multiple of 16 keeps the s8 fast path. On S3, 33 runs the
+     * one-pass kernel once per batch row, and its rows start at differing
+     * offsets, so it covers unaligned filter rows. in_off 0 skips the
+     * correction. On P4 and S31, a row shorter
      * than 16 with more than one batch and filter offset 0 stays in the batch
      * scalar loop. A single batch, or a nonzero filter offset, calls the
      * per-row kernel once per batch. with_bias passes one bias array to the
@@ -859,7 +886,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
         { 48, 160, 32,  5, 0,  0, 0, 0 },   /* conformer FFN-d1 shape */
         { 48,  64, 16,  0, 0,  0, 0, 0 },   /* input_offset 0 */
         {  8,  80,  8, -3, 0,  0, 0, 0 },
-        {  4,  33,  5,  7, 0,  0, 0, 0 },   /* non-multiple-of-16 row_len -> scalar tail */
+        {  4,  33,  5,  7, 0,  0, 0, 0 },   /* non-multiple-of-16 row_len: S3 per-row one-pass kernel, unaligned rows */
         {  1, 128, 12, 11, 0,  0, 0, 0 },   /* single row */
         {  1, 256, 16, 128, 0,  0, 0, 0 }, /* single row: per-row one-pass path */
         {  4,  64,  8,  5, 8,  4, 0, 0 },   /* neither operand 16-aligned: per-row s16 fallback */
