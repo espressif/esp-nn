@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 40; itr++) {
+    for (int itr = 0; itr < 46; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -488,6 +488,71 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
+        case 40: // S3 KxK with misaligned input and output: the row copies
+                 // and the staged stores
+            input_wd = 11;
+            input_ht = 9;
+            filter_ht = 5;
+            filter_wd = 5;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 2;
+            pad_ht = 2;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 41: // S3 KxK, biases on both sides of the 2^29 bound between
+                 // the fast and the general requant
+            input_wd = 8;
+            input_ht = 8;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 42: // S3 KxK, 31 taps of -128 * -128: the QACC lane limit
+            input_wd = 40;
+            input_ht = 3;
+            filter_ht = 1;
+            filter_wd = 31;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 43: // S3 KxK, padded, in_offset 128: pad taps are -128
+        case 44: // S3 KxK, padded, in_offset -127: pad taps are 127
+            input_wd = 6;
+            input_ht = 6;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            input_offset = (itr == 43) ? 128 : -127;
+            break;
+        case 45: // KxK shape with full-range activation limits and a positive
+                 // out_offset: S3 must not take the KxK kernel
+            input_wd = 8;
+            input_ht = 8;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -532,9 +597,9 @@ void esp_nn_depthwise_conv_s8_test()
         int32_t *out_shift = ESP_NN_TEST_ALLOC(channels * ch_mult * sizeof(int32_t));
         int32_t *out_mult = ESP_NN_TEST_ALLOC(channels * ch_mult * sizeof(int32_t));
 
-        int8_t *input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
-        int8_t *out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
-        int8_t *out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
+        int8_t *input_orig = ESP_NN_TEST_ALLOC(in_size + 32);
+        int8_t *out_c_orig = ESP_NN_TEST_ALLOC(out_size + 32);
+        int8_t *out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 32);
         filter_data = ESP_NN_TEST_ALLOC(filter_size + 16);
         bias = ESP_NN_TEST_ALLOC(bias_size * 4);
 
@@ -548,9 +613,15 @@ void esp_nn_depthwise_conv_s8_test()
         input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
         if (itr == 21) {
             input += 1;
+        } else if (itr == 40) {
+            input += 3;
         }
         out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
+        if (itr == 40) {
+            out_data_c += 4;
+            out_data_opt += 4;
+        }
 
         /* Most cases pass filter_data + 4 deliberately, to keep the kernels
          * honest about unaligned filters. Cases 21-22 need an ALIGNED filter:
@@ -581,15 +652,30 @@ void esp_nn_depthwise_conv_s8_test()
                 out_shift[i] = 1;
                 out_mult[i] = 0x40000000 + rand() % 50;
             }
+            if (itr == 41) {
+                /* folded bias around +-2^29, some lanes past it */
+                const int32_t step = ((i % 4) - 2) * 300000;
+                bias[i + 1] = (i & 1) ? (1 << 29) + step : -(1 << 29) - step;
+            }
+        }
+        if (itr == 42) {
+            for (int i = 0; i < in_size; ++i) {
+                input[i] = -128;
+            }
+            for (int i = 0; i < filter_size; ++i) {
+                filter_data[i] = -128;
+            }
         }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
         data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
         const int32_t test_input_offset = itr == 21 ? 0 : input_offset;
+        const int32_t test_act_min = itr == 45 ? INT32_MIN : activation_min;
+        const int32_t test_act_max = itr == 45 ? INT32_MAX : activation_max;
         dw_conv_params_t conv_params = {.in_offset = test_input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
                                         .stride = {stride_wd, stride_ht}, .padding = {pad_wd, pad_ht},
-                                        .dilation = {0, 0}, .activation = {activation_min, activation_max}};
+                                        .dilation = {0, 0}, .activation = {test_act_min, test_act_max}};
         quant_data_t quant_data = {.shift = out_shift, .mult = out_mult};
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
