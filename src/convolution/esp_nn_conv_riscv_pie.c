@@ -527,6 +527,9 @@ static void qacc16_run_channels(const int8_t *t, const int8_t *filt_base,
                                 int32_t act_min, int32_t act_max,
                                 int32_t lanes)
 {
+    /* The MAC asm reads t and filt_base through pointers and has no memory
+     * operands. Every store that staged t must land before it. */
+    asm volatile ("" ::: "memory");
     const int8_t *filt = filt_base;
 
     /* The woven requant writes all 16 lanes, so partial batches take the
@@ -615,33 +618,87 @@ static void qacc16_run_channels(const int8_t *t, const int8_t *filt_base,
     }
 }
 
-static void conv_1x1_batch16_deep(const int8_t *input, /* 16*in_ch bytes */
-                                  const int8_t *filter_data,
-                                  const int32_t *filter_sum,
-                                  const int32_t *bias,
-                                  int8_t *out_data, /* 16 pixels, stride out_stride */
-                                  int32_t in_ch,
-                                  int32_t oc_base, int32_t oc_end,
-                                  int32_t out_stride,
-                                  int32_t out_offset,
-                                  const int32_t *out_mult,
-                                  const int32_t *out_shift,
-                                  int32_t act_min, int32_t act_max,
-                                  int8_t *transposed /* in_ch*16, 16-aligned */)
+/*
+ * Stages 16 channels [c0, c0 + 16) of 8 contiguous pixels, transposed:
+ * t[c * 16 + p] for c in the block and p < 8, at dst = t + c0 * 16 + p0.
+ * Eight loads one pixel apart, a 3-stage zip network (8, 16, 32 bit) and
+ * sixteen 8-byte stores. The loads may be unaligned (ESP_NN_PIE_ENABLE).
+ * Overwrites q0-q7. GCC has no names for the PIE q registers, so they are
+ * not in the clobber list, and the caller keeps nothing live in them.
+ */
+static inline __attribute__((always_inline))
+void conv_stage8x16_pie(const int8_t *src, int32_t stride, int8_t *dst)
 {
-    /* Transpose 16 pixels to channel-major: t[c][p] = in[p][c]. */
-    for (int32_t c = 0; c < in_ch; c++) {
-        int8_t *t = transposed + c * 16;
-        const int8_t *src = input + c;
-        for (int p = 0; p < 16; p++) {
-            t[p] = src[p * in_ch];
-        }
-    }
+    asm volatile (
+        "mv     x30, %[s]                    \n\t"
+        "mv     x29, %[st]                   \n\t"
+        "mv     x31, %[d]                    \n\t"
+        "esp.vld.128.xp  q0, x30, x29        \n\t"
+        "esp.vld.128.xp  q1, x30, x29        \n\t"
+        "esp.vld.128.xp  q2, x30, x29        \n\t"
+        "esp.vld.128.xp  q3, x30, x29        \n\t"
+        "esp.vld.128.xp  q4, x30, x29        \n\t"
+        "esp.vld.128.xp  q5, x30, x29        \n\t"
+        "esp.vld.128.xp  q6, x30, x29        \n\t"
+        "esp.vld.128.xp  q7, x30, x29        \n\t"
+        /* Byte pairs (pixels 2k, 2k + 1), then quads, then all 8 pixels. */
+        "esp.vzip.8  q0, q1                  \n\t"
+        "esp.vzip.8  q2, q3                  \n\t"
+        "esp.vzip.8  q4, q5                  \n\t"
+        "esp.vzip.8  q6, q7                  \n\t"
+        "esp.vzip.16 q0, q2                  \n\t"
+        "esp.vzip.16 q1, q3                  \n\t"
+        "esp.vzip.16 q4, q6                  \n\t"
+        "esp.vzip.16 q5, q7                  \n\t"
+        "esp.vzip.32 q0, q4                  \n\t"
+        "esp.vzip.32 q2, q6                  \n\t"
+        "esp.vzip.32 q1, q5                  \n\t"
+        "esp.vzip.32 q3, q7                  \n\t"
+        /* Channels 0-1, 2-3, ... 14-15 are in q0 q4 q2 q6 q1 q5 q3 q7. */
+        "esp.vst.l.64.ip q0, x31, 16         \n\t"
+        "esp.vst.h.64.ip q0, x31, 16         \n\t"
+        "esp.vst.l.64.ip q4, x31, 16         \n\t"
+        "esp.vst.h.64.ip q4, x31, 16         \n\t"
+        "esp.vst.l.64.ip q2, x31, 16         \n\t"
+        "esp.vst.h.64.ip q2, x31, 16         \n\t"
+        "esp.vst.l.64.ip q6, x31, 16         \n\t"
+        "esp.vst.h.64.ip q6, x31, 16         \n\t"
+        "esp.vst.l.64.ip q1, x31, 16         \n\t"
+        "esp.vst.h.64.ip q1, x31, 16         \n\t"
+        "esp.vst.l.64.ip q5, x31, 16         \n\t"
+        "esp.vst.h.64.ip q5, x31, 16         \n\t"
+        "esp.vst.l.64.ip q3, x31, 16         \n\t"
+        "esp.vst.h.64.ip q3, x31, 16         \n\t"
+        "esp.vst.l.64.ip q7, x31, 16         \n\t"
+        "esp.vst.h.64.ip q7, x31, 16         \n\t"
+        :
+        : [s] "r"(src), [st] "r"(stride), [d] "r"(dst)
+        : "x29", "x30", "x31", "memory"
+    );
+}
 
-    qacc16_run_channels(transposed, filter_data + oc_base * in_ch, in_ch,
-                        oc_base, oc_end, filter_sum, bias, out_mult,
-                        out_shift, out_data, out_stride, out_offset,
-                        act_min, act_max, 16);
+/*
+ * Transposes 16 contiguous pixels to channel-major, for in_ch >= 16:
+ * transposed[c * 16 + p] = input[p * in_ch + c]. Each 16-channel block is
+ * two passes of conv_stage8x16_pie, one per 8 pixels. A partial last block
+ * is one more block on the last 16 channels: it rewrites the overlap with
+ * the same bytes. Out of line, so its code stays out of the caller's loops.
+ */
+__attribute__((noinline))
+static void conv_1x1_stage16(const int8_t *input, int32_t in_ch,
+                             int8_t *transposed)
+{
+    for (int32_t c0 = 0; c0 + 16 <= in_ch; c0 += 16) {
+        int8_t *dst = transposed + c0 * 16;
+        conv_stage8x16_pie(input + c0, in_ch, dst);
+        conv_stage8x16_pie(input + 8 * in_ch + c0, in_ch, dst + 8);
+    }
+    if (in_ch & 15) {
+        const int32_t c0 = in_ch - 16;
+        int8_t *dst = transposed + c0 * 16;
+        conv_stage8x16_pie(input + c0, in_ch, dst);
+        conv_stage8x16_pie(input + 8 * in_ch + c0, in_ch, dst + 8);
+    }
 }
 
 __attribute__ ((noinline))
@@ -757,18 +814,19 @@ static void esp_nn_conv_s8_1x1(const data_dims_t *input_dims,
             int8_t *transposed = (int8_t *)(((uintptr_t)((int8_t *)scratch
                     + out_channels * 4 + 15)) & ~(uintptr_t)15);
             for (int32_t pix = 0; pix < batched; pix += 16) {
-                const int8_t *in_batch = input_data + pix * in_channels;
                 int8_t *out_batch = out_data + pix * out_channels;
+                /* Staged once per batch, then used by every panel. */
+                conv_1x1_stage16(input_data + pix * in_channels, in_channels,
+                                 transposed);
                 for (int32_t oc_base = 0; oc_base < out_channels;
                         oc_base += oc_tile) {
                     const int32_t oc_end = min(oc_base + oc_tile, out_channels);
-                    conv_1x1_batch16_deep(in_batch, filter_data, filter_sum,
-                                          bias, out_batch, in_channels,
-                                          oc_base, oc_end, out_channels,
-                                          out_offset, quant_data->mult,
-                                          quant_data->shift,
-                                          activation_min, activation_max,
-                                          transposed);
+                    qacc16_run_channels(transposed,
+                                        filter_data + oc_base * in_channels,
+                                        in_channels, oc_base, oc_end, filter_sum,
+                                        bias, quant_data->mult, quant_data->shift,
+                                        out_batch, out_channels, out_offset,
+                                        activation_min, activation_max, 16);
                 }
             }
             if (batched == total_pixels) {
@@ -1693,6 +1751,42 @@ static void conv1x1_pie_mt_worker(void *p)
                        j->quant_data, j->scratch);
 }
 
+/*
+ * Whether the dual-core row split of the 1x1 conv pays off. A map of 16
+ * pixels or more runs 16-pixel batches on one core. When the worker's half
+ * is under 16 pixels, the worker does not batch. P4 rev v3.2, batch-16 FC:
+ * - Up to 32 output channels, one core with the batch is 1.03x to 2.7x
+ *   faster than two cores without it.
+ * - With in_ch not a multiple of 16, one core with the batch is faster at
+ *   every output width (1.27x or more).
+ * - Otherwise two cores are about as fast or faster, up to 1.8x at
+ *   in_ch 256 and 256 outputs.
+ * The split still wins in two cases, P4 rev v3.2 with the worker on:
+ * - 16 pixels with a filter of 64 KB or more take the filter-major path,
+ *   which does not batch: 1.7x to 1.9x faster split.
+ * - The caller's half (the taller one for an odd height) keeps every
+ *   16-pixel batch, e.g. 6x5 or 4x7: 1.3x to 1.6x faster split.
+ * Out of line, so the dispatcher's code layout stays as it was.
+ */
+__attribute__((noinline))
+static bool conv_1x1_split_wins(int32_t in_ch, const data_dims_t *output_dims)
+{
+    const int32_t total = (int32_t)output_dims->width * output_dims->height;
+    const int32_t worker = (int32_t)(output_dims->height / 2) *
+                           output_dims->width;
+    if (total < 16 || worker >= 16) {
+        return true;
+    }
+    if (output_dims->channels > 32 && (in_ch & 15) == 0) {
+        return true;
+    }
+    if ((int32_t)in_ch * output_dims->channels >= 64 * 1024 && total <= 16) {
+        return true;  /* filter-major path: no batch to keep */
+    }
+    /* Split when the caller's half keeps every 16-pixel batch. */
+    return (total - worker) / 16 == total / 16;
+}
+
 void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
                             const int8_t *input,
                             const data_dims_t *filter_dims,
@@ -1760,7 +1854,9 @@ void esp_nn_conv_s8_riscv_pie(const data_dims_t *input_dims,
             stride_wd == 1 && stride_ht == 1) {
         /* Rows are independent for a stride-1 unpadded 1x1: split them
          * across both cores (bit-identical, disjoint outputs). */
-        if (output_dims->height >= 4 && esp_nn_dual_core_begin()) {
+        if (output_dims->height >= 4 &&
+                conv_1x1_split_wins(input_dims->channels, output_dims) &&
+                esp_nn_dual_core_begin()) {
             const int scratch_size = esp_nn_conv_scratch_size_riscv_pie_impl(
                     input_dims, filter_dims, output_dims, conv_params);
             void *wscr = esp_nn_dual_core_scratch(scratch_size + 16);
