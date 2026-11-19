@@ -102,6 +102,64 @@ static void dw_pie_scalar_pos(const data_dims_t *input_dims, const int8_t *input
     }
 }
 
+/* Constants of the 3x3 edge strips of the non-slab path. */
+typedef struct {
+    const int8_t *input;
+    int8_t *out;
+    const int8_t *filter;
+    const int32_t *comb;
+    const int16_t *vrq;
+    int32_t *acc;
+    int8_t *slab;
+    const int8_t *pad;
+    int in_wd, in_ht, ch, out_wd, s_wd, s_ht, p_wd, p_ht;
+} dw_edge_t;
+
+/* Output rows [oy0, oy0 + rh) and columns [ox0, ox0 + rw) of a 3x3 layer
+ * whose channels all run in fused 16-channel blocks. Per block, the input
+ * of the rectangle is copied to a slab padded with -input_offset, then one
+ * fused call runs all its positions. */
+static void dw_pie_edge_rect(const dw_edge_t *e, int oy0, int rh, int ox0, int rw)
+{
+    const int slab_w = (rw - 1) * e->s_wd + 3;
+    const int slab_rows = (rh - 1) * e->s_ht + 3;
+    int8_t *fslab = e->slab + slab_rows * slab_w * 16;
+    /* slab columns: nl pad, nin input from column xs, nr pad */
+    const int x0 = ox0 * e->s_wd - e->p_wd;
+    const int nl = min(slab_w, max(0, -x0));
+    const int xs = max(0, x0);
+    const int nin = max(0, min(slab_w - nl, e->in_wd - xs));
+    const int nr = slab_w - nl - nin;
+    const int y0 = oy0 * e->s_ht - e->p_ht;
+    dw_win_t sw = {
+        .row_len = rw, .step = e->s_wd * 16,
+        .wrap = (e->s_ht * slab_w - rw * e->s_wd) * 16,
+        .fp = fslab, .acc = e->acc, .ch = 16, .rows = 3, .cols = 3,
+        .ip_row = (slab_w - 3) * 16,
+        .ostep = e->ch, .owrap = (e->out_wd - rw) * e->ch,
+    };
+    for (int ch_idx = 0; ch_idx < e->ch; ch_idx += 16) {
+        esp_nn_dw_slab_row_riscv_pie(fslab, e->filter + ch_idx, e->ch, 0, 9, 0, e->pad);
+        for (int i = 0; i < slab_rows; i++) {
+            const int y = y0 + i;
+            int8_t *d = e->slab + i * slab_w * 16;
+            if (y < 0 || y >= e->in_ht || nin == 0) {
+                esp_nn_dw_slab_row_riscv_pie(d, NULL, 0, slab_w, 0, 0, e->pad);
+            } else {
+                esp_nn_dw_slab_row_riscv_pie(d, e->input + (y * e->in_wd + xs) * e->ch + ch_idx,
+                                             e->ch, nl, nin, nr, e->pad);
+            }
+        }
+        sw.ip = e->slab;
+        sw.oxl = rw;
+        sw.np = rw * rh;
+        sw.comb = e->comb + ch_idx;
+        sw.op = e->out + (oy0 * e->out_wd + ox0) * e->ch + ch_idx;
+        sw.vrq = e->vrq + 7 * ch_idx;
+        esp_nn_dw_win_vrq_riscv_pie(&sw);
+    }
+}
+
 /* PIE ch_mult == 1 path, channels >= 8, 16 channels per QACC pass.
  * - QACC starts at comb[ch] = filter_sum[ch] * input_offset + bias[ch] and
  *   accumulates in * filter over the full window. Taps outside the input
@@ -121,7 +179,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                                        int8_t *out_data,
                                        const dw_conv_params_t *conv_params,
                                        const quant_data_t *quant_data,
-                                       int32_t *layer_scratch, int slab_bytes)
+                                       int32_t *layer_scratch, int slab_bytes,
+                                       int edge_bytes)
 {
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
@@ -424,6 +483,43 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         oy = ox = 0;
     }
 
+    if (fuse && edge_bytes && !slow_blocks && (channels & 15) == 0) {
+        /* Edge positions from padded slabs of their input: the top and
+         * bottom rows, then the left and right columns of the inner rows
+         * in chunks that fit edge_bytes. */
+        const dw_edge_t e = {
+            .input = input_data, .out = out_data, .filter = filter_data,
+            .comb = comb_v, .vrq = vrq, .acc = acc,
+            .slab = (int8_t *) vrq_t + 14 * ch_pad, .pad = pad_vec,
+            .in_wd = input_wd, .in_ht = input_ht, .ch = channels, .out_wd = out_wd,
+            .s_wd = stride_wd, .s_ht = stride_ht, .p_wd = pad_wd, .p_ht = pad_ht,
+        };
+        /* top and bottom strips in chunks of columns that fit edge_bytes */
+        const int strip_y[2] = {0, oy_hi}, strip_h[2] = {oy_lo, out_ht - oy_hi};
+        for (int k = 0; k < 2; k++) {
+            if (strip_h[k] == 0) {
+                continue;
+            }
+            const int sl_rows = (strip_h[k] - 1) * stride_ht + 3;
+            const int cols = ((edge_bytes / 16 - 9) / sl_rows - 3) / stride_wd + 1;
+            for (int c = 0; c < out_wd; c += cols) {
+                dw_pie_edge_rect(&e, strip_y[k], strip_h[k], c, min(cols, out_wd - c));
+            }
+        }
+        const int side_x[2] = {0, ox_hi}, side_w[2] = {ox_lo, out_wd - ox_hi};
+        for (int k = 0; k < 2; k++) {
+            if (side_w[k] == 0) {
+                continue;
+            }
+            const int sw_cols = (side_w[k] - 1) * stride_wd + 3;
+            const int rows = ((edge_bytes / 16 - 9) / sw_cols - 3) / stride_ht + 1;
+            for (int r = oy_lo; r < oy_hi; r += rows) {
+                dw_pie_edge_rect(&e, r, min(rows, oy_hi - r), side_x[k], side_w[k]);
+            }
+        }
+        return;
+    }
+
     /* Output positions run in batches of 16, so the requant loads each
      * channel's constants once per 16 positions, and one window call
      * covers a batch of inner positions. */
@@ -564,6 +660,7 @@ typedef struct {
     dw_conv_params_t conv_params;
     const quant_data_t *quant_data;
     int slab_bytes;
+    int edge_bytes;
 } dw_pie_mt_job_t;
 
 static void dw_pie_mt_worker(void *p)
@@ -573,11 +670,11 @@ static void dw_pie_mt_worker(void *p)
     ESP_NN_PIE_ENABLE();
     /* Worker uses its own per-layer constants buffer: no shared-scratch race. */
     int32_t *wscr = (int32_t *)esp_nn_dual_core_scratch(
-            dw_pie_ch1_scratch_size(j->input_dims.channels) + j->slab_bytes);
+            dw_pie_ch1_scratch_size(j->input_dims.channels) + j->slab_bytes + j->edge_bytes);
     depthwise_conv_s8_ch1_pie_impl(&j->input_dims, j->input_data, j->filter_dims,
                                    j->filter_data, j->bias, &j->output_dims,
                                    j->out_data, &j->conv_params, j->quant_data,
-                                   wscr, j->slab_bytes);
+                                   wscr, j->slab_bytes, j->edge_bytes);
 }
 
 /* Output-row split of the ch_mult==1 PIE path: taps are clipped against
@@ -592,7 +689,8 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
                               const data_dims_t *output_dims,
                               int8_t *out_data,
                               const dw_conv_params_t *conv_params,
-                              const quant_data_t *quant_data, int slab_bytes)
+                              const quant_data_t *quant_data, int slab_bytes,
+                              int edge_bytes)
 {
     const uint16_t out_ht = output_dims->height;
     const uint16_t h0 = out_ht / 2;
@@ -604,7 +702,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
     /* Both slices use the slab decision and size of the full call. A
      * slice's slab is never larger than the full one. */
     if (esp_nn_dual_core_scratch(dw_pie_ch1_scratch_size(input_dims->channels) +
-                                 slab_bytes) == NULL) {
+                                 slab_bytes + edge_bytes) == NULL) {
         esp_nn_dual_core_end();
         return false;
     }
@@ -613,7 +711,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
         .filter_dims = filter_dims, .filter_data = filter_data, .bias = bias,
         .output_dims = *output_dims, .out_data = out_data,
         .conv_params = *conv_params, .quant_data = quant_data,
-        .slab_bytes = slab_bytes,
+        .slab_bytes = slab_bytes, .edge_bytes = edge_bytes,
     };
     job.output_dims.height = h0;
     if (!esp_nn_dual_core_run(dw_pie_mt_worker, &job)) {
@@ -632,7 +730,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
                 input_data + in_row_off * input_dims->width * input_dims->channels,
                 filter_dims, filter_data, bias, &outd1,
                 out_data + (int32_t)h0 * output_dims->width * output_dims->channels,
-                &params1, quant_data, scratch_buffer, slab_bytes);
+                &params1, quant_data, scratch_buffer, slab_bytes, edge_bytes);
     }
     esp_nn_dual_core_wait();
     esp_nn_dual_core_end();
@@ -660,12 +758,15 @@ void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
             return;
         }
         const int slab_bytes = dw_pie_slab_size(input_dims, filter_dims, output_dims, conv_params);
+        /* as in the scratch getter */
+        const int edge_bytes = slab_bytes ? 0 :
+                dw_pie_edge_size(input_dims, filter_dims, output_dims, conv_params);
         if (!dw_pie_rows_split(input_dims, input_data, filter_dims, filter_data,
                                bias, output_dims, out_data, conv_params, quant_data,
-                               slab_bytes)) {
+                               slab_bytes, edge_bytes)) {
             depthwise_conv_s8_ch1_pie_impl(input_dims, input_data, filter_dims, filter_data,
                                            bias, output_dims, out_data, conv_params,
-                                           quant_data, scratch_buffer, slab_bytes);
+                                           quant_data, scratch_buffer, slab_bytes, edge_bytes);
         }
         return;
     }
