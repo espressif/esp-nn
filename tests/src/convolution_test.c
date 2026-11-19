@@ -708,7 +708,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 67; itr++) {
+    for (int itr = 0; itr < 72; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -1394,6 +1394,37 @@ void esp_nn_conv_s8_test()
             stride_wd = 1; stride_ht = 1;
             input_offset = -128;
             break;
+        /* 67-69: the P4/S31 16-pixel 1x1 batch, whose transpose runs whole
+         * 16-channel blocks on PIE and a last block that overlaps the one
+         * before. 67 and 68 have 2 output rows, so the dual-core row split
+         * does not run and one core takes the 16-pixel batch. */
+        case 67: // in_ch 24: one block and an overlapping last block, 20 pixels
+            in_wd = 10; in_ht = 2; in_channels = 24; out_channels = 16;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 68: // in_ch 40: two blocks and an overlapping last block
+            in_wd = 10; in_ht = 2; in_channels = 40; out_channels = 24;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 69: // in_ch 48 with the input 3 bytes off a 16-byte boundary
+            in_wd = 6; in_ht = 6; in_channels = 48; out_channels = 16;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        /* 70-71: dual-core row split cases the P4/S31 1x1 keeps although
+         * the worker's half is under 16 pixels. */
+        case 70: // 16 pixels, 66 KB filter: filter-major on both halves
+            in_wd = 4; in_ht = 4; in_channels = 264; out_channels = 256;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 71: // 6x5: the caller's 18 pixels keep the 16-pixel batch
+            in_wd = 6; in_ht = 5; in_channels = 24; out_channels = 32;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -1434,7 +1465,7 @@ void esp_nn_conv_s8_test()
         int filter_prefix = misalign_filter ? 5 : 0;
         int out_size = out_wd * out_ht * out_channels;
 
-        input_orig = ESP_NN_TEST_ALLOC(in_size + 16);
+        input_orig = ESP_NN_TEST_ALLOC(in_size + 32); /* case 69 offsets it */
         out_c_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         out_opt_orig = ESP_NN_TEST_ALLOC(out_size + 16);
         filter_data = ESP_NN_TEST_ALLOC(filter_size + filter_prefix);
@@ -1451,6 +1482,9 @@ void esp_nn_conv_s8_test()
         }
 
         int8_t *input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
+        if (itr == 69) {
+            input += 3;
+        }
         int8_t *out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
         int8_t *out_data_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
