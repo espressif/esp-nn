@@ -158,33 +158,43 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
      * range, so that block alone takes the scalar requant. With more than 64
      * blocks, such a channel turns the PIE requant off for the layer. */
     uint64_t slow_blocks = 0;
+    /* filter sums to comb_v: full 16-channel blocks on PIE, the rest in C */
+    const int taps = filter_ht * filter_wd;
+    int ch_sum = 0;
+    if (input_offset != 0) {
+        for (; ch_sum + 16 <= channels; ch_sum += 16) {
+            esp_nn_dw_tap_sum_riscv_pie(filter_data + ch_sum, channels, taps, comb_v + ch_sum);
+        }
+    }
+    for (int ch = ch_sum; ch < channels; ch++) {
+        int32_t s = 0;
+        for (int t = 0; input_offset != 0 && t < taps; t++) {
+            s += filter_data[t * channels + ch];
+        }
+        comb_v[ch] = s;
+    }
+    /* |comb| must stay below comb_lim (0: no channel fits) */
+    const uint32_t comb_lim = acc_bound >= (1 << 26) ? 0 : (uint32_t) ((1 << 26) - acc_bound);
+    const int32_t *mult = quant_data->mult, *shift = quant_data->shift;
     for (int ch = 0; ch < ch_pad; ch++) {
         int32_t comb = 0, ml = 0, mh = 0, ra = 0, rb = 0, rs = 0;
         if (ch < channels) {
-            int32_t s = 0;
-            if (input_offset != 0) {
-                for (int fy = 0; fy < filter_ht; fy++) {
-                    for (int fx = 0; fx < filter_wd; fx++) {
-                        s += filter_data[(fy * filter_wd + fx) * channels + ch];
-                    }
-                }
-                s *= input_offset;
-            }
-            comb = s + (bias ? bias[ch] : 0);
-            const int32_t m = quant_data->mult[ch];
-            rs = -quant_data->shift[ch];
-            bool ch_ok = true;
-            if (m < 0 || m >= 0x7fff8000 || rs < 1 || rs > 20 ||
-                    acc_bound + (comb < 0 ? -(int64_t) comb : comb) >= (1LL << 26)) {
-                ch_ok = false;
+            comb = comb_v[ch] * input_offset + (bias ? bias[ch] : 0);
+            const int32_t m = mult[ch];
+            rs = -shift[ch];
+            const uint32_t abs_comb = comb < 0 ? 0u - (uint32_t) comb : (uint32_t) comb;
+            /* m >= 0 and m < 0x7fff8000 together, as unsigned */
+            bool ch_ok = (uint32_t) m < 0x7fff8000u && (uint32_t) (rs - 1) < 20u &&
+                         abs_comb < comb_lim;
+            if (!ch_ok) {
                 rs = 1;
             }
             ml = (int16_t) m;
-            mh = (int32_t) (((int64_t) m - ml) >> 16);
+            mh = (int32_t) (((uint32_t) m - (uint32_t) ml) >> 16);
             const int b = min(rs, 14);
             ra = (1 + 2 * out_offset) * (1 << (rs - b));
             rb = 1 << b;
-            if (ra < -32768 || ra > 32767) {
+            if ((uint32_t) (ra + 32768) > 65535u) {
                 ch_ok = false;
             }
             if (!ch_ok) {
@@ -201,6 +211,9 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         t[40] = activation_min; t[48] = activation_max;
     }
     const int16_t *vrq = vrq_ok ? vrq_t : NULL;
+    /* 3x3 full 16-channel blocks with the PIE requant run window, requant
+     * and store in one loop over the positions. */
+    const bool fuse = filter_wd == 3 && filter_ht == 3 && vrq;
 
     /* Stand-in input for taps outside the input. The dispatcher keeps
      * -input_offset within int8. */
@@ -223,7 +236,6 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                              (slab_rows - filter_ht) / stride_ht + 1);
         int8_t *slab = (int8_t *) vrq_t + 14 * ch_pad;
         int8_t *fslab = slab + ((band - 1) * stride_ht + filter_ht) * slab_w * 16;
-        const int taps = filter_ht * filter_wd;
         /* slab columns: nl pad, nin input, nr pad */
         const int nl = min(slab_w, pad_wd);
         const int nin = max(0, min(slab_w - pad_wd, (int) input_wd));
@@ -279,6 +291,16 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                 sw.ip = slab;
                 sw.oxl = out_wd;
                 int8_t *op = out_data + oy0 * out_wd * channels;
+                if (fuse && bvrq && block_ch == 16) {
+                    /* the whole band in one call, no row gap in the output */
+                    sw.np = band_ht * out_wd;
+                    sw.op = op + ch_idx;
+                    sw.ostep = channels;
+                    sw.owrap = 0;
+                    sw.vrq = bvrq + 7 * ch_idx;
+                    esp_nn_dw_win_vrq_riscv_pie(&sw);
+                    continue;
+                }
                 int left = band_ht * out_wd;
                 while (left > 0) {
                     const int np = min(32, left);
@@ -322,6 +344,85 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         .ch = channels, .rows = filter_ht, .cols = filter_wd,
         .ip_row = (input_wd - filter_wd) * channels,
     };
+
+    if (fuse && pass == 0) {
+        /* Inner positions in chunks of up to 32 in raster order. Each chunk
+         * runs every channel block, so its input stays in the cache. */
+        const int row_len = ox_hi - ox_lo;
+        win.ostep = channels;
+        win.owrap = (out_wd - row_len) * channels;
+        int left = (oy_hi - oy_lo) * row_len;
+        int oy_c = oy_lo, ox_c = ox_lo;
+        while (left > 0) {
+            const int np = min(32, left);
+            const int8_t *ip0 = input_data +
+                    ((oy_c * stride_ht - pad_ht) * input_wd + ox_c * stride_wd - pad_wd) * channels;
+            int8_t *op0 = out_data + (oy_c * out_wd + ox_c) * channels;
+            /* positions of the chunk, for blocks that do not take the
+             * fused loop */
+            int8_t *c_out[32];
+            int c_y[32], c_x[32];
+            bool have_pos = false;
+            win.np = np;
+            int ch_idx = 0;
+            while (channels - ch_idx >= 8) {
+                const int block_ch = min(16, channels - ch_idx);
+                const bool slow = slow_blocks && ((slow_blocks >> (ch_idx >> 4)) & 1);
+                win.ip = ip0 + ch_idx;
+                win.oxl = ox_hi - ox_c;
+                win.fp = filter_data + ch_idx;
+                win.comb = comb_v + ch_idx;
+                win.acc = acc;
+                if (block_ch == 16 && !slow) {
+                    win.op = op0 + ch_idx;
+                    win.vrq = vrq + 7 * ch_idx;
+                    esp_nn_dw_win_vrq_riscv_pie(&win);
+                } else {
+                    if (!have_pos) {
+                        for (int p = 0, y = oy_c, x = ox_c; p < np; p++) {
+                            c_out[p] = out_data + (y * out_wd + x) * channels;
+                            c_y[p] = y * stride_ht - pad_ht;
+                            c_x[p] = x * stride_wd - pad_wd;
+                            if (++x == ox_hi) {
+                                x = ox_lo;
+                                y++;
+                            }
+                        }
+                        have_pos = true;
+                    }
+                    esp_nn_dw_win_riscv_pie(&win);
+                    dw_pie_store(acc, np, c_out, NULL, 0, ch_idx, block_ch, slow ? NULL : vrq,
+                                 quant_data, out_offset, &activation_min, &activation_max);
+                }
+                ch_idx += block_ch;
+            }
+            if (ch_idx < channels) {
+                if (!have_pos) {
+                    for (int p = 0, y = oy_c, x = ox_c; p < np; p++) {
+                        c_out[p] = out_data + (y * out_wd + x) * channels;
+                        c_y[p] = y * stride_ht - pad_ht;
+                        c_x[p] = x * stride_wd - pad_wd;
+                        if (++x == ox_hi) {
+                            x = ox_lo;
+                            y++;
+                        }
+                    }
+                }
+                for (int p = 0; p < np; p++) {
+                    dw_pie_scalar_pos(input_dims, input_data, filter_dims, filter_data, bias,
+                                      conv_params, quant_data, c_y[p], c_x[p], c_out[p], ch_idx);
+                }
+            }
+            left -= np;
+            ox_c += np;
+            while (ox_c >= ox_hi) {
+                ox_c -= row_len;
+                oy_c++;
+            }
+        }
+        pass = 1;
+        oy = ox = 0;
+    }
 
     /* Output positions run in batches of 16, so the requant loads each
      * channel's constants once per 16 positions, and one window call

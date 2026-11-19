@@ -31,9 +31,15 @@ typedef struct {
     int32_t rows;       /* 40 */
     int32_t cols;       /* 44 */
     int32_t ip_row;     /* 48: input step from the end of a row */
+    /* esp_nn_dw_win_vrq_riscv_pie only: */
+    int8_t *op;         /* 52: output of the next position */
+    int32_t ostep;      /* 56: output step between positions */
+    int32_t owrap;      /* 60: extra output step to the next row */
+    const int16_t *vrq; /* 64: requant table of the block */
 } dw_win_t;
 
 _Static_assert(offsetof(dw_win_t, ip_row) == 48, "dw_win_t layout");
+_Static_assert(offsetof(dw_win_t, vrq) == 64, "dw_win_t layout");
 
 /*
  * QACC += in[tap] * filter[tap] (16 int8 lanes) over rows x cols taps.
@@ -322,6 +328,40 @@ static __attribute__((noinline)) void esp_nn_dw_win_riscv_pie(dw_win_t *w)
 }
 
 /*
+ * Per-channel filter sums of one block of 16 channels: dst[k] = sum over the
+ * taps of fp[t * step + k], taps >= 1. All taps x 16 bytes are readable.
+ * dst is 16-byte aligned. Clobbers q0, q6, q7 and QACC.
+ */
+static __attribute__((noinline))
+void esp_nn_dw_tap_sum_riscv_pie(const int8_t *fp, int32_t step, int32_t taps, int32_t *dst)
+{
+    register const int8_t *a0 asm("a0") = fp;
+    register int32_t a1 asm("a1") = step;
+    register int32_t a2 asm("a2") = taps;
+    register int32_t *a3 asm("a3") = dst;
+    asm volatile (
+        ".balign 4                              \n\t"
+        /* q6 = int8 ones */
+        "esp.zero.q      q7                     \n\t"
+        "esp.vcmp.eq.s8  q6, q7, q7             \n\t"
+        "esp.vsub.s8     q6, q7, q6             \n\t"
+        "esp.zero.qacc                          \n\t"
+        "1:                                     \n\t"
+        "esp.vld.128.xp  q0, a0, a1             \n\t"
+        "addi    a2, a2, -1                     \n\t"
+        "esp.vmulas.s8.qacc q0, q6              \n\t"
+        "bnez    a2, 1b                         \n\t"
+        "esp.st.qacc.l.l.128.ip a3, 16          \n\t"
+        "esp.st.qacc.l.h.128.ip a3, 16          \n\t"
+        "esp.st.qacc.h.l.128.ip a3, 16          \n\t"
+        "esp.st.qacc.h.h.128.ip a3, 16          \n\t"
+        : "+r"(a0), "+r"(a1), "+r"(a2), "+r"(a3)
+        :
+        : "memory"
+    );
+}
+
+/*
  * Writes one row of a padded 16-channel input slab: nl pad vectors, nin
  * vectors of 16 bytes loaded from src (stepping by step), then nr pad
  * vectors. dst and pad are 16-byte aligned.
@@ -503,5 +543,126 @@ void esp_nn_dw_vrq_riscv_pie(const int32_t *acc, int32_t n, const int16_t *tbl,
         :
         : "t0", "t1", "t2", "x26", "x27", "x28", "x29", "x30", "x31",
           "memory"
+    );
+}
+
+/*
+ * 3x3 window, requant and store of w->np interior positions of one full
+ * 16-channel block, in one loop with no call per position. Each position:
+ * QACC = comb, the 9 taps as in esp_nn_dw_win_riscv_pie, QACC to the 64
+ * bytes at w->acc, then the requant of esp_nn_dw_vrq_riscv_pie with the
+ * table at w->vrq, and 16 bytes to w->op. Input positions step as in
+ * esp_nn_dw_win_riscv_pie, output positions by w->ostep, and by w->owrap
+ * too at a row end. w->ip, w->oxl and w->op are written back.
+ * w->acc is 16-byte aligned. Clobbers q0-q7 and QACC.
+ */
+static __attribute__((noinline)) void esp_nn_dw_win_vrq_riscv_pie(dw_win_t *w)
+{
+    register dw_win_t *a0 asm("a0") = w;
+    asm volatile (
+        DW_WIN_MACROS
+        /* VRQ_HALF of esp_nn_dw_vrq_riscv_pie, with the shift counts in
+         * x24 (16) and x25 (14) and the clamp to [a4, a1] by vsat, so the
+         * lo and hi vectors of the table are not loaded. x31 steps by
+         * 64 + skip. */
+        ".macro DW_VRQ_HALF step, skip          \n\t"
+        "esp.vld.128.ip  q0, x30, 16            \n\t"
+        "esp.vld.128.ip  q1, x30, 16            \n\t"
+        "esp.vld.128.ip  q4, x31, 16            \n\t"
+        "esp.vunzip.16   q0, q1                 \n\t"
+        "esp.vld.128.ip  q5, x31, 16            \n\t"
+        "esp.vcmp.lt.s16 q2, q0, q7             \n\t"
+        "esp.zero.qacc                          \n\t"
+        "esp.vsub.s16    q3, q1, q2             \n\t"
+        "esp.vmulas.s16.qacc q0, q4             \n\t"
+        "esp.vcmp.lt.s16 q2, q1, q7             \n\t"
+        "esp.srcmb.s16.qacc q1, x24, 1          \n\t"
+        "esp.vmulas.s16.qacc q3, q4             \n\t"
+        "esp.vmulas.s16.qacc.ld.ip q4, x31, 16, q0, q5 \n\t"
+        "esp.vadd.s16    q3, q3, q3             \n\t"
+        "esp.orq         q2, q2, q6             \n\t"
+        "esp.vadd.s16    q3, q3, q3             \n\t"
+        "esp.srcmb.s16.qacc q1, x25, 1          \n\t"
+        "esp.vmulas.s16.qacc.ld.ip q0, x31, 16, q3, q5 \n\t"
+        "esp.vmulas.s16.qacc.ld.ip q5, x31, \\skip, q2, q6 \n\t"
+        "esp.vmulas.s16.qacc q4, q0             \n\t"
+        "esp.srcmb.s16.q.qacc q1, q5, 1         \n\t"
+        "esp.vsat.s16    q1, q1, a4, a1         \n\t"
+        "esp.vunzip.8    q1, q0                 \n\t"
+        "esp.vst.l.64.ip q1, x26, \\step        \n\t"
+        ".endm                                  \n\t"
+        ".balign 4                              \n\t"
+        "lw      s2, 20(a0)                     \n\t"
+        "lw      a2, 24(a0)                     \n\t"
+        "lw      a3, 28(a0)                     \n\t"
+        "lw      x26, 32(a0)                    \n\t"
+        "lw      x28, 36(a0)                    \n\t"
+        "lw      a7, 48(a0)                     \n\t"
+        "lw      x27, 52(a0)                    \n\t"
+        "lw      x9, 56(a0)                     \n\t"
+        "lw      t1, 64(a0)                     \n\t"
+        "add     x29, a7, x28                   \n\t"
+        "li      x25, 14                        \n\t"
+        "li      x24, 16                        \n\t"
+        /* the activation range from the table */
+        "lh      a4, 80(t1)                     \n\t"
+        "lh      a1, 96(t1)                     \n\t"
+        /* q7 = 0, q6 = 16-bit ones */
+        "esp.zero.q      q7                     \n\t"
+        "esp.vcmp.eq.s16 q6, q7, q7             \n\t"
+        "esp.vsub.s16    q6, q7, q6             \n\t"
+        "DW_STATE_LD                            \n\t"
+        "20:                                    \n\t"
+        /* QACC = comb; a3 steps back to it */
+        "esp.ld.qacc.l.l.128.ip a3, 16          \n\t"
+        "esp.ld.qacc.l.h.128.ip a3, 16          \n\t"
+        "esp.ld.qacc.h.l.128.ip a3, 16          \n\t"
+        "esp.ld.qacc.h.h.128.ip a3, -48         \n\t"
+        "mv      x30, a0                        \n\t"
+        "mv      x31, a2                        \n\t"
+        "esp.vld.128.xp  q0, x30, x28           \n\t"
+        "esp.vld.128.xp  q1, x31, x28           \n\t"
+        "esp.vld.128.xp  q2, x30, x28           \n\t"
+        "esp.vld.128.xp  q3, x31, x28           \n\t"
+        "DW_TAP  q4, x29, q0, q1, q5            \n\t"
+        "DW_TAP  q0, x28, q2, q3, q1            \n\t"
+        "DW_TAP  q2, x28, q4, q5, q3            \n\t"
+        "DW_TAP  q4, x29, q0, q1, q5            \n\t"
+        "DW_TAP  q0, x28, q2, q3, q1            \n\t"
+        "DW_TAP  q2, x28, q4, q5, q3            \n\t"
+        "DW_TAP  q4, x29, q0, q1, q5            \n\t"
+        "esp.vmulas.s8.qacc q2, q3              \n\t"
+        "esp.vmulas.s8.qacc q4, q5              \n\t"
+        /* QACC to the 64 bytes at x26, which steps back */
+        "esp.st.qacc.l.l.128.ip x26, 16         \n\t"
+        "esp.st.qacc.l.h.128.ip x26, 16         \n\t"
+        "esp.st.qacc.h.l.128.ip x26, 16         \n\t"
+        "esp.st.qacc.h.h.128.ip x26, -48        \n\t"
+        "mv      x30, x26                       \n\t"
+        "mv      x31, t1                        \n\t"
+        "DW_VRQ_HALF 8, 48                      \n\t"
+        "DW_VRQ_HALF -8, 16                     \n\t"
+        "esp.vld.128.ip  q1, x26, 0             \n\t"
+        "esp.vst.128.xp  q1, x27, x9            \n\t"
+        "add     a0, a0, a5                     \n\t"
+        "addi    t2, t2, -1                     \n\t"
+        "bnez    t2, 21f                        \n\t"
+        "mv      t2, a6                         \n\t"
+        "add     a0, a0, a7                     \n\t"
+        "lw      x30, 60(t0)                    \n\t"
+        "add     x27, x27, x30                  \n\t"
+        "21:                                    \n\t"
+        "addi    s2, s2, -1                     \n\t"
+        "bnez    s2, 20b                        \n\t"
+        "sw      a0, 0(t0)                      \n\t"
+        "sw      t2, 4(t0)                      \n\t"
+        "sw      x27, 52(t0)                    \n\t"
+        "99:                                    \n\t"
+        ".purgem DW_VRQ_HALF                    \n\t"
+        DW_WIN_PURGE
+        : "+r"(a0)
+        :
+        : "a1", "a2", "a3", "a4", "a5", "a6", "a7", "t0", "t1", "t2", "s2",
+          "x9", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x31", "memory"
     );
 }
