@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 70; itr++) {
+    for (int itr = 0; itr < 72; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -715,6 +715,31 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 70: // one channel's multiplier above the PIE requant's range:
+                 // on P4/S31 only its 16-channel block takes the scalar requant
+            input_wd = 14;
+            input_ht = 14;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 71: // as 70, stride 2, the out-of-range channel in a partial block
+            input_wd = 15;
+            input_ht = 15;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 40;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -837,6 +862,11 @@ void esp_nn_depthwise_conv_s8_test()
         }
         if (itr == 65) {
             out_shift[channels * ch_mult - 1] = -21;
+        }
+        if (itr == 70) {
+            out_mult[17] = 0x7fffc000;
+        } else if (itr == 71) {
+            out_mult[35] = 0x7fffffff;
         }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};

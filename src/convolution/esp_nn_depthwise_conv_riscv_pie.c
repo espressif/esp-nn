@@ -154,6 +154,10 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
     const int64_t acc_bound = (int64_t) filter_ht * filter_wd * 128 * 128;
     bool vrq_ok = activation_min >= -128 && activation_max <= 127 &&
                   activation_min <= activation_max;
+    /* Bit b set: 16-channel block b has a channel outside the PIE requant's
+     * range, so that block alone takes the scalar requant. With more than 64
+     * blocks, such a channel turns the PIE requant off for the layer. */
+    uint64_t slow_blocks = 0;
     for (int ch = 0; ch < ch_pad; ch++) {
         int32_t comb = 0, ml = 0, mh = 0, ra = 0, rb = 0, rs = 0;
         if (ch < channels) {
@@ -169,9 +173,10 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             comb = s + (bias ? bias[ch] : 0);
             const int32_t m = quant_data->mult[ch];
             rs = -quant_data->shift[ch];
+            bool ch_ok = true;
             if (m < 0 || m >= 0x7fff8000 || rs < 1 || rs > 20 ||
                     acc_bound + (comb < 0 ? -(int64_t) comb : comb) >= (1LL << 26)) {
-                vrq_ok = false;
+                ch_ok = false;
                 rs = 1;
             }
             ml = (int16_t) m;
@@ -180,7 +185,14 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             ra = (1 + 2 * out_offset) * (1 << (rs - b));
             rb = 1 << b;
             if (ra < -32768 || ra > 32767) {
-                vrq_ok = false;
+                ch_ok = false;
+            }
+            if (!ch_ok) {
+                if ((ch >> 4) < 64) {
+                    slow_blocks |= 1ULL << (ch >> 4);
+                } else {
+                    vrq_ok = false;
+                }
             }
         }
         comb_v[ch] = comb;
@@ -262,6 +274,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                  * which steps through the positions itself, then one
                  * requant pass loads each channel's constants once for
                  * the 32. */
+                const int16_t *bvrq = slow_blocks &&
+                        ((slow_blocks >> (ch_idx >> 4)) & 1) ? NULL : vrq;
                 sw.ip = slab;
                 sw.oxl = out_wd;
                 int8_t *op = out_data + oy0 * out_wd * channels;
@@ -271,8 +285,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                     left -= np;
                     sw.np = np;
                     esp_nn_dw_win_riscv_pie(&sw);
-                    dw_pie_store(acc, np, NULL, op, channels, ch_idx, block_ch, 
-                                 vrq, quant_data, out_offset, &activation_min, &activation_max);
+                    dw_pie_store(acc, np, NULL, op, channels, ch_idx, block_ch, bvrq,
+                                 quant_data, out_offset, &activation_min, &activation_max);
                     op += np * channels;
                 }
             }
@@ -424,8 +438,9 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                 ESP_NN_QACC_EXTRACT_S32(acc + 16 * p);
             }
 
-            dw_pie_store(acc, np, out_p, NULL, 0, ch_idx, block_ch, 
-                         vrq, quant_data, out_offset, &activation_min, &activation_max);
+            dw_pie_store(acc, np, out_p, NULL, 0, ch_idx, block_ch,
+                         slow_blocks && ((slow_blocks >> (ch_idx >> 4)) & 1) ? NULL : vrq,
+                         quant_data, out_offset, &activation_min, &activation_max);
             ch_idx += block_ch;
         }
 
