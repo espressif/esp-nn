@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 72; itr++) {
+    for (int itr = 0; itr < 76; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -740,6 +740,57 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
+        /* 72-75: P4/S31 non-slab path, where full 16-channel blocks run
+         * window, requant and store in one loop over chunks of up to 32
+         * inner positions. Rows of 38 and 19 positions wrap inside a chunk. */
+        case 72: // 40x40x24: a fused block and an 8-channel block
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 24;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 73: // 40x40x40 to 20x20, stride 2: two fused blocks and an 8-channel block
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 40;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 74: // 40x40x48, one channel past the PIE requant: its block takes the scalar requant
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 75: // 40x40x36: two fused blocks and 4 channels in scalar
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 36;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -867,6 +918,8 @@ void esp_nn_depthwise_conv_s8_test()
             out_mult[17] = 0x7fffc000;
         } else if (itr == 71) {
             out_mult[35] = 0x7fffffff;
+        } else if (itr == 74) {
+            out_mult[20] = 0x7fffffff;
         }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
