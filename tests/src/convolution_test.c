@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 67; itr++) {
+    for (int itr = 0; itr < 70; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -675,6 +675,45 @@ void esp_nn_depthwise_conv_s8_test()
             input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
             ch_mult = 1; channels = 32; pad_wd = 1; pad_ht = 1;
             stride_wd = 1; stride_ht = 1;
+            break;
+        /* 67-68: P4/S31 slab path on a map larger than the L2 cache (128 KB
+         * in the test app): the band is capped, so several bands each copy
+         * their own halo rows. */
+        case 67: // 28x28x96, pad 1, stride 1: bands of 5 rows
+            input_wd = 28;
+            input_ht = 28;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 68: // 37x37x96 to 19x19, pad 1, stride 2: a shorter last band
+            input_wd = 37;
+            input_ht = 37;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 69: // 9x9x960, pad 1: over the L2 size, but a capped band would be 1 row, so not capped
+            input_wd = 9;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 960;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
             break;
         default:
             input_wd = 6;
