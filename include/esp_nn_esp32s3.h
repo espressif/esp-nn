@@ -293,7 +293,36 @@ void esp_nn_mul_broadcast_channel_s8_esp32s3(const int8_t *input1,
                                               const int32_t activation_max,
                                               const int32_t total_spatial,
                                               const int32_t channels);
-#define esp_nn_mul_broadcast_channel_s8 esp_nn_mul_broadcast_channel_s8_esp32s3
+
+/* The S3 kernels clamp in 16-bit lanes, so activation limits outside int8
+ * (such as INT32_MIN for "no clamp") take the reference code. Two compares
+ * at the call site. */
+static inline __attribute__((always_inline)) void esp_nn_mul_broadcast_channel_s8(
+                                              const int8_t *input1,
+                                              const int8_t *input2_per_ch,
+                                              const int32_t input1_offset,
+                                              const int32_t input2_offset,
+                                              int8_t *output,
+                                              const int32_t output_offset,
+                                              const int32_t output_mult,
+                                              const int32_t output_shift,
+                                              const int32_t activation_min,
+                                              const int32_t activation_max,
+                                              const int32_t total_spatial,
+                                              const int32_t channels)
+{
+    if (activation_min < -128 || activation_max > 127) {
+        esp_nn_mul_broadcast_channel_s8_ansi(input1, input2_per_ch, input1_offset,
+                                             input2_offset, output, output_offset,
+                                             output_mult, output_shift, activation_min,
+                                             activation_max, total_spatial, channels);
+        return;
+    }
+    esp_nn_mul_broadcast_channel_s8_esp32s3(input1, input2_per_ch, input1_offset,
+                                            input2_offset, output, output_offset,
+                                            output_mult, output_shift, activation_min,
+                                            activation_max, total_spatial, channels);
+}
 
 #define esp_nn_depthwise_conv_s8 esp_nn_depthwise_conv_s8_esp32s3
 
