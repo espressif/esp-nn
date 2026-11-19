@@ -204,7 +204,11 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
          * then lies inside the slab, so all positions take the
          * inner-window MAC with no edge cases. */
         const int slab_w = (out_wd - 1) * stride_wd + filter_wd;
-        const int band = dw_pie_slab_band(filter_dims, output_dims, conv_params);
+        /* A dual-core slice is smaller than the full call, so its own band
+         * may be longer. slab_bytes, sized for the full call, bounds it. */
+        const int slab_rows = (slab_bytes / 16 - filter_ht * filter_wd) / slab_w;
+        const int band = min(dw_pie_slab_band(input_dims, filter_dims, output_dims, conv_params),
+                             (slab_rows - filter_ht) / stride_ht + 1);
         int8_t *slab = (int8_t *) vrq_t + 14 * ch_pad;
         int8_t *fslab = slab + ((band - 1) * stride_ht + filter_ht) * slab_w * 16;
         const int taps = filter_ht * filter_wd;
