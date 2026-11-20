@@ -68,13 +68,13 @@ static inline __attribute__((always_inline)) void dw_pie_store(int32_t *acc, int
     }
 }
 
-/* Channels [ch_from, channels) of one output position in scalar C. The
+/* Channels [ch_from, ch_to) of one output position in scalar C. The
  * window starts at input (base_y, base_x) and is clipped to the input. */
 static void dw_pie_scalar_pos(const data_dims_t *input_dims, const int8_t *input_data,
                               const data_dims_t *filter_dims, const int8_t *filter_data,
                               const int32_t *bias, const dw_conv_params_t *conv_params,
                               const quant_data_t *quant_data, int base_y, int base_x,
-                              int8_t *op, int ch_from)
+                              int8_t *op, int ch_from, int ch_to)
 {
     const int input_wd = input_dims->width, channels = input_dims->channels;
     const int filter_wd = filter_dims->width;
@@ -82,7 +82,7 @@ static void dw_pie_scalar_pos(const data_dims_t *input_dims, const int8_t *input
     const int filter_x_start = max(0, -base_x);
     const int filter_y_end = min((int) filter_dims->height, input_dims->height - base_y);
     const int filter_x_end = min(filter_wd, input_wd - base_x);
-    for (int ch = ch_from; ch < channels; ch++) {
+    for (int ch = ch_from; ch < ch_to; ch++) {
         int32_t result = 0;
         for (int fy = filter_y_start; fy < filter_y_end; fy++) {
             const int32_t idx_y = base_y + fy;
@@ -113,6 +113,7 @@ typedef struct {
     int8_t *slab;
     const int8_t *pad;
     int in_wd, in_ht, ch, out_wd, s_wd, s_ht, p_wd, p_ht;
+    int c_beg, c_end;   /* the channels this call runs */
 } dw_edge_t;
 
 /* Output rows [oy0, oy0 + rh) and columns [ox0, ox0 + rw) of a 3x3 layer
@@ -138,7 +139,7 @@ static void dw_pie_edge_rect(const dw_edge_t *e, int oy0, int rh, int ox0, int r
         .ip_row = (slab_w - 3) * 16,
         .ostep = e->ch, .owrap = (e->out_wd - rw) * e->ch,
     };
-    for (int ch_idx = 0; ch_idx < e->ch; ch_idx += 16) {
+    for (int ch_idx = e->c_beg; ch_idx < e->c_end; ch_idx += 16) {
         esp_nn_dw_slab_row_riscv_pie(fslab, e->filter + ch_idx, e->ch, 0, 9, 0, e->pad);
         for (int i = 0; i < slab_rows; i++) {
             const int y = y0 + i;
@@ -180,7 +181,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                                        const dw_conv_params_t *conv_params,
                                        const quant_data_t *quant_data,
                                        int32_t *layer_scratch, int slab_bytes,
-                                       int edge_bytes)
+                                       int edge_bytes, int c_beg, int c_end)
 {
     const uint16_t input_wd = input_dims->width;
     const uint16_t input_ht = input_dims->height;
@@ -219,13 +220,13 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
     uint64_t slow_blocks = 0;
     /* filter sums to comb_v: full 16-channel blocks on PIE, the rest in C */
     const int taps = filter_ht * filter_wd;
-    int ch_sum = 0;
+    int ch_sum = c_beg;
     if (input_offset != 0) {
-        for (; ch_sum + 16 <= channels; ch_sum += 16) {
+        for (; ch_sum + 16 <= c_end; ch_sum += 16) {
             esp_nn_dw_tap_sum_riscv_pie(filter_data + ch_sum, channels, taps, comb_v + ch_sum);
         }
     }
-    for (int ch = ch_sum; ch < channels; ch++) {
+    for (int ch = ch_sum; ch < c_end; ch++) {
         int32_t s = 0;
         for (int t = 0; input_offset != 0 && t < taps; t++) {
             s += filter_data[t * channels + ch];
@@ -235,9 +236,12 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
     /* |comb| must stay below comb_lim (0: no channel fits) */
     const uint32_t comb_lim = acc_bound >= (1 << 26) ? 0 : (uint32_t) ((1 << 26) - acc_bound);
     const int32_t *mult = quant_data->mult, *shift = quant_data->shift;
-    for (int ch = 0; ch < ch_pad; ch++) {
+    /* table entries of [c_beg, c_end), and of the padding after the last
+     * channel */
+    const int t_end = c_end == channels ? ch_pad : c_end;
+    for (int ch = c_beg; ch < t_end; ch++) {
         int32_t comb = 0, ml = 0, mh = 0, ra = 0, rb = 0, rs = 0;
-        if (ch < channels) {
+        if (ch < c_end) {
             comb = comb_v[ch] * input_offset + (bias ? bias[ch] : 0);
             const int32_t m = mult[ch];
             rs = -shift[ch];
@@ -309,12 +313,12 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         };
         /* channels [0, blk_end) run in 16-channel blocks, the last one
          * partial if 8-15 channels remain */
-        const int blk_end = (channels & 15) >= 8 ? channels : channels & ~15;
+        const int blk_end = (c_end & 15) >= 8 ? c_end : c_end & ~15;
         for (int oy0 = 0; oy0 < out_ht; oy0 += band) {
             const int band_ht = min(band, out_ht - oy0);
             const int y0 = oy0 * stride_ht - pad_ht;
-            for (int ch_idx = 0; ch_idx < blk_end; ch_idx += 16) {
-                const int block_ch = min(16, channels - ch_idx);
+            for (int ch_idx = c_beg; ch_idx < blk_end; ch_idx += 16) {
+                const int block_ch = min(16, c_end - ch_idx);
                 /* A 16-byte load of the last tap of a partial block would read
                  * past the filter: copy that tap in C. */
                 const int vtaps = block_ch < 16 ? taps - 1 : taps;
@@ -373,12 +377,12 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             }
         }
         const int ch_idx = blk_end;
-        for (int oy = 0; oy < out_ht && ch_idx < channels; oy++) {
+        for (int oy = 0; oy < out_ht && ch_idx < c_end; oy++) {
             for (int ox = 0; ox < out_wd; ox++) {
                 dw_pie_scalar_pos(input_dims, input_data, filter_dims, filter_data, bias,
                                   conv_params, quant_data, oy * stride_ht - pad_ht,
                                   ox * stride_wd - pad_wd,
-                                  out_data + (oy * out_wd + ox) * channels, ch_idx);
+                                  out_data + (oy * out_wd + ox) * channels, ch_idx, c_end);
             }
         }
         return;
@@ -423,9 +427,9 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             int c_y[32], c_x[32];
             bool have_pos = false;
             win.np = np;
-            int ch_idx = 0;
-            while (channels - ch_idx >= 8) {
-                const int block_ch = min(16, channels - ch_idx);
+            int ch_idx = c_beg;
+            while (c_end - ch_idx >= 8) {
+                const int block_ch = min(16, c_end - ch_idx);
                 const bool slow = slow_blocks && ((slow_blocks >> (ch_idx >> 4)) & 1);
                 win.ip = ip0 + ch_idx;
                 win.oxl = ox_hi - ox_c;
@@ -455,7 +459,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                 }
                 ch_idx += block_ch;
             }
-            if (ch_idx < channels) {
+            if (ch_idx < c_end) {
                 if (!have_pos) {
                     for (int p = 0, y = oy_c, x = ox_c; p < np; p++) {
                         c_out[p] = out_data + (y * out_wd + x) * channels;
@@ -469,7 +473,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                 }
                 for (int p = 0; p < np; p++) {
                     dw_pie_scalar_pos(input_dims, input_data, filter_dims, filter_data, bias,
-                                      conv_params, quant_data, c_y[p], c_x[p], c_out[p], ch_idx);
+                                      conv_params, quant_data, c_y[p], c_x[p], c_out[p], ch_idx, c_end);
                 }
             }
             left -= np;
@@ -483,7 +487,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         oy = ox = 0;
     }
 
-    if (fuse && edge_bytes && !slow_blocks && (channels & 15) == 0) {
+    if (fuse && edge_bytes && !slow_blocks && (c_end & 15) == 0) {
         /* Edge positions from padded slabs of their input: the top and
          * bottom rows, then the left and right columns of the inner rows
          * in chunks that fit edge_bytes. */
@@ -493,6 +497,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             .slab = (int8_t *) vrq_t + 14 * ch_pad, .pad = pad_vec,
             .in_wd = input_wd, .in_ht = input_ht, .ch = channels, .out_wd = out_wd,
             .s_wd = stride_wd, .s_ht = stride_ht, .p_wd = pad_wd, .p_ht = pad_ht,
+            .c_beg = c_beg, .c_end = c_end,
         };
         /* top and bottom strips in chunks of columns that fit edge_bytes */
         const int strip_y[2] = {0, oy_hi}, strip_h[2] = {oy_lo, out_ht - oy_hi};
@@ -583,10 +588,10 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             e_fr[p] = ys[p] * filter_wd * channels;
         }
 
-        int ch_idx = 0;
+        int ch_idx = c_beg;
         /* 16-channel blocks, then a partial block if 8-15 channels remain */
-        while (channels - ch_idx >= 8) {
-            const int block_ch = min(16, channels - ch_idx);
+        while (c_end - ch_idx >= 8) {
+            const int block_ch = min(16, c_end - ch_idx);
             if (all_inner) {
                 win.ip = ip0 + ch_idx;
                 win.oxl = oxl0;
@@ -642,12 +647,17 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         }
 
         /* Remaining channels < 8: scalar */
-        for (int p = 0; p < np && ch_idx < channels; p++) {
+        for (int p = 0; p < np && ch_idx < c_end; p++) {
             dw_pie_scalar_pos(input_dims, input_data, filter_dims, filter_data, bias,
-                              conv_params, quant_data, pos_y[p], pos_x[p], out_p[p], ch_idx);
+                              conv_params, quant_data, pos_y[p], pos_x[p], out_p[p], ch_idx, c_end);
         }
     }
 }
+
+/* Output rows below which the dual-core split is by channels */
+#ifndef DW_PIE_CH_SPLIT_ROWS
+#define DW_PIE_CH_SPLIT_ROWS 8
+#endif
 
 typedef struct {
     data_dims_t input_dims;
@@ -661,6 +671,7 @@ typedef struct {
     const quant_data_t *quant_data;
     int slab_bytes;
     int edge_bytes;
+    int c_beg, c_end;
 } dw_pie_mt_job_t;
 
 static void dw_pie_mt_worker(void *p)
@@ -674,7 +685,7 @@ static void dw_pie_mt_worker(void *p)
     depthwise_conv_s8_ch1_pie_impl(&j->input_dims, j->input_data, j->filter_dims,
                                    j->filter_data, j->bias, &j->output_dims,
                                    j->out_data, &j->conv_params, j->quant_data,
-                                   wscr, j->slab_bytes, j->edge_bytes);
+                                   wscr, j->slab_bytes, j->edge_bytes, j->c_beg, j->c_end);
 }
 
 /* Output-row split of the ch_mult==1 PIE path: taps are clipped against
@@ -712,6 +723,7 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
         .output_dims = *output_dims, .out_data = out_data,
         .conv_params = *conv_params, .quant_data = quant_data,
         .slab_bytes = slab_bytes, .edge_bytes = edge_bytes,
+        .c_beg = 0, .c_end = input_dims->channels,
     };
     job.output_dims.height = h0;
     if (!esp_nn_dual_core_run(dw_pie_mt_worker, &job)) {
@@ -730,13 +742,63 @@ static bool dw_pie_rows_split(const data_dims_t *input_dims,
                 input_data + in_row_off * input_dims->width * input_dims->channels,
                 filter_dims, filter_data, bias, &outd1,
                 out_data + (int32_t)h0 * output_dims->width * output_dims->channels,
-                &params1, quant_data, scratch_buffer, slab_bytes, edge_bytes);
+                &params1, quant_data, scratch_buffer, slab_bytes, edge_bytes,
+                0, input_dims->channels);
     }
     esp_nn_dual_core_wait();
     esp_nn_dual_core_end();
     return true;
 }
 
+/* Output-channel split of the ch_mult == 1 PIE path for maps of under 8
+ * rows, where a row split is uneven (7 rows: 3 and 4). With a cold cache it
+ * is 6-11% faster there than the row split; at 14 rows the row split is as
+ * fast or faster. Both cores run every
+ * position, the worker channels [0, cs) and this core [cs, channels), cs a
+ * multiple of 16. Each core builds the per-channel table of its own
+ * channels only. Disjoint outputs, same arithmetic: bit-identical. */
+static bool dw_pie_ch_split(const data_dims_t *input_dims,
+                            const int8_t *input_data,
+                            const data_dims_t *filter_dims,
+                            const int8_t *filter_data,
+                            const int32_t *bias,
+                            const data_dims_t *output_dims,
+                            int8_t *out_data,
+                            const dw_conv_params_t *conv_params,
+                            const quant_data_t *quant_data, int slab_bytes,
+                            int edge_bytes)
+{
+    const int channels = input_dims->channels;
+    /* half the 16-channel blocks, rounded down, to the worker */
+    const int cs = ((channels + 15) >> 5) << 4;
+    if (output_dims->height >= DW_PIE_CH_SPLIT_ROWS || cs < 32 || cs >= channels ||
+            !esp_nn_dual_core_begin()) {
+        return false;
+    }
+    if (esp_nn_dual_core_scratch(dw_pie_ch1_scratch_size(channels) +
+                                 slab_bytes + edge_bytes) == NULL) {
+        esp_nn_dual_core_end();
+        return false;
+    }
+    dw_pie_mt_job_t job = {
+        .input_dims = *input_dims, .input_data = input_data,
+        .filter_dims = filter_dims, .filter_data = filter_data, .bias = bias,
+        .output_dims = *output_dims, .out_data = out_data,
+        .conv_params = *conv_params, .quant_data = quant_data,
+        .slab_bytes = slab_bytes, .edge_bytes = edge_bytes,
+        .c_beg = 0, .c_end = cs,
+    };
+    if (!esp_nn_dual_core_run(dw_pie_mt_worker, &job)) {
+        esp_nn_dual_core_end();
+        return false;
+    }
+    depthwise_conv_s8_ch1_pie_impl(input_dims, input_data, filter_dims, filter_data, bias,
+                                   output_dims, out_data, conv_params, quant_data,
+                                   scratch_buffer, slab_bytes, edge_bytes, cs, channels);
+    esp_nn_dual_core_wait();
+    esp_nn_dual_core_end();
+    return true;
+}
 
 void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
                                        const int8_t *input_data,
@@ -761,12 +823,16 @@ void esp_nn_depthwise_conv_s8_riscv_pie(const data_dims_t *input_dims,
         /* as in the scratch getter */
         const int edge_bytes = slab_bytes ? 0 :
                 dw_pie_edge_size(input_dims, filter_dims, output_dims, conv_params);
-        if (!dw_pie_rows_split(input_dims, input_data, filter_dims, filter_data,
+        if (!dw_pie_ch_split(input_dims, input_data, filter_dims, filter_data,
+                             bias, output_dims, out_data, conv_params, quant_data,
+                             slab_bytes, edge_bytes) &&
+                !dw_pie_rows_split(input_dims, input_data, filter_dims, filter_data,
                                bias, output_dims, out_data, conv_params, quant_data,
                                slab_bytes, edge_bytes)) {
             depthwise_conv_s8_ch1_pie_impl(input_dims, input_data, filter_dims, filter_data,
                                            bias, output_dims, out_data, conv_params,
-                                           quant_data, scratch_buffer, slab_bytes, edge_bytes);
+                                           quant_data, scratch_buffer, slab_bytes, edge_bytes,
+                                           0, input_dims->channels);
         }
         return;
     }
