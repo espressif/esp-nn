@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <malloc.h>
 #include <inttypes.h>
 
@@ -630,6 +631,259 @@ broadcast_mul_test_cleanup:
         }
         if (out_opt_orig) {
             free(out_opt_orig);
+        }
+    }
+}
+
+/*
+ * Multiply sweep: the elementwise and channel-broadcast kernels against the
+ * ANSI C reference over lengths and channel counts around the 16-element
+ * vector step, every buffer alignment, all output shifts, the multiplier and
+ * offset limits, narrow activation ranges, and random parameters, all within
+ * what TFLite produces (multiplier >= 0, input offsets -127..128, output
+ * offset and range in int8). Guard bytes around the output catch writes past
+ * either end.
+ */
+#define MUL_SWEEP_MAX       (3 * 96)
+#define MUL_SWEEP_GUARD     32
+#define MUL_SWEEP_GUARD_VAL 0x5a
+
+typedef struct {
+    int32_t in1_off, in2_off, out_off, mult, shift, act_min, act_max;
+} mul_sweep_q_t;
+
+static uint32_t mul_sweep_seed;
+
+static uint32_t mul_sweep_rand(void)
+{
+    mul_sweep_seed ^= mul_sweep_seed << 13;
+    mul_sweep_seed ^= mul_sweep_seed >> 17;
+    mul_sweep_seed ^= mul_sweep_seed << 5;
+    return mul_sweep_seed;
+}
+
+/* Run one case on buffers at the given misalignments and compare. */
+static bool mul_sweep_case(int8_t *const bufs[4], bool broadcast, int spatial, int channels,
+                           const mul_sweep_q_t *q, int al1, int al2, int alo, int fill)
+{
+    const int size = spatial * channels;
+    const int n2 = broadcast ? channels : size;
+    int8_t *in1 = bufs[0] + al1;
+    int8_t *in2 = bufs[1] + al2;
+    int8_t *out_c = bufs[2] + MUL_SWEEP_GUARD + alo;
+    int8_t *out_opt = bufs[3] + MUL_SWEEP_GUARD + alo;
+
+    for (int i = 0; i < size; i++) {
+        in1[i] = fill == 1 ? -128 : fill == 2 ? 127 : (int8_t) mul_sweep_rand();
+    }
+    for (int i = 0; i < n2; i++) {
+        in2[i] = fill == 1 ? -128 : fill == 2 ? 127 : (int8_t) mul_sweep_rand();
+    }
+    memset(bufs[3], MUL_SWEEP_GUARD_VAL, MUL_SWEEP_MAX + 2 * MUL_SWEEP_GUARD + 16);
+
+    if (broadcast) {
+        esp_nn_mul_broadcast_channel_s8_ansi(in1, in2, q->in1_off, q->in2_off, out_c, q->out_off,
+                                             q->mult, q->shift, q->act_min, q->act_max,
+                                             spatial, channels);
+        esp_nn_mul_broadcast_channel_s8(in1, in2, q->in1_off, q->in2_off, out_opt, q->out_off,
+                                        q->mult, q->shift, q->act_min, q->act_max,
+                                        spatial, channels);
+    } else {
+        esp_nn_mul_elementwise_s8_ansi(in1, in2, q->in1_off, q->in2_off, out_c, q->out_off,
+                                       q->mult, q->shift, q->act_min, q->act_max, size);
+        esp_nn_mul_elementwise_s8(in1, in2, q->in1_off, q->in2_off, out_opt, q->out_off,
+                                  q->mult, q->shift, q->act_min, q->act_max, size);
+    }
+
+    bool ok = CHECK_EQUAL(out_c, out_opt, size);
+    for (int i = 0; ok && i < MUL_SWEEP_GUARD + alo; i++) {
+        ok = bufs[3][i] == (int8_t) MUL_SWEEP_GUARD_VAL;
+    }
+    for (int i = 0; ok && i < MUL_SWEEP_GUARD; i++) {
+        ok = out_opt[size + i] == (int8_t) MUL_SWEEP_GUARD_VAL;
+    }
+    if (!ok) {
+        printf("%s: %s spatial=%d channels=%d align=%d/%d/%d fill=%d off=%"PRId32"/%"PRId32"/%"PRId32
+               " mult=%"PRId32" shift=%"PRId32" act=[%"PRId32", %"PRId32"]\n",
+               __FUNCTION__, broadcast ? "broadcast" : "elementwise", spatial, channels,
+               al1, al2, alo, fill, q->in1_off, q->in2_off, q->out_off, q->mult, q->shift,
+               q->act_min, q->act_max);
+        for (int i = 0; i < size; i++) {
+            if (out_c[i] != out_opt[i]) {
+                printf("first mismatch at %d: got %d exp %d (in1 %d)\n",
+                       i, out_opt[i], out_c[i], in1[i]);
+                break;
+            }
+        }
+    }
+    return ok;
+}
+
+/* Both kernels for one quantization over a few shapes and alignments. */
+static bool mul_sweep_both(int8_t *const bufs[4], const mul_sweep_q_t *q, int fill)
+{
+    static const int shapes[][2] = { {1, 1}, {1, 16}, {3, 17}, {2, 48}, {5, 31}, {1, 96} };
+    bool ok = true;
+    for (int s = 0; ok && s < (int) (sizeof(shapes) / sizeof(shapes[0])); s++) {
+        const int al = (s * 5) % 16;
+        ok = mul_sweep_case(bufs, false, shapes[s][0], shapes[s][1], q, al, (al + 3) % 16,
+                            (al + 7) % 16, fill) &&
+             mul_sweep_case(bufs, true, shapes[s][0], shapes[s][1], q, (al + 9) % 16, al,
+                            (al + 1) % 16, fill);
+    }
+    return ok;
+}
+
+static mul_sweep_q_t mul_sweep_random_q(void)
+{
+    mul_sweep_q_t q;
+    q.in1_off = (int32_t) (mul_sweep_rand() % 256) - 127;
+    q.in2_off = (int32_t) (mul_sweep_rand() % 256) - 127;
+    q.out_off = (int32_t) (mul_sweep_rand() % 256) - 128;
+    q.mult = (int32_t) (mul_sweep_rand() & 0x7fffffff);
+    q.shift = -(int32_t) (mul_sweep_rand() % 21);
+    int32_t a = (int32_t) (mul_sweep_rand() % 256) - 128;
+    int32_t b = (int32_t) (mul_sweep_rand() % 256) - 128;
+    q.act_min = a < b ? a : b;
+    q.act_max = a < b ? b : a;
+    return q;
+}
+
+void esp_nn_mul_s8_sweep_test()
+{
+    int8_t *bufs[4] = { NULL };
+    const int lens[] = { MUL_SWEEP_MAX + 16, MUL_SWEEP_MAX + 16,
+                         MUL_SWEEP_MAX + 2 * MUL_SWEEP_GUARD + 16,
+                         MUL_SWEEP_MAX + 2 * MUL_SWEEP_GUARD + 16 };
+    for (int i = 0; i < 4; i++) {
+        bufs[i] = (int8_t *) ESP_NN_TEST_ALLOC(lens[i] + 16);
+        if (bufs[i] == NULL) {
+            TEST_SKIP("%s error allocating buffers\n", __FUNCTION__);
+            goto mul_sweep_cleanup;
+        }
+    }
+    /* 16-byte aligned bases; each case adds its own misalignment */
+    int8_t *base[4];
+    for (int i = 0; i < 4; i++) {
+        base[i] = (int8_t *) (((uintptr_t) bufs[i] + 15) & ~(uintptr_t) 15);
+    }
+    mul_sweep_seed = 0x9e3779b9u;
+    const mul_sweep_q_t typical = { 128, 128, -5, 0x5a827999, -8, -128, 127 };
+    bool ok;
+
+    /* 1. Lengths and channel counts 1..96, spatial 1..3, all alignments */
+    ok = true;
+    for (int n = 1; ok && n <= 96; n++) {
+        for (int sp = 1; ok && sp <= 3; sp++) {
+            ok = mul_sweep_case(base, false, sp, n, &typical, n % 16, (n * 3) % 16,
+                                (n * 7) % 16, 0) &&
+                 mul_sweep_case(base, true, sp, n, &typical, (n * 5) % 16, (n * 11) % 16,
+                                (n * 13) % 16, 0);
+        }
+    }
+    if (ok) {
+        for (int al = 0; ok && al < 16; al++) {
+            for (int al2 = 0; ok && al2 < 16; al2 += 5) {
+                ok = mul_sweep_case(base, false, 1, 80, &typical, al, al2, (al + al2) % 16, 0) &&
+                     mul_sweep_case(base, true, 2, 64, &typical, al2, al, (al * 3) % 16, 0);
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[lengths and alignments] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[lengths and alignments] failed\n", __FUNCTION__);
+    }
+
+    /* 2. Every output shift down to -30 (the reference's mask for 31 overflows),
+     * left shifts included */
+    ok = true;
+    for (int32_t shift = -30; ok && shift <= 4; shift++) {
+        mul_sweep_q_t q = typical;
+        q.shift = shift;
+        q.mult = shift > 0 ? 0x40000000 + 12345 : 0x7ffffff0 + shift * 977;
+        ok = mul_sweep_both(base, &q, 0);
+    }
+    if (ok) {
+        TEST_PASS("%s[shifts] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[shifts] failed\n", __FUNCTION__);
+    }
+
+    /* 3. Multipliers at the limits, with the shifts around the vector range */
+    ok = true;
+    {
+        const int32_t mults[] = { 0, 1, 2, 0x3fffffff, 0x40000000, 0x7fff7fff, 0x7fff8000,
+                                  0x7ffffffe, INT32_MAX };
+        const int32_t shifts[] = { 0, -1, -7, -13, -16, -17, -18, -19 };
+        for (int m = 0; ok && m < (int) (sizeof(mults) / sizeof(mults[0])); m++) {
+            for (int s = 0; ok && s < (int) (sizeof(shifts) / sizeof(shifts[0])); s++) {
+                for (int fill = 0; ok && fill < 3; fill++) {
+                    mul_sweep_q_t q = typical;
+                    q.mult = mults[m];
+                    q.shift = shifts[s];
+                    ok = mul_sweep_both(base, &q, fill);
+                }
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[multipliers] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[multipliers] failed\n", __FUNCTION__);
+    }
+
+    /* 4. Offsets and activation ranges at the limits */
+    ok = true;
+    {
+        const int32_t in_offs[] = { -127, -1, 0, 1, 127, 128 };
+        const int32_t out_offs[] = { -128, -1, 0, 127 };
+        const int32_t acts[][2] = { {-128, 127}, {-10, 10}, {0, 0}, {-128, -128}, {127, 127} };
+        for (int a = 0; ok && a < (int) (sizeof(in_offs) / sizeof(in_offs[0])); a++) {
+            for (int b = 0; ok && b < (int) (sizeof(in_offs) / sizeof(in_offs[0])); b++) {
+                for (int o = 0; ok && o < (int) (sizeof(out_offs) / sizeof(out_offs[0])); o++) {
+                    for (int r = 0; ok && r < (int) (sizeof(acts) / sizeof(acts[0])); r++) {
+                        mul_sweep_q_t q = typical;
+                        q.in1_off = in_offs[a];
+                        q.in2_off = in_offs[b];
+                        q.out_off = out_offs[o];
+                        q.act_min = acts[r][0];
+                        q.act_max = acts[r][1];
+                        q.shift = -1 - (a + b + o + r) % 12;
+                        ok = mul_sweep_both(base, &q, (a + r) % 3);
+                    }
+                }
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[offsets and ranges] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[offsets and ranges] failed\n", __FUNCTION__);
+    }
+
+    /* 5. Random parameters and shapes */
+    ok = true;
+    for (int i = 0; ok && i < 400; i++) {
+        const mul_sweep_q_t q = mul_sweep_random_q();
+        const int sp = 1 + (int) (mul_sweep_rand() % 3);
+        const int ch = 1 + (int) (mul_sweep_rand() % 96);
+        const int al1 = (int) (mul_sweep_rand() % 16);
+        const int al2 = (int) (mul_sweep_rand() % 16);
+        const int alo = (int) (mul_sweep_rand() % 16);
+        ok = mul_sweep_case(base, false, sp, ch, &q, al1, al2, alo, 0) &&
+             mul_sweep_case(base, true, sp, ch, &q, al2, alo, al1, 0);
+    }
+    if (ok) {
+        TEST_PASS("%s[random] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[random] failed\n", __FUNCTION__);
+    }
+
+mul_sweep_cleanup:
+    for (int i = 0; i < 4; i++) {
+        if (bufs[i]) {
+            free(bufs[i]);
         }
     }
 }
