@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 79; itr++) {
+    for (int itr = 0; itr < 82; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -829,6 +829,44 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        /* 79-81: P4 two-core split by channels for maps of few rows: the
+         * worker takes the first half of the 16-channel blocks. */
+        case 79: // 7x7x72: 32 and 40 channels, an 8-channel block in the second half
+            input_wd = 7;
+            input_ht = 7;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 72;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 80: // 7x7x96, one channel past the PIE requant in the second half
+            input_wd = 7;
+            input_ht = 7;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 81: // 9x9x64 to 5x5, stride 2
+            input_wd = 9;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 64;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -958,6 +996,8 @@ void esp_nn_depthwise_conv_s8_test()
             out_mult[35] = 0x7fffffff;
         } else if (itr == 74) {
             out_mult[20] = 0x7fffffff;
+        } else if (itr == 80) {
+            out_mult[70] = 0x7fffffff;
         }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
