@@ -23,12 +23,17 @@ The "Memory" column says where the tensors were.
 | ESP32-S3 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 312754 | 39022 | 8.01 | External |
 | ESP32-S3 | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | 2193289 | 394842 | 5.55 | External |
 | ESP32-S3 | input(8,8), filter(16x3x3x16), pad(0,0), stride(2,2), SAME | 362880 | 46838 | 7.75 | Internal |
-| ESP32-P4 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 4005512 | 572459 | 7.00 | External |
-| ESP32-P4 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 249700 | 71104 | 3.51 | External |
-| ESP32-P4 | input(10,10), filter(64x3x3x3), pad(0,0), stride(1,1) | 816975 | 533318 | 1.53 | External |
-| ESP32-S31 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 4107787 | 658148 | 6.24 | Internal |
-| ESP32-S31 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 277008 | 94210 | 2.94 | Internal |
-| ESP32-S31 | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | 1798390 | 765708 | 2.35 | Internal |
+| ESP32-P4 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 4041317 | 360029 | 11.22 | External |
+| ESP32-P4 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 258401 | 50215 | 5.15 | External |
+| ESP32-P4 | input(10,10), filter(64x3x3x3), pad(0,0), stride(1,1) | 1803612 | 216972 | 8.31 | External |
+| ESP32-S31 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 4113419 | 360281 | 11.42 | Internal |
+| ESP32-S31 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 272046 | 50197 | 5.42 | Internal |
+| ESP32-S31 | input(10,10), filter(64x3x3x3), pad(0,0), stride(1,1) | 1798040 | 219440 | 8.19 | Internal |
+
+The ESP32-P4 and ESP32-S31 rows above come from one bench_app run:
+
+- ESP32-P4 revision v3.2, ESP-IDF v6.1. bench_app asks for 360 MHz, which this revision runs at 400 MHz.
+- ESP32-S31 revision v0.0 at 320 MHz, ESP-IDF master (v6.2-dev).
 
 ## Depthwise Convolution
 
