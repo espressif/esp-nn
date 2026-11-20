@@ -88,8 +88,23 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
 | ESP32-S3 | size = 1615 | 122703 | 35002 | 3.51 | External |
-| ESP32-P4 | size = 1615 | 76585 | 47601 | 1.60 | External |
+| ESP32-P4 | size = 1615 | 72759 | 12211 | 5.96 | External |
 | ESP32-S31 | size = 1615 | 83337 | 45765 | 1.82 | Internal |
+
+The ESP32-P4 row: revision v3.2 at 400 MHz, ESP-IDF v6.1.1. The ESP32-S31 row predates the PIE
+multiply kernel.
+
+## Channel Broadcast Multiply
+
+`[H, W, C] * [1, 1, C]`, as in squeeze-and-excite blocks.
+
+| Chip | Data info | ANSI C | Optimized | Ratio | Memory |
+| ---- | --------- | -----: | --------: | ----: | ------ |
+| ESP32-S3 | 49 positions x 576 channels | 2097278 | 147737 | 14.20 | External |
+| ESP32-P4 | 49 positions x 576 channels | 1245252 | 209651 | 5.94 | External |
+
+From one bench_app run per chip, ESP-IDF v6.1.1: ESP32-S3 on an ESP32-S3-WROOM-2 module (octal PSRAM
+at 80 MHz), ESP32-P4 revision v3.2 at 400 MHz.
 
 ## Max Pooling
 

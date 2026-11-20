@@ -20,6 +20,7 @@ void esp_nn_test_skip(void);
 void esp_nn_add_elementwise_s8_test();
 void esp_nn_mul_elementwise_s8_test();
 void esp_nn_mul_broadcast_channel_s8_test();
+void esp_nn_mul_s8_sweep_test();
 
 void esp_nn_depthwise_conv_s8_test();
 void esp_nn_conv_s8_test();

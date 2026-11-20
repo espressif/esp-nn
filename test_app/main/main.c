@@ -112,6 +112,7 @@ void app_main()
     RUN_TEST(esp_nn_add_elementwise_s8_test, "add_s8");
     RUN_TEST(esp_nn_mul_elementwise_s8_test, "mul_s8");
     RUN_TEST(esp_nn_mul_broadcast_channel_s8_test, "mul_broadcast_ch_s8");
+    RUN_TEST(esp_nn_mul_s8_sweep_test, "mul_sweep_s8");
     RUN_TEST(esp_nn_depthwise_conv_s8_test, "depthwise_conv_s8");
     RUN_TEST(esp_nn_conv_s8_test, "conv_s8");
     RUN_TEST(esp_nn_relu6_s8_test, "relu6_s8");
