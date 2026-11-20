@@ -308,7 +308,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
  *
  * @note        With CONFIG_NN_SKIP_NUDGE the 1x1 path uses the fast
  *              requantize, so its output can differ by 1 from the per-row
- *              kernel.
+ *              kernel. On P4 and S31 the plain batch call also uses
+ *              esp_nn_requantize, so its output can differ by 1 from ANSI
+ *              as well.
  *
  * @note        Not thread safe. During the 1x1 path the call sets the
  *              convolution scratch pointer to scratch and restores it on
