@@ -690,6 +690,145 @@ void esp_nn_fully_connected_large_s8_test()
     }
 }
 
+/**
+ * Dual-core fully connected against ANSI. Each shape runs at input offset 0
+ * and -128, on the per-tensor and per-channel APIs. The test enables the
+ * worker and, where dual-core FC is supported, fails if the worker does not
+ * start or a shape cannot be allocated. A target without dual-core FC,
+ * including S31, still skips a shape that does not fit. Shapes below a
+ * chip's floor still have to match. 513 leaves the caller one output past
+ * a multiple of 8. 530 and 200 are even, but half of each is not a multiple
+ * of 8, so (outputs / 2) & ~7 moves the split.
+ * Per-channel shift and multiplier are not one value for every output, so a
+ * slice that drops shifts+start or mults+start cannot match.
+ */
+void esp_nn_fully_connected_dual_core_s8_test()
+{
+    const struct { uint16_t row_len; uint16_t out_ch; } shapes[] = {
+        {24, 192},
+        {384, 512},
+        {400, 513},
+        {384, 530},
+        {33, 200},
+    };
+    const int32_t input_offsets[] = {0, -128};
+    const int32_t filter_offset = 0;
+    const int32_t out_offset = 0;
+    const int32_t out_shift = -8;
+    const int32_t out_mult = 1355715584;
+    const int32_t activation_min = -128;
+    const int32_t activation_max = 127;
+
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
+    esp_nn_dual_core_enable();
+#if ESP_NN_DUAL_CORE_SUPPORTED
+    if (!esp_nn_dual_core_active()) {
+        TEST_FAIL("dual-core worker did not start\n");
+        return;
+    }
+#endif
+
+    for (int s = 0; s < (int)(sizeof(shapes) / sizeof(shapes[0])); s++) {
+        const uint16_t row_len = shapes[s].row_len;
+        const uint16_t out_ch = shapes[s].out_ch;
+        int8_t *input_raw = ESP_NN_TEST_ALLOC(row_len + 32);
+        int8_t *filter_raw = ESP_NN_TEST_ALLOC((size_t)row_len * out_ch + 32);
+        /* 15 bytes to align out, plus 16 guard bytes after out_ch. */
+        int8_t *out_raw = ESP_NN_TEST_ALLOC((size_t)out_ch + 32);
+        int8_t *ref = ESP_NN_TEST_ALLOC(out_ch);
+        int32_t *bias = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
+        int32_t *ch_shift = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
+        int32_t *ch_mult = ESP_NN_TEST_ALLOC(out_ch * sizeof(int32_t));
+        if (!input_raw || !filter_raw || !out_raw || !ref || !bias || !ch_shift || !ch_mult) {
+#if ESP_NN_DUAL_CORE_SUPPORTED
+            TEST_FAIL("[%3dx%3d] allocation failed\n", row_len, out_ch);
+#else
+            TEST_SKIP("[%3dx%3d] allocation failed\n", row_len, out_ch);
+#endif
+            goto dual_cleanup;
+        }
+
+        int8_t *input = (int8_t *)(((uintptr_t)input_raw + 15) & ~(uintptr_t)15);
+        int8_t *filter = (int8_t *)(((uintptr_t)filter_raw + 15) & ~(uintptr_t)15);
+        int8_t *out = (int8_t *)(((uintptr_t)out_raw + 15) & ~(uintptr_t)15);
+        uint32_t state = 0x9e3779b9u ^ ((uint32_t)row_len << 16) ^ out_ch;
+        for (int i = 0; i < row_len; i++) {
+            state = state * 1664525u + 1013904223u;
+            input[i] = (int8_t)(state >> 24);
+        }
+        for (size_t i = 0; i < (size_t)row_len * out_ch; i++) {
+            state = state * 1664525u + 1013904223u;
+            filter[i] = (int8_t)(state >> 24);
+        }
+        for (int i = 0; i < out_ch; i++) {
+            bias[i] = (int32_t)((i % 31) - 15) * 64;
+            ch_shift[i] = -12 + (i % 7);
+            ch_mult[i] = 1000000000 + (int32_t)((i * 97) % 500000000);
+        }
+
+        for (int o = 0; o < (int)(sizeof(input_offsets) / sizeof(input_offsets[0])); o++) {
+            const int32_t input_offset = input_offsets[o];
+            esp_nn_fully_connected_s8_ansi(input, input_offset, row_len, filter, filter_offset,
+                                           bias, ref, out_ch, out_offset, out_shift, out_mult,
+                                           activation_min, activation_max);
+            /* 0x5a makes an unwritten channel fail. The 16 bytes after out_ch catch an overrun. */
+            memset(out, 0x5a, (size_t)out_ch + 16);
+            profile_opt_start();
+            esp_nn_fully_connected_s8(input, input_offset, row_len, filter, filter_offset,
+                                      bias, out, out_ch, out_offset, out_shift, out_mult,
+                                      activation_min, activation_max);
+            profile_opt_end();
+            bool tail_ok = true;
+            for (int i = 0; i < 16; i++) {
+                if (out[out_ch + i] != (int8_t)0x5a) {
+                    tail_ok = false;
+                    break;
+                }
+            }
+            if (!CHECK_EQUAL(out, ref, out_ch) || !tail_ok) {
+                TEST_FAIL("[%3dx%3d io %d per-tensor] failed\n",
+                          row_len, out_ch, (int) input_offset);
+            } else {
+                TEST_PASS("[%3dx%3d io %d per-tensor] passed\n",
+                          row_len, out_ch, (int) input_offset);
+            }
+
+            esp_nn_fully_connected_per_ch_s8_ansi(input, input_offset, row_len, filter, filter_offset,
+                                                  bias, ref, out_ch, out_offset, ch_shift, ch_mult,
+                                                  activation_min, activation_max);
+            memset(out, 0x5a, (size_t)out_ch + 16);
+            profile_opt_start();
+            esp_nn_fully_connected_per_ch_s8(input, input_offset, row_len, filter, filter_offset,
+                                             bias, out, out_ch, out_offset, ch_shift, ch_mult,
+                                             activation_min, activation_max);
+            profile_opt_end();
+            tail_ok = true;
+            for (int i = 0; i < 16; i++) {
+                if (out[out_ch + i] != (int8_t)0x5a) {
+                    tail_ok = false;
+                    break;
+                }
+            }
+            if (!CHECK_EQUAL(out, ref, out_ch) || !tail_ok) {
+                TEST_FAIL("[%3dx%3d io %d per-channel] failed\n",
+                          row_len, out_ch, (int) input_offset);
+            } else {
+                TEST_PASS("[%3dx%3d io %d per-channel] passed\n",
+                          row_len, out_ch, (int) input_offset);
+            }
+        }
+
+    dual_cleanup:
+        free(input_raw);
+        free(filter_raw);
+        free(out_raw);
+        free(ref);
+        free(bias);
+        free(ch_shift);
+        free(ch_mult);
+    }
+}
+
 void esp_nn_fully_connected_per_ch_s8_batch_test()
 {
     printf("\n######## Running %s ##########\n", __FUNCTION__);

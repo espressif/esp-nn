@@ -47,6 +47,14 @@ static const fc_shape_t s_fc_shapes[] = {
     { 128, 256,  0, BENCH_MEM_EXT, FC_MAX_PCT_IO0 },
 };
 
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+/* Published 384x512 rows. The same shape is timed with the worker off and
+ * then on. Non-zero input offset, internal memory, matching the table.
+ * Aligned operands only: the published number does not use the off-aligned
+ * copy, and that second weight buffer can by itself make the case skip. */
+static const fc_shape_t s_fc_dual_shape = { 384, 512, 7, BENCH_MEM_INT, 0 };
+#endif
+
 typedef struct {
     int row_len, out_ch;
     int32_t input_offset;
@@ -95,43 +103,67 @@ static const bench_variant_t s_fc_variants[] = {
     { "esp_nn_operands_8mod16", fc_opt_off8 },
 };
 
-static void run_fc(const fc_shape_t *s)
+/* note is appended only for the worker-on pass. A null note keeps the
+ * existing shape string, so the other cases keep their seeds. aligned_only
+ * times esp_nn and skips the off-aligned operand copy. irqs_on times the
+ * optimized call with interrupts left on: the split wakes the caller through
+ * a semaphore, and masking interrupts blocks that wakeup. The reference
+ * call is still timed with interrupts off. */
+static void run_fc(const fc_shape_t *s, const char *note, bool aligned_only, bool irqs_on)
 {
     const size_t f_size = (size_t) s->row_len * s->out_ch;
     int8_t *in[2] = { bench_alloc(s->row_len, s->mem), bench_alloc(s->row_len, s->mem) };
-    int8_t *in8[2] = { bench_alloc(s->row_len + 8, s->mem), bench_alloc(s->row_len + 8, s->mem) };
+    int8_t *in8[2] = { NULL, NULL };
     int8_t *filter = bench_alloc(f_size, s->mem);
-    int8_t *filter8 = bench_alloc(f_size + 8, s->mem);
+    int8_t *filter8 = NULL;
     int32_t *bias = bench_alloc(s->out_ch * sizeof(int32_t), BENCH_MEM_INT);
-    char shape[64];
-    snprintf(shape, sizeof(shape), "length %d, %d outputs, input offset %d",
-             (int) s->row_len, (int) s->out_ch, (int) s->input_offset);
+    if (!aligned_only) {
+        in8[0] = bench_alloc(s->row_len + 8, s->mem);
+        in8[1] = bench_alloc(s->row_len + 8, s->mem);
+        filter8 = bench_alloc(f_size + 8, s->mem);
+    }
+    char shape[80];
+    if (note) {
+        snprintf(shape, sizeof(shape), "length %d, %d outputs, input offset %d, %s",
+                 (int) s->row_len, (int) s->out_ch, (int) s->input_offset, note);
+    } else {
+        snprintf(shape, sizeof(shape), "length %d, %d outputs, input offset %d",
+                 (int) s->row_len, (int) s->out_ch, (int) s->input_offset);
+    }
 
-    if (in[0] && in[1] && in8[0] && in8[1] && filter && filter8 && bias) {
+    const bool off8_ok = aligned_only || (in8[0] && in8[1] && filter8);
+    if (in[0] && in[1] && filter && bias && off8_ok) {
         fc_ctx_t c = { .row_len = s->row_len, .out_ch = s->out_ch,
                        .input_offset = s->input_offset, .bias = bias };
         bench_seed_case("fully_connected", shape);
         for (int v = 0; v < 2; v++) {
             bench_fill(in[v], s->row_len);
-            memcpy(in8[v] + 8, in[v], s->row_len);
             c.input[v] = in[v];
-            c.input_off8[v] = in8[v] + 8;
+            if (!aligned_only) {
+                memcpy(in8[v] + 8, in[v], s->row_len);
+                c.input_off8[v] = in8[v] + 8;
+            }
         }
         bench_fill(filter, f_size);
-        memcpy(filter8 + 8, filter, f_size);
         bench_fill_bias(bias, s->out_ch);
         c.filter = filter;
-        c.filter_off8 = filter8 + 8;
+        if (!aligned_only) {
+            memcpy(filter8 + 8, filter, f_size);
+            c.filter_off8 = filter8 + 8;
+        }
 
         uint32_t cycles[2] = { 0 };
+        const int n_variants = aligned_only ? 1
+                                : (int) (sizeof(s_fc_variants) / sizeof(s_fc_variants[0]));
         const bench_case_t bc = {
             .op = "fully_connected", .shape = shape, .mem = s->mem,
             .out_size = s->out_ch, .ref = fc_ref, .variants = s_fc_variants,
-            .n_variants = sizeof(s_fc_variants) / sizeof(s_fc_variants[0]), .ctx = &c,
-            .cycles = cycles,
+            .n_variants = n_variants, .ctx = &c,
+            .cycles = cycles, .irqs_on = irqs_on,
         };
         bench_run(&bc);
-        if (s->max_pct && (uint64_t) cycles[0] * 100 > (uint64_t) cycles[1] * s->max_pct) {
+        if (!aligned_only && s->max_pct &&
+                (uint64_t) cycles[0] * 100 > (uint64_t) cycles[1] * s->max_pct) {
             printf("BENCH_WARN op=fully_connected esp_nn=%" PRIu32 " esp_nn_operands_8mod16=%"
                    PRIu32 " limit=%d%% shape=\"%s\"\n", cycles[0], cycles[1], s->max_pct, shape);
         }
@@ -274,8 +306,20 @@ static void run_fc_batch(const fc_batch_shape_t *s)
 void bench_fully_connected(void)
 {
     for (int i = 0; i < (int) (sizeof(s_fc_shapes) / sizeof(s_fc_shapes[0])); i++) {
-        run_fc(&s_fc_shapes[i]);
+        run_fc(&s_fc_shapes[i], NULL, false, false);
     }
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+    /* One-core row, then the same shape with the worker on. The worker is
+     * off again before the batch cases and the kernels that follow. The
+     * worker-on optimized call leaves interrupts on so the split's semaphore
+     * can wake the caller. Its reference call still masks them. */
+    run_fc(&s_fc_dual_shape, NULL, true, false);
+    esp_nn_dual_core_enable();
+    if (esp_nn_dual_core_active()) {
+        run_fc(&s_fc_dual_shape, "worker on", true, true);
+    }
+    esp_nn_dual_core_disable();
+#endif
     for (int i = 0; i < (int) (sizeof(s_batch_shapes) / sizeof(s_batch_shapes[0])); i++) {
         run_fc_batch(&s_batch_shapes[i]);
     }

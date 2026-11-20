@@ -15,6 +15,9 @@
 
 #include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#include "esp_nn_fully_connected_mt.h"
+#endif
 
 /**
  * @brief       2d - convolution channelwise
@@ -210,9 +213,70 @@ void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
                                         const int32_t activation_min,
                                         const int32_t activation_max,
                                         const int32_t batches);
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#if ESP_NN_DUAL_CORE_SUPPORTED
+/* Two compares. At or above the floor, the split function claims the worker
+ * and either splits or runs the single-core kernel. Below the floor this
+ * calls the kernel directly. S31 keeps the macros below and does not enter
+ * this gate. */
+static inline __attribute__((always_inline)) void esp_nn_fully_connected_s8(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t out_shift,
+                                        const int32_t out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max)
+{
+    if (row_len >= ESP_NN_FC_DUAL_MIN_ROW && out_channels >= ESP_NN_FC_DUAL_MIN_OUT) {
+        esp_nn_fc_split_s8(input_data, input_offset, row_len, filter_data,
+                filter_offset, bias, out_data, out_channels, out_offset,
+                out_shift, out_mult, activation_min, activation_max);
+        return;
+    }
+    esp_nn_fully_connected_s8_riscv_pie(input_data, input_offset, row_len, filter_data,
+            filter_offset, bias, out_data, out_channels, out_offset, out_shift,
+            out_mult, activation_min, activation_max);
+}
+static inline __attribute__((always_inline)) void esp_nn_fully_connected_per_ch_s8(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t *out_shift,
+                                        const int32_t *out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max)
+{
+    if (row_len >= ESP_NN_FC_DUAL_MIN_ROW && out_channels >= ESP_NN_FC_DUAL_MIN_OUT) {
+        esp_nn_fc_split_per_ch_s8(input_data, input_offset, row_len, filter_data,
+                filter_offset, bias, out_data, out_channels, out_offset,
+                out_shift, out_mult, activation_min, activation_max);
+        return;
+    }
+    esp_nn_fully_connected_per_ch_s8_riscv_pie(input_data, input_offset, row_len,
+            filter_data, filter_offset, bias, out_data, out_channels, out_offset,
+            out_shift, out_mult, activation_min, activation_max);
+}
+#else
+#define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_riscv_pie
+#define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_riscv_pie
+#endif
+#define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_riscv_pie
+#else
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_riscv_pie
 #define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_riscv_pie
 #define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_riscv_pie
+#endif
 
 void esp_nn_fully_connected_per_ch_s8_batch_scratch_riscv_pie(const int8_t *input_data,
                                     const int32_t input_offset,

@@ -19,7 +19,7 @@ The run takes a few seconds. Per case and kernel variant it:
   the fastest call after the first;
 - checks every output against the reference, and the guard bytes around the output.
 
-Timing runs on one core, with interrupts off during each call and esp-nn's dual-core worker off.
+Timing runs on one core. Interrupts are off during each call, except one case. The dual-core worker stays off, except the fully connected 384×512 shape runs once more on S3 and P4 with the worker on. That optimized call leaves interrupts on, because the split wakes the caller through a semaphore. Its reference call still has interrupts off. The worker is turned off again before the batch cases.
 
 ## Output
 
@@ -27,7 +27,7 @@ Timing runs on one core, with interrupts off during each call and esp-nn's dual-
 BENCH_START target=esp32s3 idf=v5.5 cpu_mhz=240 psram=1 iters=9 seed=0xc0ffee42
 BENCH op=conv variant=esp_nn mem=ext ansi=4740697 opt=302647 ratio=15.66 result=ok shape="input 10x10x64, filter 64x1x1x64, pad 0, stride 1"
 ...
-BENCH_DONE cases=40 failures=0 skipped=0
+BENCH_DONE cases=42 failures=0 skipped=0
 ```
 
 - `ansi`, `opt`: cycles for one call of the reference and of the variant.
@@ -47,7 +47,13 @@ BENCH_DONE cases=40 failures=0 skipped=0
 Each case seeds its data from the run seed, its op and its shape. A case gets the same data
 however many cases run before it.
 
-The published kernel performance tables are made from these lines.
+The published kernel entries come from these lines. The length-271, three-output
+FC case uses input offset +7 on S3, P4, and S31, with the worker off. The
+384×512 FC rows use input offset +7 and internal memory: one line with the
+worker off, and on S3 and P4 a second line whose shape says `worker on`.
+On that line the optimized cycles are timed with interrupts left on. The
+reference cycles still have interrupts off. An S3 or P4 run reports 42
+cases. S31 does not run those two 384×512 lines, so it reports 40.
 
 ## Adding a Case or a Variant
 

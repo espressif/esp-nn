@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <common_functions.h>
 #include <esp_nn_ansi_headers.h>
+#include <esp_nn.h>
 #include "esp_nn_fc_internal.h"
 #include "../common/esp_nn_filter_sum_riscv_pie.h"
 
@@ -262,8 +263,10 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
  * because the PIE dot is only used at 16 elements and above. A nonzero
  * filter offset still needs a per-row input sum, so that case calls the
  * per-row PIE kernel once per batch row. A single row has nothing to
- * reuse, so it calls the per-row kernel too. Unlike the S3 batch kernel,
- * the PIE path does not fall back when an operand is unaligned. That is
+ * reuse, so it calls the public per-channel entry. On dual-core P4 that
+ * entry is the header gate; on S31 and single-core P4 it is the per-row
+ * kernel. Unlike the S3 batch kernel, the PIE path does not fall back
+ * when an operand is unaligned. That is
  * safe because ESP_NN_PIE_ENABLE() below sets the unaligned-load bit.
  * Without that bit, esp.vld.128 loads from the address rounded down to
  * 16 bytes. The other paths return before that enable, and the per-row
@@ -283,7 +286,14 @@ void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
                                         const int32_t activation_max,
                                         const int32_t batches)
 {
-    if (filter_offset != 0 || batches == 1) {
+    if (batches == 1) {
+        esp_nn_fully_connected_per_ch_s8(
+                input_data, input_offset, row_len, filter_data, filter_offset,
+                bias, out_data, out_channels, out_offset, out_shift, out_mult,
+                activation_min, activation_max);
+        return;
+    }
+    if (filter_offset != 0) {
         for (int32_t b = 0; b < batches; b++) {
             esp_nn_fully_connected_per_ch_s8_riscv_pie(
                     input_data + b * row_len, input_offset, row_len, filter_data,
