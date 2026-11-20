@@ -5,8 +5,9 @@
  */
 
 /*
- * s8 elementwise multiply for ESP32-P4 and ESP32-S31. It runs 16 elements
- * per step on PIE and gives the same bytes as the ANSI C kernel.
+ * s8 multiply for ESP32-P4 and ESP32-S31: elementwise, and the channel
+ * broadcast [H, W, C] * [1, 1, C]. Both run 16 elements per step on PIE and
+ * give the same bytes as the ANSI C kernels.
  *
  * Per element, with a and b the two inputs, M = out_mult >= 0 and
  * rs = -out_shift in 0..18:
@@ -48,6 +49,7 @@
 #include <stdint.h>
 
 #include <common_functions.h>
+#include <esp_nn_ansi_headers.h>
 
 /* Constants of the vector step, in the order the step loads them: the step
  * walks the block with esp.vldbc.*.ip and steps back to its start at the end. */
@@ -297,5 +299,48 @@ void esp_nn_mul_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                   input1_offset, input2_offset, output + done,
                                   out_offset, out_mult, out_shift,
                                   activation_min, activation_max, size - done);
+    }
+}
+
+void esp_nn_mul_broadcast_channel_s8_riscv_pie(const int8_t *input1,
+                                                const int8_t *input2_per_ch,
+                                                const int32_t input1_offset,
+                                                const int32_t input2_offset,
+                                                int8_t *output,
+                                                const int32_t output_offset,
+                                                const int32_t output_mult,
+                                                const int32_t output_shift,
+                                                const int32_t activation_min,
+                                                const int32_t activation_max,
+                                                const int32_t total_spatial,
+                                                const int32_t channels)
+{
+    mul_s8_pie_params_t p;
+    const int32_t blocks = channels / 16;
+
+    if (blocks == 0 || !mul_s8_pie_setup(&p, input1_offset, input2_offset, output_offset,
+                                         output_mult, output_shift,
+                                         activation_min, activation_max)) {
+        esp_nn_mul_broadcast_channel_s8_ansi(input1, input2_per_ch, input1_offset,
+                                             input2_offset, output, output_offset,
+                                             output_mult, output_shift, activation_min,
+                                             activation_max, total_spatial, channels);
+        return;
+    }
+
+    const int32_t done = blocks * 16;
+    ESP_NN_PIE_ENABLE();
+    for (int32_t s = 0; s < total_spatial; s++) {
+        const int8_t *in_row = input1 + s * channels;
+        int8_t *out_row = output + s * channels;
+        mul_s8_pie_blocks(in_row, input2_per_ch, out_row, blocks, &p);
+        if (done < channels) {
+            esp_nn_mul_broadcast_channel_s8_ansi(in_row + done, input2_per_ch + done,
+                                                 input1_offset, input2_offset,
+                                                 out_row + done, output_offset,
+                                                 output_mult, output_shift,
+                                                 activation_min, activation_max,
+                                                 1, channels - done);
+        }
     }
 }
