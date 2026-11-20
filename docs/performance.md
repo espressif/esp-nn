@@ -50,11 +50,15 @@ The ESP32-P4 and ESP32-S31 rows above come from one bench_app run:
 
 ## Fully Connected
 
-| Chip | Data info | ANSI C | Optimized | Ratio | Memory |
-| ---- | --------- | -----: | --------: | ----: | ------ |
-| ESP32-S3 | len: 271, ch = 3, non-zero input offset | 8439 | 1543 | 5.47 | Internal |
-| ESP32-P4 | len: 271, ch = 3 | 7650 | 915 | 8.36 | Internal |
-| ESP32-S31 | len: 271, ch = 3, non-zero input offset | 7547 | 1475 | 5.11 | Internal |
+| Chip | Data info | ANSI C | Optimized | Ratio | Cores | Memory |
+| ---- | --------- | -----: | --------: | ----: | ----: | ------ |
+| ESP32-S3 | len: 271, ch = 3, non-zero input offset | 8448 | 1589 | 5.32 | 1 | Internal |
+| ESP32-S3 | len: 384, ch = 512, non-zero input offset | 2007118 | 171671 | 11.69 | 1 | Internal |
+| ESP32-S3 | len: 384, ch = 512, non-zero input offset | 2007118 | 106005 | 18.93 | 2 | Internal |
+| ESP32-P4 | len: 271, ch = 3, non-zero input offset | 7572 | 1510 | 5.01 | 1 | Internal |
+| ESP32-P4 | len: 384, ch = 512, non-zero input offset | 1823280 | 128593 | 14.18 | 1 | Internal |
+| ESP32-P4 | len: 384, ch = 512, non-zero input offset | 1823374 | 71370 | 25.55 | 2 | Internal |
+| ESP32-S31 | len: 271, ch = 3, non-zero input offset | 7547 | 1475 | 5.11 | 1 | Internal |
 
 ### Batched Fully Connected (Weight Zero-Point 0)
 
