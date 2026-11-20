@@ -127,6 +127,9 @@ void app_main()
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");
     RUN_TEST(esp_nn_mean_nhwc_s8_test, "mean_nhwc_s8");
+#if CONFIG_IDF_TARGET_ESP32P4
+    RUN_TEST(esp_nn_pie_context_test, "pie_context");
+#endif
     /* Last: it disables and re-enables the worker. */
     RUN_TEST(esp_nn_dual_core_test, "dual_core");
     ESP_LOGI(TAG, "s8 tests done!\n");

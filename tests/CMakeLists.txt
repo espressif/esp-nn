@@ -14,6 +14,12 @@ set(COMPONENT_SRCS "src/test_utils.c"
 
 set(COMPONENT_REQUIRES )
 set(COMPONENT_PRIV_REQUIRES esp-nn)
+if(IDF_TARGET STREQUAL "esp32p4")
+    list(APPEND COMPONENT_SRCS "src/pie_context_test.c"
+                               "src/pie_context_test_esp32p4.S")
+    # Extra interrupt source on the core under test.
+    list(APPEND COMPONENT_PRIV_REQUIRES esp_driver_gptimer)
+endif()
 
 register_component()
 
