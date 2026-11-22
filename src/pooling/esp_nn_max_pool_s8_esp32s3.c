@@ -67,6 +67,10 @@ _Static_assert(offsetof(s3mp_args_t, rows_left) == S3MP_ROWS_LEFT, "s3mp_args_t 
 typedef void s3mp_fn(s3mp_args_t *a, const int8_t *in, int8_t *out,
                      int n, int fw, int fh);
 extern s3mp_fn esp_nn_max_pool_s8_esp32s3_run, esp_nn_max_pool_s8_esp32s3_rows;
+extern void esp_nn_max_pool_s8_esp32s3_sliding_row_asm(
+    const int8_t *input, int8_t *output, uint32_t width, uint32_t channels,
+    uint32_t row_bytes, uint32_t rows, uint32_t pad,
+    int32_t activation_min, int32_t activation_max);
 
 /* An output pixel whose window misses the input entirely gets the clamped
  * INT8_MIN, as in the reference. That happens when the padding is as wide as
@@ -116,6 +120,35 @@ void esp_nn_max_pool_s8_esp32s3(const int8_t *input,
                                 pad_wd, pad_ht, activation_min, activation_max,
                                 channels);
         return;
+    }
+
+    /* Reuse column maxima for 3x3 and 5x5 stride-1 SAME pooling. */
+    if (channels != 0 && ((bufs | channels) & 15u) == 0 &&
+            (filter_wd == 3 || filter_wd == 5) && filter_ht == filter_wd &&
+            stride_wd == 1 && stride_ht == 1 &&
+            pad_wd == filter_wd / 2 && pad_ht == pad_wd &&
+            output_wd == input_wd && output_ht == input_ht &&
+            input_wd >= filter_wd && input_ht >= filter_ht) {
+        const uint32_t row_bytes = (uint32_t) input_wd * channels;
+        const uintptr_t in_addr = (uintptr_t) input;
+        const uintptr_t out_addr = (uintptr_t) output;
+        const uintptr_t distance = in_addr < out_addr ? out_addr - in_addr : in_addr - out_addr;
+        /* Reuse requires disjoint input and output tensors of the same size. */
+        if (distance >= (uint64_t) row_bytes * input_ht) {
+            for (int y = 0; y < output_ht; y++) {
+                const int top = y < pad_ht ? 0 : y - pad_ht;
+                const int end = y + pad_ht + 1;
+                const int bottom = end < input_ht ? end : input_ht;
+                const int8_t *in_row = input + top * row_bytes;
+                int8_t *out_row = output + y * row_bytes;
+                for (int ch = 0; ch < channels; ch += 16) {
+                    esp_nn_max_pool_s8_esp32s3_sliding_row_asm(
+                        in_row + ch, out_row + ch, input_wd, channels, row_bytes,
+                        bottom - top, pad_wd, activation_min, activation_max);
+                }
+            }
+            return;
+        }
     }
 
     const int ch = channels;
