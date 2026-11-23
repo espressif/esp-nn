@@ -124,6 +124,7 @@ void app_main()
     RUN_TEST(esp_nn_fully_connected_align_s8_test, "fc_align_s8");
     RUN_TEST(esp_nn_alignment_s8_test, "alignment_s8");
     RUN_TEST(esp_nn_fully_connected_large_s8_test, "fc_large_s8");
+    RUN_TEST(esp_nn_fully_connected_dual_core_s8_test, "fc_dual_core_s8");
     RUN_TEST(esp_nn_softmax_s8_test, "softmax_s8");
     RUN_TEST(esp_nn_hard_swish_s8_test, "hard_swish_s8");
     RUN_TEST(esp_nn_mean_nhwc_s8_test, "mean_nhwc_s8");

@@ -124,7 +124,7 @@ static int s_skipped;
  * minimum over all but the first call. With gold set, also checks every
  * output and the guard bytes; returns false on any mismatch. */
 static bool time_calls(const bench_case_t *c, bench_fn fn, int8_t *out,
-                       int8_t *const gold[2], uint32_t *min_cycles)
+                       int8_t *const gold[2], uint32_t *min_cycles, bool mask_irqs)
 {
     bool ok = true;
     uint32_t best = UINT32_MAX;
@@ -136,11 +136,15 @@ static bool time_calls(const bench_case_t *c, bench_fn fn, int8_t *out,
         }
         guard_fill(out, c->out_size, (uint32_t) it);
 
-        portDISABLE_INTERRUPTS();
+        if (mask_irqs) {
+            portDISABLE_INTERRUPTS();
+        }
         const uint32_t t0 = esp_cpu_get_cycle_count();
         fn(c->ctx, v, out);
         const uint32_t t1 = esp_cpu_get_cycle_count();
-        portENABLE_INTERRUPTS();
+        if (mask_irqs) {
+            portENABLE_INTERRUPTS();
+        }
 
         if (it > 0 && t1 - t0 < best) {
             best = t1 - t0;
@@ -183,11 +187,11 @@ int bench_run(const bench_case_t *c)
     }
 
     uint32_t ansi = 0;
-    time_calls(c, c->ref, out, NULL, &ansi);
+    time_calls(c, c->ref, out, NULL, &ansi, true);
 
     for (int i = 0; i < c->n_variants; i++) {
         uint32_t opt = 0;
-        const bool ok = time_calls(c, c->variants[i].call, out, gold, &opt);
+        const bool ok = time_calls(c, c->variants[i].call, out, gold, &opt, !c->irqs_on);
         if (c->cycles) {
             c->cycles[i] = opt;
         }

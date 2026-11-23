@@ -17,6 +17,7 @@ set(c_srcs
     "src/pooling/esp_nn_avg_pool_ansi.c"
     "src/pooling/esp_nn_max_pool_ansi.c"
     "src/common/esp_nn_multicore.c"
+    "src/fully_connected/esp_nn_fc_mt.c"
     "src/convolution/esp_nn_conv_mt_split.c"
     "src/basic_math/esp_nn_mul_mt.c")
 

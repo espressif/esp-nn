@@ -89,6 +89,11 @@ typedef struct {
     void *ctx;
     /* Optional: n_variants entries, set to each variant's minimum cycles. */
     uint32_t *cycles;
+    /* Time the variants with interrupts left on. A split kernel wakes its
+     * caller through a semaphore; masking interrupts there blocks the wakeup
+     * and the other core's interrupt watchdog fires. The reference is still
+     * timed with interrupts off. */
+    bool irqs_on;
 } bench_case_t;
 
 /* Runs one case and prints its BENCH lines. Returns the number of variants
