@@ -142,6 +142,17 @@ void esp_nn_dual_core_test(void)
     }
     (void) task;
 
+    /* The worker's lowest free stack over the suites so far. disable()
+     * deletes the task, so read it first. */
+#ifdef CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE
+    TaskHandle_t worker = xTaskGetHandle("esp_nn_worker");
+    if (worker != NULL) {
+        printf("WORKER_STACK: min_free=%u of %u bytes\n",
+               (unsigned)uxTaskGetStackHighWaterMark(worker),
+               (unsigned)CONFIG_NN_DUAL_CORE_WORKER_STACK_SIZE);
+    }
+#endif
+
     /* 3. disable() frees everything; enable() starts the worker again. */
     esp_nn_dual_core_disable();
     if (esp_nn_dual_core_active()) {
