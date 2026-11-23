@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 46; itr++) {
+    for (int itr = 0; itr < 53; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -553,6 +553,99 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 1;
             stride_ht = 1;
             break;
+        case 46: // 1x1 filter (one tap), 48 channels, no padding: S3 KxK
+                 // reads the input rows in place
+            input_wd = 9;
+            input_ht = 7;
+            filter_ht = 1;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 47: // 1x1 filter, 24 channels, stride 2: S3 KxK through the
+                 // ring (channels % 16 == 8)
+            input_wd = 9;
+            input_ht = 7;
+            filter_ht = 1;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 24;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 48: // 3x1 filter on a 7-wide input, padded rows: S3 KxK
+                 // generic rows through the ring
+            input_wd = 7;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 40;
+            pad_wd = 0;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 49: // 3x1 filter on a 6-wide input, no padding: S3 KxK
+                 // generic rows in place
+            input_wd = 6;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 1;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 50: // 5x5, stride 2, no padding, aligned input: S3 KxK reads
+                 // the input in place; the last input row and column are unused
+            input_wd = 14;
+            input_ht = 12;
+            filter_ht = 5;
+            filter_wd = 5;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 51: // as 50 with an unaligned input: the getter sized no ring,
+                 // so S3 must not take the KxK kernel
+            input_wd = 14;
+            input_ht = 12;
+            filter_ht = 5;
+            filter_wd = 5;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 52: // pad (0,0) with SAME outputs: trailing pad only, so S3 KxK
+                 // must copy through the ring
+            input_wd = 16;
+            input_ht = 16;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 2;
+            stride_ht = 2;
+            force_out_wd = 8;
+            force_out_ht = 8;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -613,7 +706,7 @@ void esp_nn_depthwise_conv_s8_test()
         input = (int8_t *) (((uint32_t) input_orig + 15) & ~15);
         if (itr == 21) {
             input += 1;
-        } else if (itr == 40) {
+        } else if (itr == 40 || itr == 51) {
             input += 3;
         }
         out_data_c = (int8_t *) (((uint32_t) out_c_orig + 15) & ~15);
