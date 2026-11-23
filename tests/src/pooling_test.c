@@ -131,6 +131,9 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test_act(6, 6, 20, 2, 2, 1, 1, 2, 2, 5, 30, iter++);     /* clamped to 5 */
 }
 
+/* Bytes after the max_pool output that must stay untouched */
+#define MAX_POOL_GUARD 64
+
 /* in_off and out_off put the input and outputs that many bytes past a
  * 16-byte boundary. */
 static void run_max_pool_test_buf(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
@@ -148,7 +151,7 @@ static void run_max_pool_test_buf(uint16_t input_wd, uint16_t input_ht, uint16_t
     int8_t *input = NULL, *output_c = NULL, *output_opt = NULL;
     int8_t *input_orig = malloc(size + 32);
     int8_t *out_c_orig = malloc(out_size + 32);
-    int8_t *out_opt_orig = malloc(out_size + 32);
+    int8_t *out_opt_orig = malloc(out_size + 32 + MAX_POOL_GUARD);
     if (input_orig == NULL || out_c_orig == NULL || out_opt_orig == NULL) {
         TEST_SKIP("max_pool [%d] allocations failed\n", iter);
         goto max_pool_cleanup;
@@ -161,6 +164,7 @@ static void run_max_pool_test_buf(uint16_t input_wd, uint16_t input_ht, uint16_t
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 256 - 128;
     }
+    memset(output_opt + out_size, 0x5a, MAX_POOL_GUARD);
 
     profile_c_start();
     esp_nn_max_pool_s8_ansi(input, input_wd, input_ht, output_c, out_wd, out_ht,
@@ -174,6 +178,13 @@ static void run_max_pool_test_buf(uint16_t input_wd, uint16_t input_ht, uint16_t
                        activation_min, activation_max, channels);
     profile_opt_end();
 
+    for (int i = 0; i < MAX_POOL_GUARD; ++i) {
+        if ((uint8_t) output_opt[out_size + i] != 0x5a) {
+            TEST_FAIL("max_pool [%d] wrote past its output (guard byte %d) [in %dx%dx%d, out %dx%d]\n",
+                      iter, i, input_wd, input_ht, channels, out_wd, out_ht);
+            goto max_pool_cleanup;
+        }
+    }
     bool ret = CHECK_EQUAL(output_c, output_opt, out_size);
     if (ret == false) {
         TEST_FAIL("max_pool [%d] failed [in %dx%dx%d, f %dx%d, s %dx%d, p %dx%d, act %d..%d]\n",
@@ -249,11 +260,19 @@ void esp_nn_max_pool_s8_test()
     /* 2x2 with 16-lane funnel-shift loads: channels % 8 == 4, >= 20 */
     run_max_pool_test(12, 12, 20, 2, 2, 2, 2, 0, 0, iter++);
     run_max_pool_test(9, 9, 28, 2, 2, 1, 1, 0, 0, iter++);
+    /* 3x3 with 16-lane funnel-shift loads: one chunk and tail 3, two chunks and tail 1 or 3 */
+    run_max_pool_test(9, 9, 28, 3, 3, 1, 1, 0, 0, iter++);
+    run_max_pool_test(9, 9, 36, 3, 3, 2, 2, 0, 0, iter++);
+    run_max_pool_test(9, 9, 44, 3, 3, 1, 1, 0, 0, iter++);
     /* channels % 16 == 0 below 16-byte alignment: 64-bit fallbacks */
     run_max_pool_test_buf(12, 12, 16, 2, 2, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
     run_max_pool_test_buf(12, 12, 32, 2, 2, 2, 2, 0, 0, -128, 127, 0, 8, iter++);
     run_max_pool_test_buf(10, 10, 16, 3, 3, 1, 1, 1, 1, -128, 127, 8, 0, iter++);
     run_max_pool_test_buf(10, 10, 48, 3, 3, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
+    /* 2x2 with in and out at 8 mod 16 and aligned blocks between the halves */
+    run_max_pool_test_buf(12, 12, 32, 2, 2, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
+    run_max_pool_test_buf(12, 12, 48, 2, 2, 2, 2, 0, 0, -128, 127, 8, 8, iter++);
+    run_max_pool_test_buf(10, 10, 32, 3, 3, 1, 1, 1, 1, -128, 127, 8, 8, iter++); /* 2x2 corners */
     /* activation limits outside int8 take the reference */
     run_max_pool_test_act(8, 8, 16, 2, 2, 2, 2, 0, 0, -200, 200, iter++);
 }
