@@ -1400,7 +1400,7 @@ void esp_nn_add_s8_sweep_test()
     /* 9. Long arrays: the dual-core split when it is on, odd lengths */
     ok = true;
     {
-        const int longs[] = { 2047, 2048, 2063, 3071, 3072, 4095, 4096, 4111, 6143, 6144, 8191,
+        const int longs[] = { 1023, 1024, 1025, 1039, 2047, 2048, 2063, 3071, 3072, 4095, 4096, 4111, 6143, 6144, 8191,
                               8192, 8209, 3 * 4096 + 1, ADD_SWEEP_LONG };
         for (int l = 0; ok && l < (int) (sizeof(longs) / sizeof(longs[0])); l++) {
             add_sweep_q_t q = typical;

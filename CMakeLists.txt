@@ -83,6 +83,7 @@ if(CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
         "src/activation_functions/esp_nn_hard_swish_s8_riscv_pie.c"
         "src/activation_functions/esp_nn_relu_s8_riscv_pie.c"
         "src/basic_math/esp_nn_add_s8_riscv_pie.c"
+        "src/basic_math/esp_nn_add_mt_riscv_pie.c"
         "src/basic_math/esp_nn_mul_s8_riscv_pie.c"
         "src/convolution/esp_nn_conv_riscv_pie.c"
         "src/convolution/esp_nn_scratch_sizes_riscv_pie.c"
