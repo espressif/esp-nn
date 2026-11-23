@@ -5,8 +5,8 @@
  */
 
 /* The dual-core worker: run() needs the claim, kernels stay bit-exact while
- * another task holds or uses the worker, and disable() frees everything
- * enable() allocated. */
+ * another task holds or uses the worker, disable() frees everything
+ * enable() allocated, and conv stays bit-exact with the worker off. */
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -173,6 +173,11 @@ void esp_nn_dual_core_test(void)
     } else {
         TEST_PASS("dual core: disable() freed the worker\n");
     }
+
+    /* 4. The conv sweep with dual core off, the default for callers. The
+     * other suites run with the worker on, so split-eligible shapes take
+     * their single-core path only here. */
+    esp_nn_conv_s8_test();
     esp_nn_dual_core_enable();
 }
 
