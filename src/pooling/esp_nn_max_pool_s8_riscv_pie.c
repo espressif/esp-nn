@@ -313,7 +313,11 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
     /* Blocks done 16 apart, and whether one partial block follows */
     const int32_t has_tail = channels & 15;
     const int32_t n_full = channels >> 4;
-    /* Loads must stay in the 16-byte blocks that hold input bytes */
+    /* Loads must stay in the 16-byte blocks that hold input bytes. A load
+     * may then read up to 15 bytes past the input end, but only inside the
+     * last 16-byte-aligned block. RAM regions end on 16-byte bounds or
+     * coarser, and P4/S31 PMP regions on 128-byte bounds, so that block is
+     * always readable. */
     const uintptr_t in_lim = (uintptr_t) (input + input_ht * row_stride);
     const int8_t *out_end = output + output_wd * output_ht * channels;
 
@@ -362,6 +366,7 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
             const int32_t tap_row = (base_y + fy_end - 1) * row_stride +
                                     (filter_wd - 1 - pad_wd) * channels;
             const int32_t out_left = out_end - out_ptr;
+            /* Over-read stays in the last 16-byte-aligned input block, see in_lim */
             while (!flat && channels < 16 && band_hi > band_lo) {
                 const int8_t *last_tap = input + (tap_row + (band_hi - 1) * stride_wd * channels);
                 if ((band_hi - 1) * channels + 16 <= out_left &&
@@ -426,6 +431,7 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
                                 + (base_x + fx_start) * channels;
 
             if (channels < 16) {
+                /* Over-read stays in the last 16-byte-aligned input block, see in_lim */
                 const int8_t *last_tap = win + (fh - 1) * row_stride + (fw - 1) * channels;
                 if (out_end - out_ptr < 16 ||
                         (((uintptr_t) last_tap + 15) & ~(uintptr_t) 15) >= in_lim) {
