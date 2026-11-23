@@ -118,8 +118,10 @@ The multiply rows were measured with the ESP32-P4 at 400 MHz.
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
 | ESP32-S3 | input(16,16), filter(1x3x3x16) | 489650 | 11955 | 40.96 | Internal |
-| ESP32-P4 | input(16,16), filter (1x3x3x16) | 482184 | 24178 | 19.94 | Internal |
-| ESP32-S31 | input(16,16), filter(1x3x3x16) | 274866 | 21724 | 12.65 | Internal |
+| ESP32-P4 | input(16,16), filter (1x3x3x16) | 319944 | 10020 | 31.93 | Internal |
+| ESP32-S31 | input(16,16), filter(1x3x3x16) | 322799 | 9978 | 32.35 | Internal |
+
+The max pooling rows were measured with the ESP32-P4 at 400 MHz.
 
 ## Average Pooling
 
