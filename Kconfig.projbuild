@@ -45,13 +45,15 @@ menu "Dual-core worker"
 
 config NN_DUAL_CORE_WORKER_STACK_SIZE
    int "Worker stack size (bytes)"
+   range 3072 65536 if IDF_TARGET_ESP32S3
    range 2048 65536
    default 4096
    help
       Stack of the worker task that esp_nn_dual_core_enable() starts on the
       other core. It runs one kernel slice at a time; measured peak use is
       about 2.3 KB on ESP32-S3 and 0.9 KB on ESP32-P4, with timer interrupts
-      and other PIE tasks on the same cores.
+      and other PIE tasks on the same cores. The minimum is 3 KB on
+      ESP32-S3 and 2 KB on ESP32-P4.
 
 choice NN_DUAL_CORE_WORKER_STACK_PLACEMENT
    prompt "Worker stack memory"
