@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <esp_nn_defs.h>
 
@@ -225,9 +226,13 @@ static inline int esp_nn_dw_s8_kxk_eligible_esp32s3(const data_dims_t *filter_di
 }
 
 /* Scratch regions of the KxK kernel, each a multiple of 16 bytes except
- * row_bytes and ring_bytes, which the kernel only adds at the end. */
+ * row_bytes and ring_bytes, which the kernel only adds at the end.
+ * zero_copy: no padding on any side and cs == channels. The kernel then
+ * reads the input rows in place and needs no ring (ring_bytes is 0). It
+ * needs a 16-byte aligned input for that. The getter cannot see the
+ * pointer, so the kernel declines an unaligned input of such a shape. */
 typedef struct {
-    int cs, taps, row_bytes;
+    int cs, taps, row_bytes, zero_copy;
     int filter_bytes, req_bytes, flag_bytes, tmp_bytes, ring_bytes;
 } esp_nn_dw_s8_kxk_layout_t;
 
@@ -240,8 +245,13 @@ static inline void esp_nn_dw_s8_kxk_layout_esp32s3(const data_dims_t *input_dims
     const int fw = filter_dims->width;
     const int pad_right = max(0, (output_dims->width - 1) * cp->stride.width + fw
                                  - cp->padding.width - input_dims->width);
+    const int pad_bottom = max(0, (output_dims->height - 1) * cp->stride.height
+                                  + filter_dims->height - cp->padding.height
+                                  - input_dims->height);
     const int padded_wd = cp->padding.width + input_dims->width + pad_right;
     l->cs = (input_dims->channels + 15) & ~15;
+    l->zero_copy = l->cs == input_dims->channels &&
+                   (cp->padding.width | cp->padding.height | pad_right | pad_bottom) == 0;
     l->taps = fw * filter_dims->height;
     l->row_bytes = padded_wd * l->cs;
     l->filter_bytes = (l->taps * l->cs + 15) & ~15;
@@ -250,7 +260,7 @@ static inline void esp_nn_dw_s8_kxk_layout_esp32s3(const data_dims_t *input_dims
     l->flag_bytes = (l->cs / 16 + 15) & ~15;
     l->tmp_bytes = output_dims->width * 16;
     /* the filter_ht padded input rows an output row needs */
-    l->ring_bytes = filter_dims->height * l->row_bytes;
+    l->ring_bytes = l->zero_copy ? 0 : filter_dims->height * l->row_bytes;
 }
 
 static inline int esp_nn_dw_s8_kxk_scratch_size_esp32s3(const data_dims_t *input_dims,
@@ -264,8 +274,9 @@ static inline int esp_nn_dw_s8_kxk_scratch_size_esp32s3(const data_dims_t *input
     return 16 + l.filter_bytes + l.req_bytes + l.flag_bytes + l.tmp_bytes + l.ring_bytes;
 }
 
-/* esp_nn_depthwise_conv_s8_kxk_esp32s3.c */
-void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
+/* esp_nn_depthwise_conv_s8_kxk_esp32s3.c. Returns false, having done
+ * nothing, for a zero_copy shape with an unaligned input. */
+bool esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
                               const int8_t *input_data,
                               const data_dims_t *filter_dims,
                               const int8_t *filter_data,

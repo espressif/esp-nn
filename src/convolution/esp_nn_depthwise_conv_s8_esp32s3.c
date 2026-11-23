@@ -793,10 +793,13 @@ void esp_nn_depthwise_conv_s8_esp32s3(const data_dims_t *input_dims,
     }
 
     if (esp_nn_dw_s8_kxk_eligible_esp32s3(filter_dims, input_dims, conv_params)) {
-        esp_nn_dw_s8_kxk_esp32s3(input_dims, input_data, filter_dims, filter_data,
-                                 bias, output_dims, out_data, conv_params,
-                                 quant_data, active_scratch);
-        return;
+        /* It declines an unaligned input of a shape it reads in place. */
+        if (esp_nn_dw_s8_kxk_esp32s3(input_dims, input_data, filter_dims, filter_data,
+                                     bias, output_dims, out_data, conv_params,
+                                     quant_data, active_scratch)) {
+            return;
+        }
+        goto reference;
     }
 
     if ((ch_mult == 1) && (channels % 8 == 0)) {

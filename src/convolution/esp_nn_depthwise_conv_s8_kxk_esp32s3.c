@@ -752,7 +752,7 @@ typedef struct {
     const int32_t *req;
     int8_t *out_data;
     int y_begin, y_end;
-    int8_t *ring;   /* fh padded rows */
+    int8_t *ring;   /* fh padded rows, NULL to read the input in place */
     int8_t *tmp;    /* out_wd * 16 staging bytes */
     int cs, kw, kh, x_step, out_wd;
     int32_t out_offset, clamp_min, clamp_max;
@@ -760,7 +760,7 @@ typedef struct {
 
 /* Output rows [y_begin, y_end). Each input row is copied once into a ring of
  * fh padded rows; the kernel gets the fh row pointers it needs. */
-static void kxk_rows(dw_kxk_job_t *j)
+static void __attribute__((noinline)) kxk_rows(dw_kxk_job_t *j)
 {
     const int channels = j->channels, cs = j->cs, fh = j->kh;
     const int out_wd = j->out_wd;
@@ -872,6 +872,86 @@ static void kxk_rows(dw_kxk_job_t *j)
     }
 }
 
+/* kxk_rows() for a job without a ring: no padding, cs == channels and a
+ * 16-byte aligned input. The row pointers point into the input. Kept apart
+ * so the ring path keeps its code. */
+static void __attribute__((noinline)) kxk_rows_in_place(dw_kxk_job_t *j)
+{
+    const int channels = j->channels, cs = j->cs, fh = j->kh;
+    const int out_wd = j->out_wd;
+    /* The kernel stores 16 bytes at a 16-aligned output, or 8 bytes at a
+     * time at an 8-aligned one (channels is a multiple of 8). Other outputs
+     * go through tmp. */
+    const int direct16 = (cs == channels) && (((uintptr_t)j->out_data & 15) == 0);
+    const int direct = direct16 || (((uintptr_t)j->out_data & 7) == 0);
+
+    const int in_bytes = j->input_wd * cs;
+
+    const int8_t *rows[ESP_NN_DW_S8_KXK_MAX_TAPS];
+    kxk_row_t r = {
+        .cs = cs,
+        .rows = rows,
+        .kw = j->kw,
+        .kh = fh,
+        .x_step = j->x_step,
+        .n_out = out_wd,
+        .hback = 0,
+        .hstep2 = 0,
+        .hback2 = 32,
+        .out_offset = j->out_offset,
+        .clamp_min = j->clamp_min,
+        .clamp_max = j->clamp_max,
+        .variant = j->kw == fh && (fh == 5 || fh == 3) ? fh : 0,
+    };
+
+    for (int out_y = j->y_begin; out_y < j->y_end; out_y++) {
+        const int r0 = out_y * j->stride_ht;
+        for (int k = 0; k < fh; k++) {
+            rows[k] = j->input + (r0 + k) * in_bytes;
+        }
+
+        int8_t *out_row = j->out_data + out_y * out_wd * channels;
+        for (int ch = 0; ch < cs; ch += r.g_left * 16) {
+            const int n_ch = min(16, channels - ch);
+            const int general = j->req_general[ch >> 4];
+            /* Direct stores run the full groups that share a requant in one
+             * call. The 8-channel tail group has its own req_ctl and store. */
+            int ch_end = ch + 16;
+            if (direct && n_ch == 16) {
+                while (ch_end < (channels & ~15) && j->req_general[ch_end >> 4] == general) {
+                    ch_end += 16;
+                }
+            }
+            r.g_left = (ch_end - ch) >> 4;
+            r.g_off = ch;
+            r.g_req = j->req + (ch >> 4) * KXK_REQ_BLOCK;
+            r.filter = j->filter + ch;
+            /* an 8-channel group requants lanes 0-7 only */
+            r.req_ctl = (n_ch > 8 ? 4 : 2) | (general ? 1 << 8 : 0);
+            r.hstep = n_ch > 8 ? 32 : 0;
+            if (direct) {
+                r.out = out_row + ch;
+                r.out_step = channels;
+                r.store = direct16 ? 0 : (n_ch == 16 ? 1 : 2);
+            } else {
+                r.out = j->tmp;
+                r.out_step = 16;
+                r.store = 0;
+            }
+            r.g_out = r.out;
+            const int groups = r.g_left;
+            kxk_row(&r);
+            /* the kernel counts g_left down to 1 */
+            r.g_left = groups;
+            if (!direct) {
+                for (int x = 0; x < out_wd; x++) {
+                    memcpy(out_row + x * channels + ch, j->tmp + x * 16, n_ch);
+                }
+            }
+        }
+    }
+}
+
 /* Fills the requant blocks and, per 16-channel group, whether it takes the
  * general requant. The fast requant takes 2 * (sum + bias), so a fast
  * group's bias row holds 2 * bias. Choosing per group keeps a few channels
@@ -901,10 +981,15 @@ static void kxk_req_build(int32_t *req, uint8_t *general, int channels, int cs,
 
 static void kxk_worker(void *arg)
 {
-    kxk_rows((dw_kxk_job_t *)arg);
+    dw_kxk_job_t *j = (dw_kxk_job_t *)arg;
+    if (j->ring != NULL) {
+        kxk_rows(j);
+    } else {
+        kxk_rows_in_place(j);
+    }
 }
 
-void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
+bool esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
                               const int8_t *input_data,
                               const data_dims_t *filter_dims,
                               const int8_t *filter_data,
@@ -917,6 +1002,9 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
 {
     esp_nn_dw_s8_kxk_layout_t l;
     esp_nn_dw_s8_kxk_layout_esp32s3(input_dims, filter_dims, output_dims, conv_params, &l);
+    if (l.zero_copy && ((uintptr_t)input_data & 15)) {
+        return false;
+    }
     const int channels = input_dims->channels;
     const int input_wd = input_dims->width, input_ht = input_dims->height;
     const int out_wd = output_dims->width, out_ht = output_dims->height;
@@ -932,7 +1020,7 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
     uint8_t *req_general = (uint8_t *)req + l.req_bytes;
     int8_t *tmp = (int8_t *)req_general + l.flag_bytes;
     /* the fh padded rows the current output row needs, in a ring */
-    int8_t *ring = tmp + l.tmp_bytes;
+    int8_t *ring = l.zero_copy ? NULL : tmp + l.tmp_bytes;
 
     /* The kernel loads filter taps cs bytes apart, 16-byte aligned. TFLM
      * filters at channels % 16 == 0 already are, so they are used in place. */
@@ -994,16 +1082,17 @@ void esp_nn_dw_s8_kxk_esp32s3(const data_dims_t *input_dims,
             dw_kxk_job_t wjob = job;
             wjob.y_end = out_ht / 2;
             wjob.tmp = (int8_t *)(((uintptr_t)wbuf + 15) & ~(uintptr_t)15);
-            wjob.ring = wjob.tmp + l.tmp_bytes;
+            wjob.ring = l.zero_copy ? NULL : wjob.tmp + l.tmp_bytes;
             if (esp_nn_dual_core_run(kxk_worker, &wjob)) {
                 job.y_begin = out_ht / 2;
-                kxk_rows(&job);
+                kxk_worker(&job);
                 esp_nn_dual_core_wait();
                 esp_nn_dual_core_end();
-                return;
+                return true;
             }
         }
         esp_nn_dual_core_end();
     }
-    kxk_rows(&job);
+    kxk_worker(&job);
+    return true;
 }
