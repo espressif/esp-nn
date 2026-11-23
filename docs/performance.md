@@ -39,10 +39,10 @@ The ESP32-P4 and ESP32-S31 rows above come from one bench_app run:
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
-| ESP32-S3 | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | 1159831 | 184176 | 6.30 | External |
-| ESP32-S3 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1671363 | 372435 | 4.49 | External |
-| ESP32-S3 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 10845578 | 2137390 | 5.07 | Internal |
-| ESP32-S3 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 5411399 | 1070931 | 5.05 | Internal |
+| ESP32-S3 | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | 1138116 | 86358 | 13.18 | External |
+| ESP32-S3 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1280646 | 260656 | 4.91 | External |
+| ESP32-S3 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 10740507 | 2135842 | 5.03 | Internal |
+| ESP32-S3 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 5359220 | 1071014 | 5.00 | Internal |
 | ESP32-P4 | input (16, 16), pad(0,0), stride(1,1) filter: 1x3x3x16 | 962834 | 482389 | 2.00 | External |
 | ESP32-P4 | input (12, 12), pad(1,1), stride(1,1)  filter: 8x5x5x4 | 1365066 | 703989 | 1.94 | External |
 | ESP32-S31 | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 315201 | 118944 | 2.65 | Internal |
