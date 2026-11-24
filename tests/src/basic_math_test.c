@@ -269,7 +269,7 @@ void esp_nn_mul_elementwise_s8_test()
     int8_t *out_c_orig = NULL;
     int8_t *out_opt_orig = NULL;
 
-    for (int itr = 0; itr < 15; itr++) {
+    for (int itr = 0; itr < 16; itr++) {
         switch (itr) {
         case 0: // all zeros
             input1_offset = 0;
@@ -309,6 +309,17 @@ void esp_nn_mul_elementwise_s8_test()
             activation_min = INT32_MIN;
             activation_max = INT32_MAX;
             size = 4096 + 5;
+        break;
+        case 15: // 4400 steps on each core of the two-core split, 4376 of them
+                 // with prefetch: past the ESP32-P4 rev < v3 hardware loop limit
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            output_mult = MULT_MAX / 2 + rand() % INT16_MAX;
+            output_shift = -8 + rand() % 4;
+            activation_min = -128;
+            activation_max = 127;
+            size = 2 * 16 * 4400 + 37;
         break;
         case 12: // narrowed activation (fused ReLU-like), right shift 0: s32 clamp
         case 13: // narrowed activation, right shift 5: s16 clamp

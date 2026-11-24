@@ -236,6 +236,21 @@ static inline int mul_in_ext_mem(const void *p)
           [m] "r"(m2), [sh] "r"(shr), "r"(lo), "r"(hi)                          \
         : "x28", "x29", "memory")
 
+/* MUL_PIE_LOOP for any n_steps >= 1: in chunks of ESP_NN_HWLOOP_MAX_COUNT
+ * steps where the hardware loop count is limited (ESP32-P4 rev < v3). */
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+#define MUL_PIE_LOOP_N(sgn, sat32, sat16, pf, n_steps)                         \
+    for (int32_t left = (n_steps); left > 0; ) {                              \
+        const int32_t k = left < ESP_NN_HWLOOP_MAX_COUNT ?                    \
+                          left : ESP_NN_HWLOOP_MAX_COUNT;                     \
+        MUL_PIE_LOOP(sgn, sat32, sat16, pf, k);                               \
+        left -= k;                                                            \
+    }
+#else
+#define MUL_PIE_LOOP_N(sgn, sat32, sat16, pf, n_steps)                         \
+    MUL_PIE_LOOP(sgn, sat32, sat16, pf, n_steps)
+#endif
+
 /* Requantize lane idx (0..15) of the products and store it to out[idx]. */
 #define MUL_LANE(qr, sel, idx) do {                                   \
         register int32_t v_ asm("x29");                               \
@@ -301,11 +316,11 @@ static __attribute__((noinline)) void mul_rows(const int8_t *a, const int8_t *b,
         int32_t t0, t1;
         if (sign) {
             if (c1) {
-                MUL_PIE_LOOP(MUL_PIE_SGN_ON, MUL_PIE_NONE, MUL_PIE_SAT16, MUL_PF_ON, c1);
+                MUL_PIE_LOOP_N(MUL_PIE_SGN_ON, MUL_PIE_NONE, MUL_PIE_SAT16, MUL_PF_ON, c1);
             }
-            MUL_PIE_LOOP(MUL_PIE_SGN_ON, MUL_PIE_NONE, MUL_PIE_SAT16, MUL_PF_OFF, cnt - c1);
+            MUL_PIE_LOOP_N(MUL_PIE_SGN_ON, MUL_PIE_NONE, MUL_PIE_SAT16, MUL_PF_OFF, cnt - c1);
         } else {
-            MUL_PIE_LOOP(MUL_PIE_SGN_OFF, MUL_PIE_SAT32, MUL_PIE_NONE, MUL_PF_OFF, cnt);
+            MUL_PIE_LOOP_N(MUL_PIE_SGN_OFF, MUL_PIE_SAT32, MUL_PIE_NONE, MUL_PF_OFF, cnt);
         }
         const int32_t r = n & 15;
         if (r == 0) {
