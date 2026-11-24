@@ -43,10 +43,18 @@ The ESP32-P4 and ESP32-S31 rows above come from one bench_app run:
 | ESP32-S3 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1280646 | 260656 | 4.91 | External |
 | ESP32-S3 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 10740507 | 2135842 | 5.03 | Internal |
 | ESP32-S3 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 5359220 | 1071014 | 5.00 | Internal |
-| ESP32-P4 | input (16, 16), pad(0,0), stride(1,1) filter: 1x3x3x16 | 962834 | 482389 | 2.00 | External |
-| ESP32-P4 | input (12, 12), pad(1,1), stride(1,1)  filter: 8x5x5x4 | 1365066 | 703989 | 1.94 | External |
-| ESP32-S31 | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 315201 | 118944 | 2.65 | Internal |
-| ESP32-S31 | out(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1325229 | 755116 | 1.75 | Internal |
+| ESP32-P4 | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | 812483 | 27485 | 29.56 | External |
+| ESP32-P4 | input(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 299164 | 12141 | 24.64 | Internal |
+| ESP32-P4 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1028039 | 566793 | 1.81 | External |
+| ESP32-P4 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 6989766 | 467029 | 14.97 | Internal |
+| ESP32-P4 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 3487858 | 242700 | 14.37 | Internal |
+| ESP32-S31 | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | 812032 | 27626 | 29.39 | Internal |
+| ESP32-S31 | input(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 298699 | 12260 | 24.36 | Internal |
+| ESP32-S31 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1032306 | 575970 | 1.79 | Internal |
+| ESP32-S31 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 6951956 | 459558 | 15.13 | Internal |
+| ESP32-S31 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 3464350 | 237854 | 14.57 | Internal |
+
+The ESP32-P4 depthwise rows were measured with the ESP32-P4 at 400 MHz.
 
 ## Fully Connected
 
