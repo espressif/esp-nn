@@ -251,12 +251,15 @@ __NN_FORCE_INLINE__ int32_t esp_nn_multiply_by_quantized_mult(int32_t x, int32_t
  * count: a count of 4096 runs once, 4704 runs 608 times. A hardware loop
  * whose count can pass ESP_NN_HWLOOP_MAX_COUNT runs in chunks of at most
  * that many iterations. On other builds there is no limit, and the chunk
- * loop runs once.
+ * loop runs once. A build can set a smaller limit, so a rev v3 image runs
+ * the chunk loops (test_app with ESP_NN_TEST_REV_LT_V3_PATHS).
  */
+#ifndef ESP_NN_HWLOOP_MAX_COUNT
 #if CONFIG_IDF_TARGET_ESP32P4 && CONFIG_ESP32P4_REV_MIN_FULL < 300
 #define ESP_NN_HWLOOP_MAX_COUNT 4095
 #else
 #define ESP_NN_HWLOOP_MAX_COUNT INT32_MAX
+#endif
 #endif
 #endif /* CONFIG_IDF_TARGET_ESP32P4 - PIE_ENABLE and QACC_EXTRACT */
 
