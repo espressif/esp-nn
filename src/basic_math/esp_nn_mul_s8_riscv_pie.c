@@ -290,8 +290,10 @@ static __attribute__((noinline)) void mul_rows(const int8_t *a, const int8_t *b,
 
     asm volatile (
         "mv              x28, %[p]        \n\t"
-        /* Offset 0 and an addi: the IDF v5.3 assembler rejects
-         * esp.vldbc.16.ip with an offset that is not a multiple of 4. */
+        /* Offset 0 and an addi: for the rev < v3 ISA (xesppie), GCC 13.2
+         * (IDF v5.3) is known to encode the esp.vldbc.16.ip offset in
+         * 4-byte units, so 2 does not assemble there. The compiler cannot
+         * tell toolchains apart, so every build uses this form. */
         "esp.vldbc.16.ip q6, x28, 0       \n\t"
         "addi            x28, x28, 2      \n\t"
         "esp.vldbc.16.ip q7, x28, 0       \n\t"
