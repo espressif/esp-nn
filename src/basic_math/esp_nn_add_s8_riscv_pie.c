@@ -216,6 +216,20 @@ static inline int add_in_ext_mem(const void *p)
           [lo] "r"(lo), [hi] "r"(hi), "m"(*cst)                               \
         : "x28", "x29", "memory")
 
+/* ADD_PIE_LOOP for any n_steps >= 1: in chunks of ESP_NN_HWLOOP_MAX_COUNT
+ * steps where the hardware loop count is limited (ESP32-P4 rev < v3). */
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+#define ADD_PIE_LOOP_N(pf, n_steps)                                           \
+    for (int32_t left = (n_steps); left > 0; ) {                              \
+        const int32_t k = left < ESP_NN_HWLOOP_MAX_COUNT ?                    \
+                          left : ESP_NN_HWLOOP_MAX_COUNT;                     \
+        ADD_PIE_LOOP(pf, k);                                                  \
+        left -= k;                                                            \
+    }
+#else
+#define ADD_PIE_LOOP_N(pf, n_steps) ADD_PIE_LOOP(pf, n_steps)
+#endif
+
 static __attribute__((noinline)) void add_pie(const int8_t *a, const int8_t *b,
                                              int8_t *out, int32_t size,
                                              int32_t off1, int32_t off2,
@@ -256,9 +270,9 @@ static __attribute__((noinline)) void add_pie(const int8_t *a, const int8_t *b,
     register const int8_t *pb asm("x14") = b;
     int32_t t0, t1;
     if (c1) {
-        ADD_PIE_LOOP(ADD_PF_ON, c1);
+        ADD_PIE_LOOP_N(ADD_PF_ON, c1);
     }
-    ADD_PIE_LOOP(ADD_PF_OFF, cnt - c1);
+    ADD_PIE_LOOP_N(ADD_PF_OFF, cnt - c1);
 
     const int32_t r = size & 7;
     if (r) {
