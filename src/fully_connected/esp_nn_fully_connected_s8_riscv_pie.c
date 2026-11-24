@@ -9,6 +9,7 @@
 #include <common_functions.h>
 #include <esp_nn_ansi_headers.h>
 #include <esp_nn.h>
+#include <esp_nn_multicore.h>
 #include "esp_nn_fc_internal.h"
 #include "../common/esp_nn_filter_sum_riscv_pie.h"
 
@@ -271,7 +272,7 @@ void esp_nn_fully_connected_per_ch_s8_riscv_pie(const int8_t *input_data,
  * Without that bit, esp.vld.128 loads from the address rounded down to
  * 16 bytes. The other paths return before that enable, and the per-row
  * kernel sets the same bit. */
-void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
+void esp_nn_fc_batch_s8_riscv_pie(const int8_t *input_data,
                                         const int32_t input_offset,
                                         const uint16_t row_len,
                                         const int8_t *filter_data,
@@ -347,6 +348,193 @@ void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
     }
 }
 
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && ESP_NN_DUAL_CORE_SUPPORTED
+/* P4 only. The public batch entry calls this for two or more rows when a
+ * dual-core worker exists. S31 keeps esp_nn_fc_batch_s8_riscv_pie. Split the output
+ * count in half. With a zero filter offset each core keeps the
+ * weight-stationary order: its own channels outer, every batch inner, so
+ * each filter row stays on one core. A nonzero filter offset calls the
+ * per-row kernel on that same channel slice, once per batch. A single
+ * batch, fewer than ESP_NN_FC_BATCH_DUAL_MIN_OUT outputs, a row shorter
+ * than 16, or a worker that will not take the job stays on the
+ * single-core batch kernel. */
+typedef struct {
+    const int8_t *input;
+    const int8_t *filter;
+    const int32_t *bias;
+    const int32_t *out_shift;
+    const int32_t *out_mult;
+    int8_t *out;
+    int32_t input_offset;
+    int32_t filter_offset;
+    int32_t out_offset;
+    int32_t activation_min;
+    int32_t activation_max;
+    int32_t batches;
+    int32_t c0, c1, b0, b1;
+    uint16_t row_len;
+    uint16_t out_channels;
+} fc_batch_n_job_t;
+
+/* Channels [c0, c1), batches [b0, b1). Outer loop is the channel, so the
+ * filter row stays live across the batches this core owns. */
+static void fc_batch_n_range(const fc_batch_n_job_t *j, int32_t c0, int32_t c1,
+                             int32_t b0, int32_t b1)
+{
+    ESP_NN_PIE_ENABLE();
+    const int32_t row_len = j->row_len;
+    const int32_t out_channels = j->out_channels;
+    for (int32_t out_c = c0; out_c < c1; ++out_c) {
+        const int8_t *filter_row = j->filter + row_len * out_c;
+        int32_t corr = 0;
+        if (j->input_offset != 0) {
+            corr = esp_nn_filter_sum_s8_riscv_pie(filter_row, row_len) * j->input_offset;
+        }
+        if (j->bias) {
+            corr += j->bias[out_c];
+        }
+        const int32_t mult = j->out_mult[out_c];
+        const int32_t shift = j->out_shift[out_c];
+        for (int32_t b = b0; b < b1; b++) {
+            int32_t result = fc_dot_s8_pie(j->input + b * row_len, filter_row, row_len);
+            result += corr;
+            j->out[b * out_channels + out_c] =
+                    fc_requantize_s8(result, mult, shift, j->out_offset,
+                                     j->activation_min, j->activation_max);
+        }
+    }
+}
+
+/* Channels [c0, c1), batches [b0, b1). The per-row kernel owns the filter
+ * offset. One call per batch writes a contiguous slice of that batch. */
+static void fc_batch_n_per_row(const fc_batch_n_job_t *j, int32_t c0, int32_t c1,
+                               int32_t b0, int32_t b1)
+{
+    const uint16_t count = (uint16_t)(c1 - c0);
+    const int8_t *filter = j->filter + (size_t)c0 * j->row_len;
+    const int32_t *bias = j->bias ? j->bias + c0 : NULL;
+    const int32_t *shift = j->out_shift + c0;
+    const int32_t *mult = j->out_mult + c0;
+    for (int32_t b = b0; b < b1; b++) {
+        esp_nn_fully_connected_per_ch_s8_riscv_pie(
+                j->input + b * j->row_len, j->input_offset, j->row_len,
+                filter, j->filter_offset, bias,
+                j->out + b * j->out_channels + c0, count,
+                j->out_offset, shift, mult,
+                j->activation_min, j->activation_max);
+    }
+}
+
+static void fc_batch_n_slice(const fc_batch_n_job_t *j, int32_t c0, int32_t c1,
+                             int32_t b0, int32_t b1)
+{
+    if (j->filter_offset != 0) {
+        fc_batch_n_per_row(j, c0, c1, b0, b1);
+    } else {
+        fc_batch_n_range(j, c0, c1, b0, b1);
+    }
+}
+
+static void fc_batch_n_worker(void *arg)
+{
+    const fc_batch_n_job_t *j = arg;
+    fc_batch_n_slice(j, j->c0, j->c1, j->b0, j->b1);
+}
+
+__attribute__((noinline))
+void esp_nn_fc_batch_n_split_riscv_pie(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t *out_shift,
+                                        const int32_t *out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max,
+                                        const int32_t batches)
+{
+    /* The public entry already rejected shapes that cannot split. */
+    if (!esp_nn_dual_core_begin()) {
+        esp_nn_fc_batch_s8_riscv_pie(
+                input_data, input_offset, row_len, filter_data, filter_offset,
+                bias, out_data, out_channels, out_offset, out_shift, out_mult,
+                activation_min, activation_max, batches);
+        return;
+    }
+    fc_batch_n_job_t job = {
+        .input = input_data, .filter = filter_data, .bias = bias,
+        .out_shift = out_shift, .out_mult = out_mult, .out = out_data,
+        .input_offset = input_offset, .filter_offset = filter_offset,
+        .out_offset = out_offset,
+        .activation_min = activation_min, .activation_max = activation_max,
+        .batches = batches,
+        .c0 = 0, .c1 = out_channels / 2, .b0 = 0, .b1 = batches,
+        .row_len = row_len, .out_channels = out_channels,
+    };
+    if (!esp_nn_dual_core_run(fc_batch_n_worker, &job)) {
+        esp_nn_dual_core_end();
+        esp_nn_fc_batch_s8_riscv_pie(
+                input_data, input_offset, row_len, filter_data, filter_offset,
+                bias, out_data, out_channels, out_offset, out_shift, out_mult,
+                activation_min, activation_max, batches);
+        return;
+    }
+    fc_batch_n_slice(&job, job.c1, out_channels, 0, batches);
+    esp_nn_dual_core_wait();
+    esp_nn_dual_core_end();
+}
+
+/* Dimension checks only. Worker acquisition stays in the split. */
+__attribute__((always_inline)) static inline bool fc_batch_dual_eligible(
+        uint16_t row_len, uint16_t out_channels, int32_t batches)
+{
+    return batches >= 2 && out_channels >= ESP_NN_FC_BATCH_DUAL_MIN_OUT &&
+            row_len >= 16;
+}
+#endif /* P4 dual-core batch N-split */
+
+void esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(const int8_t *input_data,
+                                        const int32_t input_offset,
+                                        const uint16_t row_len,
+                                        const int8_t *filter_data,
+                                        const int32_t filter_offset,
+                                        const int32_t *bias,
+                                        int8_t *out_data,
+                                        const uint16_t out_channels,
+                                        const int32_t out_offset,
+                                        const int32_t *out_shift,
+                                        const int32_t *out_mult,
+                                        const int32_t activation_min,
+                                        const int32_t activation_max,
+                                        const int32_t batches)
+{
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    /* One row has nothing to reuse across a batch. On dual-core P4 the
+     * per-channel entry is the batch-1 floor gate. S31 keeps the call below. */
+    if (batches == 1) {
+        esp_nn_fully_connected_per_ch_s8(input_data, input_offset, row_len,
+                filter_data, filter_offset, bias, out_data, out_channels,
+                out_offset, out_shift, out_mult, activation_min, activation_max);
+        return;
+    }
+#endif
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && ESP_NN_DUAL_CORE_SUPPORTED
+    if (fc_batch_dual_eligible(row_len, out_channels, batches)) {
+        esp_nn_fc_batch_n_split_riscv_pie(input_data, input_offset, row_len, filter_data, filter_offset,
+                bias, out_data, out_channels, out_offset, out_shift, out_mult,
+                activation_min, activation_max, batches);
+        return;
+    }
+#endif
+    esp_nn_fc_batch_s8_riscv_pie(input_data, input_offset, row_len, filter_data, filter_offset,
+            bias, out_data, out_channels, out_offset, out_shift, out_mult,
+            activation_min, activation_max, batches);
+}
+
 #if ESP_NN_FC_BATCH_VIA_CONV
 /* Weight zero-point 0 on a shape the per-chip gate accepts runs as the 1x1
  * convolution in scratch. Anything else runs the batch kernel above. */
@@ -375,7 +563,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_scratch_riscv_pie(const int8_t *inpu
                                            scratch, scratch_size)) {
         return;
     }
-    esp_nn_fully_connected_per_ch_s8_batch_riscv_pie(input_data, input_offset, row_len,
+    esp_nn_fully_connected_per_ch_s8_batch(input_data, input_offset, row_len,
             filter_data, filter_offset, bias, out_data, out_channels,
             out_offset, out_shift, out_mult, activation_min, activation_max,
             batches);

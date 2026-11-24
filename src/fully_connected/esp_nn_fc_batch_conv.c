@@ -22,15 +22,18 @@
 #if ESP_NN_FC_BATCH_VIA_CONV
 
 /* Measured ESP32-S3 floors. One core beats the S3 fully connected kernel
- * from batch 3, input 8, and output 8. Batch 1 and 2 are faster only when
- * the shared 1x1 kernel splits across both cores: the row length is a
- * multiple of 8, filter bytes are above 24 KiB, and there are at least 32
- * outputs. The filter and output numbers match the split in
- * esp_nn_conv_esp32s3.c. esp_nn_dual_core_active() means the worker exists.
- * That kernel still runs the same shape on one core when its worker scratch
- * does not fit, or when esp_nn_dual_core_begin() refuses a nested call or a
- * call already on the worker's core. Those one-core shapes lose to fully
- * connected. This gate cannot see that refusal. */
+ * from batch 3, input 8, and output 8. Batch 1 is faster only when the
+ * shared 1x1 kernel splits across both cores: the row length is a multiple
+ * of 8, filter bytes are above 24 KiB, and there are at least 32 outputs.
+ * Batch 2 on a row of at least 64 that is a multiple of 16 is faster as
+ * weight-stationary FC, on one core and on two, so that row stays off this
+ * path. Any other batch 2 is faster only when that same split runs. The
+ * filter and output numbers match the split in esp_nn_conv_esp32s3.c.
+ * esp_nn_dual_core_active() means the worker exists. That kernel still runs
+ * the same shape on one core when its worker scratch does not fit, or when
+ * esp_nn_dual_core_begin() refuses a nested call or a call already on the
+ * worker's core. Those one-core shapes lose to fully connected. This gate
+ * cannot see that refusal. */
 enum {
     ESP_NN_FC_S3_MIN_BATCH = 3,
     ESP_NN_FC_S3_MIN_ROW = 8,
@@ -46,11 +49,16 @@ enum {
  * convolution still starts its second core at batch 4; this gate does not
  * change that.
  *
- * ESP32-S31 uses the same PIE kernels and these floors. It was not swept:
- * no S31 board was available. The P4 numbers are the starting point, and a
- * sweep there is the right next check. A floor that does not match the S31
- * only selects the other kernel. The output is the same, and the call can
- * be slower than that other kernel. */
+ * Batches 2 through 8 with a multiple-of-16 row and at least 64 outputs
+ * stay on fully connected. Measured against dual-core plain FC on the same
+ * rev v3.2 board, in internal RAM. Those shapes are also faster on one
+ * core, so the exception does not look at the worker. S31 does not use it.
+ *
+ * ESP32-S31 uses the same PIE kernels and the floors above, without that
+ * exception. It was not swept: no S31 board was available. The P4 numbers
+ * are the starting point, and a sweep there is the right next check. A
+ * floor that does not match the S31 only selects the other kernel. The
+ * output is the same, and the call can be slower than that other kernel. */
 enum {
     ESP_NN_FC_P4_MIN_BATCH = 2,
     ESP_NN_FC_P4_ROW8_MIN_BATCH = 8,
@@ -89,11 +97,28 @@ static int fc_conv_shape_wins(int32_t batches, uint16_t row_len,
             (uint32_t) row_len * (uint32_t) out_channels >
                 (uint32_t) ESP_NN_FC_S3_DUAL_MIN_FILTER_BYTES &&
             esp_nn_dual_core_active()) {
+        /* Batch 2 on a row the plain dual gate accepts. */
+        if (batches > 1 && (row_len & 15) == 0 && row_len >= 64) {
+            return 0;
+        }
         return 1;
     }
     return 0;
-#elif defined(CONFIG_NN_OPTIMIZED) && \
-        (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))
+#elif defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32P4)
+    if (row_len < ESP_NN_FC_P4_MIN_ROW || out_channels < ESP_NN_FC_P4_MIN_OUT) {
+        return 0;
+    }
+    /* Plain FC wins through batch 8 on an aligned row with >= 64 outputs. */
+    if (batches > 1 && batches <= 8 && out_channels >= 64 &&
+            (row_len & 15) == 0) {
+        return 0;
+    }
+    /* A row of exactly 8 needs a larger batch than a longer row. */
+    if (row_len == ESP_NN_FC_P4_MIN_ROW) {
+        return batches >= ESP_NN_FC_P4_ROW8_MIN_BATCH;
+    }
+    return batches >= ESP_NN_FC_P4_MIN_BATCH;
+#elif defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32S31)
     if (row_len < ESP_NN_FC_P4_MIN_ROW || out_channels < ESP_NN_FC_P4_MIN_OUT) {
         return 0;
     }
@@ -140,10 +165,13 @@ static int fc_scratch_fits(int bytes, const void *scratch, size_t scratch_size)
  * kernel and uses its existing fallback for other widths.
  * On S3, batch 1 and 2 require that multiple of 8 as well. A live worker
  * is also required, and the convolution can still decline the split and
- * finish on one core. On P4 and S31 the floor does not look at the worker.
- * A row shorter than 8 stays on fully connected, a row of 8 needs a batch
- * of at least 8, a longer row needs a batch of at least 2, and there must
- * be at least 4 outputs. */
+ * finish on one core. Batch 2 with a row of at least 64 that is a multiple
+ * of 16 stays on fully connected. On P4 and S31 the floor does not look at
+ * the worker. A row shorter than 8 stays on fully connected, a row of 8
+ * needs a batch of at least 8, a longer row needs a batch of at least 2,
+ * and there must be at least 4 outputs. On P4 only, batches 2 through 8
+ * with a multiple-of-16 row and at least 64 outputs stay on fully
+ * connected. S31 keeps the previous floor. */
 int esp_nn_fc_per_ch_s8_batch_via_conv(const int8_t *input_data,
                                     const int32_t input_offset,
                                     const uint16_t row_len,

@@ -701,18 +701,24 @@ void esp_nn_fully_connected_large_s8_test()
  * of 8, so (outputs / 2) & ~7 moves the split.
  * Per-channel shift and multiplier are not one value for every output, so a
  * slice that drops shifts+start or mults+start cannot match.
+ * The sixth shape repeats 384x512 with filter offset 5, the nonzero value
+ * the small single-core sweeps use. Both cores still run.
  */
 void esp_nn_fully_connected_dual_core_s8_test()
 {
-    const struct { uint16_t row_len; uint16_t out_ch; } shapes[] = {
-        {24, 192},
-        {384, 512},
-        {400, 513},
-        {384, 530},
-        {33, 200},
+    const struct {
+        uint16_t row_len;
+        uint16_t out_ch;
+        int32_t filter_offset;
+    } shapes[] = {
+        {24, 192, 0},
+        {384, 512, 0},
+        {400, 513, 0},
+        {384, 530, 0},
+        {33, 200, 0},
+        {384, 512, 5},
     };
     const int32_t input_offsets[] = {0, -128};
-    const int32_t filter_offset = 0;
     const int32_t out_offset = 0;
     const int32_t out_shift = -8;
     const int32_t out_mult = 1355715584;
@@ -731,6 +737,7 @@ void esp_nn_fully_connected_dual_core_s8_test()
     for (int s = 0; s < (int)(sizeof(shapes) / sizeof(shapes[0])); s++) {
         const uint16_t row_len = shapes[s].row_len;
         const uint16_t out_ch = shapes[s].out_ch;
+        const int32_t filter_offset = shapes[s].filter_offset;
         int8_t *input_raw = ESP_NN_TEST_ALLOC(row_len + 32);
         int8_t *filter_raw = ESP_NN_TEST_ALLOC((size_t)row_len * out_ch + 32);
         /* 15 bytes to align out, plus 16 guard bytes after out_ch. */
@@ -751,7 +758,8 @@ void esp_nn_fully_connected_dual_core_s8_test()
         int8_t *input = (int8_t *)(((uintptr_t)input_raw + 15) & ~(uintptr_t)15);
         int8_t *filter = (int8_t *)(((uintptr_t)filter_raw + 15) & ~(uintptr_t)15);
         int8_t *out = (int8_t *)(((uintptr_t)out_raw + 15) & ~(uintptr_t)15);
-        uint32_t state = 0x9e3779b9u ^ ((uint32_t)row_len << 16) ^ out_ch;
+        uint32_t state = 0x9e3779b9u ^ ((uint32_t)row_len << 16) ^ out_ch ^
+                         (uint32_t)filter_offset;
         for (int i = 0; i < row_len; i++) {
             state = state * 1664525u + 1013904223u;
             input[i] = (int8_t)(state >> 24);
@@ -786,11 +794,11 @@ void esp_nn_fully_connected_dual_core_s8_test()
                 }
             }
             if (!CHECK_EQUAL(out, ref, out_ch) || !tail_ok) {
-                TEST_FAIL("[%3dx%3d io %d per-tensor] failed\n",
-                          row_len, out_ch, (int) input_offset);
+                TEST_FAIL("[%3dx%3d io %d fo %d per-tensor] failed\n",
+                          row_len, out_ch, (int) input_offset, (int) filter_offset);
             } else {
-                TEST_PASS("[%3dx%3d io %d per-tensor] passed\n",
-                          row_len, out_ch, (int) input_offset);
+                TEST_PASS("[%3dx%3d io %d fo %d per-tensor] passed\n",
+                          row_len, out_ch, (int) input_offset, (int) filter_offset);
             }
 
             esp_nn_fully_connected_per_ch_s8_ansi(input, input_offset, row_len, filter, filter_offset,
@@ -810,15 +818,161 @@ void esp_nn_fully_connected_dual_core_s8_test()
                 }
             }
             if (!CHECK_EQUAL(out, ref, out_ch) || !tail_ok) {
-                TEST_FAIL("[%3dx%3d io %d per-channel] failed\n",
-                          row_len, out_ch, (int) input_offset);
+                TEST_FAIL("[%3dx%3d io %d fo %d per-channel] failed\n",
+                          row_len, out_ch, (int) input_offset, (int) filter_offset);
             } else {
-                TEST_PASS("[%3dx%3d io %d per-channel] passed\n",
-                          row_len, out_ch, (int) input_offset);
+                TEST_PASS("[%3dx%3d io %d fo %d per-channel] passed\n",
+                          row_len, out_ch, (int) input_offset, (int) filter_offset);
             }
         }
 
     dual_cleanup:
+        free(input_raw);
+        free(filter_raw);
+        free(out_raw);
+        free(ref);
+        free(bias);
+        free(ch_shift);
+        free(ch_mult);
+    }
+}
+
+/**
+ * Batched dual-core fully connected against the ANSI batch kernel. The test
+ * enables the worker and, where dual-core FC is supported, fails if the worker
+ * does not start. A target without dual-core FC, including S31, still runs
+ * every shape on one core and skips a shape that does not fit.
+ * 4x64x32 is the output floor on S3 and P4, on a row the s8 dot path
+ * accepts. Its input offset is 0, so both cores skip the filter-sum
+ * correction. The other cases use input offset 7.
+ * 4x16x48 splits on P4. S3 keeps it on one core, because a row of
+ * 16 misses the dot path.
+ * 4x64x49 is odd, so one core owns one more channel. 4x64x64 passes bias.
+ * 4x64x24 is under both floors. The sixth case repeats 4x64x32 with filter
+ * offset 5, the nonzero value the small single-core sweeps use. Both cores
+ * call the per-row kernel. Those cases keep filter offset 0.
+ * 4x40x48 splits on P4. The row is not a multiple of 16, so the worker loads
+ * unaligned rows after test_app has cleared the PIE unaligned-load bit.
+ * S3 keeps 4x40x48 on one core, because a row of 40 misses the dot path.
+ * The last case repeats 4x64x32 with the input one byte past alignment and
+ * the filter left aligned, so S3 passes the filter to the dot first. The
+ * earlier cases keep both operands 16-byte aligned. Per-channel shift and
+ * multiplier are not one value for every output. The output is filled with
+ * 0x5a, and 16 bytes after the last batch must stay 0x5a.
+ */
+void esp_nn_fully_connected_per_ch_s8_batch_dual_core_test()
+{
+    const struct {
+        int batches;
+        int row_len;
+        int out_ch;
+        int with_bias;
+        int32_t filter_offset;
+        int32_t input_offset;
+        int in_align;
+    } shapes[] = {
+        {4, 64, 32, 0, 0, 0, 0},
+        {4, 16, 48, 0, 0, 7, 0},
+        {4, 64, 49, 0, 0, 7, 0},
+        {4, 64, 64, 1, 0, 7, 0},
+        {4, 64, 24, 0, 0, 7, 0},
+        {4, 64, 32, 0, 5, 7, 0},
+        {4, 40, 48, 0, 0, 7, 0},
+        {4, 64, 32, 0, 0, 7, 1},
+    };
+    const int32_t out_offset = 7;
+    const int32_t activation_min = -128;
+    const int32_t activation_max = 127;
+
+    printf("\n######## Running %s ##########\n", __FUNCTION__);
+    esp_nn_dual_core_enable();
+#if ESP_NN_DUAL_CORE_SUPPORTED
+    if (!esp_nn_dual_core_active()) {
+        TEST_FAIL("dual-core worker did not start\n");
+        return;
+    }
+#endif
+
+    for (int s = 0; s < (int)(sizeof(shapes) / sizeof(shapes[0])); s++) {
+        const int batches = shapes[s].batches;
+        const int row_len = shapes[s].row_len;
+        const int out_ch = shapes[s].out_ch;
+        const int with_bias = shapes[s].with_bias;
+        const int32_t filter_offset = shapes[s].filter_offset;
+        const int32_t input_offset = shapes[s].input_offset;
+        const int in_align = shapes[s].in_align;
+        const int out_count = batches * out_ch;
+        /* 16 bytes to align, the input shift, and the unaligned dot's over-read. */
+        int8_t *input_raw = ESP_NN_TEST_ALLOC((size_t)batches * row_len + 64);
+        int8_t *filter_raw = ESP_NN_TEST_ALLOC((size_t)row_len * out_ch + 32);
+        /* 15 bytes to align out, plus 16 guard bytes after the last batch. */
+        int8_t *out_raw = ESP_NN_TEST_ALLOC((size_t)out_count + 32);
+        int8_t *ref = ESP_NN_TEST_ALLOC((size_t)out_count);
+        int32_t *bias = with_bias ? ESP_NN_TEST_ALLOC((size_t)out_ch * sizeof(int32_t)) : NULL;
+        int32_t *ch_shift = ESP_NN_TEST_ALLOC((size_t)out_ch * sizeof(int32_t));
+        int32_t *ch_mult = ESP_NN_TEST_ALLOC((size_t)out_ch * sizeof(int32_t));
+        if (!input_raw || !filter_raw || !out_raw || !ref || !ch_shift || !ch_mult ||
+                (with_bias && !bias)) {
+#if ESP_NN_DUAL_CORE_SUPPORTED
+            TEST_FAIL("[%d x %d x %d] allocation failed\n", batches, row_len, out_ch);
+#else
+            TEST_SKIP("[%d x %d x %d] allocation failed\n", batches, row_len, out_ch);
+#endif
+            goto batch_dual_cleanup;
+        }
+
+        int8_t *input = (int8_t *)((((uintptr_t)input_raw + 15) & ~(uintptr_t)15) +
+                                   (uintptr_t)in_align);
+        int8_t *filter = (int8_t *)(((uintptr_t)filter_raw + 15) & ~(uintptr_t)15);
+        int8_t *out = (int8_t *)(((uintptr_t)out_raw + 15) & ~(uintptr_t)15);
+        uint32_t state = 0x9e3779b9u ^ ((uint32_t)row_len << 16) ^
+                         ((uint32_t)out_ch << 8) ^ (uint32_t)batches ^
+                         (uint32_t)filter_offset ^ ((uint32_t)in_align << 4);
+        for (int i = 0; i < batches * row_len; i++) {
+            state = state * 1664525u + 1013904223u;
+            input[i] = (int8_t)(state >> 24);
+        }
+        for (int i = 0; i < row_len * out_ch; i++) {
+            state = state * 1664525u + 1013904223u;
+            filter[i] = (int8_t)(state >> 24);
+        }
+        for (int i = 0; i < out_ch; i++) {
+            if (bias) {
+                bias[i] = (int32_t)((i % 31) - 15) * 64;
+            }
+            ch_shift[i] = -12 + (i % 7);
+            ch_mult[i] = 1000000000 + (int32_t)((i * 97) % 500000000);
+        }
+
+        esp_nn_fully_connected_per_ch_s8_batch_ansi(input, input_offset, row_len, filter,
+                                                    filter_offset, bias, ref, out_ch, out_offset,
+                                                    ch_shift, ch_mult, activation_min,
+                                                    activation_max, batches);
+        /* 0x5a makes an unwritten channel fail. The 16 bytes after the last batch catch an overrun. */
+        memset(out, 0x5a, (size_t)out_count + 16);
+        profile_opt_start();
+        esp_nn_fully_connected_per_ch_s8_batch(input, input_offset, row_len, filter, filter_offset,
+                                               bias, out, out_ch, out_offset, ch_shift, ch_mult,
+                                               activation_min, activation_max, batches);
+        profile_opt_end();
+        bool tail_ok = true;
+        for (int i = 0; i < 16; i++) {
+            if (out[out_count + i] != (int8_t)0x5a) {
+                tail_ok = false;
+                break;
+            }
+        }
+        if (!CHECK_EQUAL(out, ref, out_count) || !tail_ok) {
+            TEST_FAIL("[%d x %d x %d bias %d io %d fo %d ia %d] failed\n",
+                      batches, row_len, out_ch, with_bias, (int) input_offset,
+                      (int) filter_offset, in_align);
+        } else {
+            TEST_PASS("[%d x %d x %d bias %d io %d fo %d ia %d] passed\n",
+                      batches, row_len, out_ch, with_bias, (int) input_offset,
+                      (int) filter_offset, in_align);
+        }
+
+    batch_dual_cleanup:
         free(input_raw);
         free(filter_raw);
         free(out_raw);
@@ -838,13 +992,14 @@ void esp_nn_fully_connected_per_ch_s8_batch_test()
      * tail and, since its rows then start at differing offsets, mixed row
      * alignments; in_off 0 skips the correction. On P4 and S31, a row shorter
      * than 16 with more than one batch and filter offset 0 stays in the batch
-     * scalar loop. A single batch, or a nonzero filter offset, calls the
-     * per-row kernel once per batch. with_bias passes one bias array to the
-     * batch call and to the ANSI reference. On S3, batching is only eligible
-     * when the fast
-     * path is, so a misaligned input (or filter), a short row, or a nonzero
-     * filter offset falls back to the per-row kernel instead of reading
-     * garbage. On P4 and S31 the batch kernel stays in place for a
+     * scalar loop. A single batch calls the per-row kernel once. A nonzero
+     * filter offset that the split declines calls the per-row kernel once
+     * per batch. When the split takes it, each core calls that kernel on
+     * its own channels. with_bias passes one bias array to the
+     * batch call and to the ANSI reference. On S3, the weight-stationary
+     * loop is only eligible when the fast
+     * path is, so a misaligned input (or filter) or a short row stays off
+     * that loop. On P4 and S31 the batch kernel stays in place for a
      * misaligned input or filter. Batched output must match the per-row
      * ANSI reference. */
     const struct {
@@ -964,10 +1119,14 @@ static int fc_1x1_no_conv(const int8_t *input, int32_t input_offset,
  * ESP32-S31 both use the P4 columns. 1 means the 1x1 convolution. The
  * numbers are written on the row. On S3, a batch of 1 or 2 whose row
  * length is not a multiple of 8 stays on fully connected even when the
- * worker is active. On P4 and S31 one floor applies with the worker on
- * or off: a row shorter than 8 stays on fully connected, a row of 8
- * needs a batch of at least 8, a longer row needs a batch of at least 2,
- * and there must be at least 4 outputs. Scratch mode is 0 none,
+ * worker is active. Batch 2 with a row of at least 64 that is a multiple
+ * of 16 also stays on fully connected. On P4 and S31 one floor applies
+ * with the worker on or off: a row shorter than 8 stays on fully
+ * connected, a row of 8 needs a batch of at least 8, a longer row needs
+ * a batch of at least 2, and there must be at least 4 outputs. P4 also
+ * stays on fully connected for batches 2 through 8 when the row is a
+ * multiple of 16 and there are at least 64 outputs. S31 does not.
+ * Scratch mode is 0 none,
  * 1 a scratch argument of the required size, 2 one byte short, 3 only the
  * convolution setter, which the scratch batch call does not read. */
 static void fc_1x1_arm(int scratch_mode, void *scratch, int scratch_bytes,
@@ -1024,7 +1183,7 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         { "m1_k8_n4",           1,   8,   4, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
         { "odd_m1_k40_n4",      1,  40,   4,   5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
         { "dual_m1_k128_n256",  1, 128, 256, 128, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0 },
-        { "dual_m2_k256_n128",  2, 256, 128, 128, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0 },
+        { "dual_m2_k256_n128",  2, 256, 128, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
         { "oddrow_m1_k41_n640", 1,  41, 640, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
         { "nodual_m2_k128_n32", 2, 128,  32, 128, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0 },
         { "below_m4_k7_n16",    4,   7,  16, 128, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 },
@@ -1057,8 +1216,13 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         const int32_t activation_max = cfg[c].clamp ? 20 : 127;
 #if defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32S3)
         const int expect = dual ? cfg[c].expect_s3_dual : cfg[c].expect_s3;
-#elif defined(CONFIG_NN_OPTIMIZED) && \
-        (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))
+#elif defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32P4)
+        int expect = dual ? cfg[c].expect_p4_dual : cfg[c].expect_p4;
+        /* Same exception as fc_conv_shape_wins on P4. S31 keeps the columns. */
+        if (expect && B > 1 && B <= 8 && out_ch >= 64 && (row_len & 15) == 0) {
+            expect = 0;
+        }
+#elif defined(CONFIG_NN_OPTIMIZED) && defined(CONFIG_IDF_TARGET_ESP32S31)
         const int expect = dual ? cfg[c].expect_p4_dual : cfg[c].expect_p4;
 #else
         const int expect = cfg[c].expect_other;

@@ -18,25 +18,31 @@ extern "C" {
  * the gate does not run again. Below the floor the gate does not claim the
  * worker. A missing or busy worker stays on the original kernel. With
  * esp_nn_dual_core_enable(), split when K >= 24 && N >= 192 on S3 and
- * K >= 384 && N >= 512 on P4.
+ * N >= 192 on P4. P4 has no row minimum.
  * No upper bounds or dimension divisibility requirements. S31 retains its original
  * public APIs and is not routed through this gate.
  * Both zero and nonzero input offsets are supported. The scratch-enabled
  * 1x1 route separately requires a zero filter offset, not a zero input offset.
  * S3/P4 no-scratch batch APIs also use this path for batches == 1.
  * Scratch-enabled APIs retain production 1x1 eligibility for all batches.
- * When 1x1 is rejected, a batch of 1 reaches this path from the S3 and P4
- * batch kernels. Other no-scratch batches keep their original dispatch.
+ * When 1x1 is rejected, a batch of 1 reaches this path from the public
+ * batch entry. Larger no-scratch batches may split output channels.
  * Existing buffer/alignment requirements of the underlying FC still apply.
  */
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define ESP_NN_FC_DUAL_MIN_ROW 24
 #define ESP_NN_FC_DUAL_MIN_OUT 192
 #elif defined(CONFIG_IDF_TARGET_ESP32P4)
-/* P4 gate measured on rev v1.3 and checked on rev v3. S31 retains its original dispatch. */
-#define ESP_NN_FC_DUAL_MIN_ROW 384
-#define ESP_NN_FC_DUAL_MIN_OUT 512
+/* P4 batch-1 gate measured on rev v3.2 at 400 MHz. No row minimum.
+ * Per-tensor rows of 32, 48, and 64 were slower on two cores at 128
+ * outputs. Every measured row was at least as fast on two cores at
+ * 192 outputs. S31 retains its original dispatch. */
+#define ESP_NN_FC_DUAL_MIN_OUT 192
 #endif
+/* Batched FC, two or more rows. Separate from the batch-1 floor above.
+ * At 32 outputs and above, the measured splits win on internal RAM.
+ * One P4 shape does not: 3x96x32 at filter offset 0. */
+#define ESP_NN_FC_BATCH_DUAL_MIN_OUT 32
 
 #if ESP_NN_DUAL_CORE_SUPPORTED
 /* Caller already passed the floor. Claims the worker and splits, or runs

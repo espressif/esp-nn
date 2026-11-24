@@ -248,7 +248,12 @@ static const bench_variant_t s_batch_variants[] = {
  * of esp_nn: its gate should pick the 1x1 path only where it wins. */
 #define FC_BATCH_SCRATCH_MAX_PCT 105
 
-static void run_fc_batch(const fc_batch_shape_t *s)
+/* note is appended only for the worker-on pass. A null note keeps the
+ * existing shape string, so the worker-off cases keep their seeds. irqs_on
+ * times the optimized calls with interrupts left on: a split wakes the
+ * caller through a semaphore, and masking interrupts blocks that wakeup.
+ * The reference call is still timed with interrupts off. */
+static void run_fc_batch(const fc_batch_shape_t *s, const char *note, bool irqs_on)
 {
     const size_t in_size = (size_t) s->batches * s->row_len;
     const size_t f_size = (size_t) s->row_len * s->out_ch;
@@ -261,9 +266,14 @@ static void run_fc_batch(const fc_batch_shape_t *s)
     const int32_t scratch_size = esp_nn_get_fc_batch_scratch_size(s->batches, s->row_len,
                                                                   s->out_ch);
     void *scratch = scratch_size > 0 ? bench_alloc(scratch_size, s->mem) : NULL;
-    char shape[64];
-    snprintf(shape, sizeof(shape), "batch %d, length %d, %d outputs",
-             s->batches, s->row_len, s->out_ch);
+    char shape[80];
+    if (note) {
+        snprintf(shape, sizeof(shape), "batch %d, length %d, %d outputs, %s",
+                 s->batches, s->row_len, s->out_ch, note);
+    } else {
+        snprintf(shape, sizeof(shape), "batch %d, length %d, %d outputs",
+                 s->batches, s->row_len, s->out_ch);
+    }
 
     if (in[0] && in[1] && filter && bias && mult && shift && (scratch_size <= 0 || scratch)) {
         bench_seed_case("fully_connected_batch", shape);
@@ -283,7 +293,7 @@ static void run_fc_batch(const fc_batch_shape_t *s)
             .out_size = (size_t) s->batches * s->out_ch, .ref = fc_batch_ref,
             .variants = s_batch_variants,
             .n_variants = sizeof(s_batch_variants) / sizeof(s_batch_variants[0]), .ctx = &c,
-            .cycles = cycles,
+            .cycles = cycles, .irqs_on = irqs_on,
         };
         bench_run(&bc);
         if ((uint64_t) cycles[1] * 100 > (uint64_t) cycles[0] * FC_BATCH_SCRATCH_MAX_PCT) {
@@ -310,9 +320,9 @@ void bench_fully_connected(void)
     }
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     /* One-core row, then the same shape with the worker on. The worker is
-     * off again before the batch cases and the kernels that follow. The
-     * worker-on optimized call leaves interrupts on so the split's semaphore
-     * can wake the caller. Its reference call still masks them. */
+     * off again before the batch cases. The worker-on optimized call leaves
+     * interrupts on so the split's semaphore can wake the caller. Its
+     * reference call still masks them. */
     run_fc(&s_fc_dual_shape, NULL, true, false);
     esp_nn_dual_core_enable();
     if (esp_nn_dual_core_active()) {
@@ -321,6 +331,17 @@ void bench_fully_connected(void)
     esp_nn_dual_core_disable();
 #endif
     for (int i = 0; i < (int) (sizeof(s_batch_shapes) / sizeof(s_batch_shapes[0])); i++) {
-        run_fc_batch(&s_batch_shapes[i]);
+        run_fc_batch(&s_batch_shapes[i], NULL, false);
     }
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+    /* The same batch shapes with the worker on, then off again before the
+     * kernels that follow. The optimized calls leave interrupts on. */
+    esp_nn_dual_core_enable();
+    if (esp_nn_dual_core_active()) {
+        for (int i = 0; i < (int) (sizeof(s_batch_shapes) / sizeof(s_batch_shapes[0])); i++) {
+            run_fc_batch(&s_batch_shapes[i], "worker on", true);
+        }
+    }
+    esp_nn_dual_core_disable();
+#endif
 }

@@ -35,6 +35,7 @@ void esp_nn_fully_connected_align_s8_test();
 void esp_nn_alignment_s8_test();
 void esp_nn_fully_connected_large_s8_test();
 void esp_nn_fully_connected_dual_core_s8_test();
+void esp_nn_fully_connected_per_ch_s8_batch_dual_core_test();
 
 void esp_nn_relu6_s8_test();
 
