@@ -102,6 +102,31 @@ static void dw_pie_scalar_pos(const data_dims_t *input_dims, const int8_t *input
     }
 }
 
+/* Whether the 16 channels from ch_idx include one that needs the scalar
+ * requant. slow_blocks has one bit per 16-channel block, for the first 64
+ * blocks. Past those, the vector requant is off for the whole layer. */
+static inline bool dw_pie_block_slow(uint64_t slow_blocks, int ch_idx)
+{
+    const int lo = ch_idx >> 4, hi = (ch_idx + 15) >> 4;
+    return slow_blocks && hi < 64 && (((slow_blocks >> lo) | (slow_blocks >> hi)) & 1);
+}
+
+/* A last block of 8-15 channels would load 16 bytes per tap and pixel,
+ * past the end of the filter and of the input. Instead the block moves
+ * back to end at c_end. Its first channels repeat the block before, with
+ * the same results. It moves only when it stays in [c_beg, c_end) and
+ * starts on an 8-channel group of the requant table. Returns false when
+ * it cannot move: the caller then runs those channels in scalar C. */
+static inline bool dw_pie_tail_block(int *ch_idx, int c_beg, int c_end)
+{
+    const int start = c_end - 16;
+    if (start < c_beg || (start & 7)) {
+        return false;
+    }
+    *ch_idx = start;
+    return true;
+}
+
 /* Constants of the 3x3 edge strips of the non-slab path. */
 typedef struct {
     const int8_t *input;
@@ -261,7 +286,12 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                 ch_ok = false;
             }
             if (!ch_ok) {
-                if ((ch >> 4) < 64) {
+                /* A moved last block (dw_pie_tail_block) can span blocks
+                 * 63 and 64. Block 64 has no bit, so dw_pie_block_slow
+                 * does not see block 63 for it. With channels past block
+                 * 63, a channel of block 63 also turns the PIE requant off
+                 * for the layer. */
+                if ((ch >> 4) < 63 || ((ch >> 4) == 63 && c_end <= 64 * 16)) {
                     slow_blocks |= 1ULL << (ch >> 4);
                 } else {
                     vrq_ok = false;
@@ -349,8 +379,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
                  * which steps through the positions itself, then one
                  * requant pass loads each channel's constants once for
                  * the 32. */
-                const int16_t *bvrq = slow_blocks &&
-                        ((slow_blocks >> (ch_idx >> 4)) & 1) ? NULL : vrq;
+                const int16_t *bvrq = dw_pie_block_slow(slow_blocks, ch_idx) ? NULL : vrq;
                 sw.ip = slab;
                 sw.oxl = out_wd;
                 int8_t *op = out_data + oy0 * out_wd * channels;
@@ -429,8 +458,11 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             win.np = np;
             int ch_idx = c_beg;
             while (c_end - ch_idx >= 8) {
-                const int block_ch = min(16, c_end - ch_idx);
-                const bool slow = slow_blocks && ((slow_blocks >> (ch_idx >> 4)) & 1);
+                if (c_end - ch_idx < 16 && !dw_pie_tail_block(&ch_idx, c_beg, c_end)) {
+                    break;
+                }
+                const int block_ch = 16;
+                const bool slow = dw_pie_block_slow(slow_blocks, ch_idx);
                 win.ip = ip0 + ch_idx;
                 win.oxl = ox_hi - ox_c;
                 win.fp = filter_data + ch_idx;
@@ -589,9 +621,13 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         }
 
         int ch_idx = c_beg;
-        /* 16-channel blocks, then a partial block if 8-15 channels remain */
+        /* 16-channel blocks. When 8-15 channels remain, a last block that
+         * ends at c_end (dw_pie_tail_block). */
         while (c_end - ch_idx >= 8) {
-            const int block_ch = min(16, c_end - ch_idx);
+            if (c_end - ch_idx < 16 && !dw_pie_tail_block(&ch_idx, c_beg, c_end)) {
+                break;
+            }
+            const int block_ch = 16;
             if (all_inner) {
                 win.ip = ip0 + ch_idx;
                 win.oxl = oxl0;
@@ -641,7 +677,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             }
 
             dw_pie_store(acc, np, out_p, NULL, 0, ch_idx, block_ch,
-                         slow_blocks && ((slow_blocks >> (ch_idx >> 4)) & 1) ? NULL : vrq,
+                         dw_pie_block_slow(slow_blocks, ch_idx) ? NULL : vrq,
                          quant_data, out_offset, &activation_min, &activation_max);
             ch_idx += block_ch;
         }
