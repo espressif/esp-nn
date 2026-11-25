@@ -15,9 +15,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <esp_nn_defs.h>
-/* CONFIG_CACHE_L2_CACHE_SIZE: the scratch getter and the kernel must see
- * the same L2 size, or the band and the slab size disagree. */
-#include "sdkconfig.h"
 
 /* L1D cache budget: use half of 64KB to leave room for filter streaming */
 #define L1D_BUDGET 32768
@@ -223,28 +220,16 @@ static inline int dw_pie_inner_hi(int in, int pad, int stride, int filt,
     return end > lo ? end : lo;
 }
 
-/* The padded slab of one 16-channel block takes up to this many bytes,
- * unless one band of output rows alone needs more. */
+/* The padded slab of one 16-channel block takes up to this many bytes.
+ * A layer where one band of output rows needs more takes the non-slab
+ * path. */
 #define DW_PIE_SLAB_MAX (16 * 1024)
 
-#ifdef CONFIG_CACHE_L2_CACHE_SIZE
-#define DW_PIE_L2_CACHE_BYTES CONFIG_CACHE_L2_CACHE_SIZE
-#else
-#define DW_PIE_L2_CACHE_BYTES (128 * 1024)
-#endif
-
 /* Output rows per band of the input slab: as many as fit DW_PIE_SLAB_MAX,
- * at least 1, at most out_ht.
- * The slab path runs every 16-channel block over the whole band, so each
- * block reads every input row and writes every output row of the band.
- * When the input and output of the whole map, all channels, are larger
- * than the L2 cache, those rows fall out of the cache between blocks and
- * every block streams them from memory again. The band is then capped so
- * its rows, all channels, take a quarter of the L2 cache, unless that
- * leaves a single row. Below the L2 size the rows stay cached and the long
- * band is faster. */
-static inline int dw_pie_slab_band(const data_dims_t *input_dims,
-                                   const data_dims_t *filter_dims,
+ * at most out_ht, or 0 when not even one fits. The slab size comes from
+ * this band. The kernel may run shorter bands (dw_pie_slab_band_l2), and
+ * the size does not depend on the device. */
+static inline int dw_pie_slab_band(const data_dims_t *filter_dims,
                                    const data_dims_t *output_dims,
                                    const dw_conv_params_t *conv_params)
 {
@@ -252,23 +237,11 @@ static inline int dw_pie_slab_band(const data_dims_t *input_dims,
     const int row = ((output_dims->width - 1) * conv_params->stride.width +
                      filter_dims->width) * 16;
     const int rows = DW_PIE_SLAB_MAX / row;
-    int band = rows < filter_dims->height ? 1 :
-               (rows - filter_dims->height) / s_ht + 1;
-    const int in_row = input_dims->width * input_dims->channels;
-    const int out_row = output_dims->width * output_dims->channels;
-    if ((int64_t) input_dims->height * in_row +
-            (int64_t) output_dims->height * out_row > DW_PIE_L2_CACHE_BYTES) {
-        /* A band reads (band - 1) * s_ht + filter_ht input rows and writes
-         * band output rows. */
-        const int fixed = (filter_dims->height - s_ht) * in_row;
-        const int fit = (DW_PIE_L2_CACHE_BYTES / 4 - fixed) / (s_ht * in_row + out_row);
-        /* Single-row bands cost more in halo copies and short position
-         * batches than the cache misses they save. */
-        if (fit >= 2) {
-            band = dw_pie_min(band, fit);
-        }
+    if (rows < filter_dims->height) {
+        return 0;
     }
-    return dw_pie_min(band, (int) output_dims->height);
+    return dw_pie_min((rows - filter_dims->height) / s_ht + 1,
+                      (int) output_dims->height);
 }
 
 /* Bytes of one band of the padded input slab of a 16-channel block plus
@@ -301,7 +274,10 @@ static inline int dw_pie_slab_size(const data_dims_t *input_dims,
             8 * (int64_t) ix * iy > 7 * (int64_t) out_wd * out_ht) {
         return 0;
     }
-    const int band = dw_pie_slab_band(input_dims, filter_dims, output_dims, conv_params);
+    const int band = dw_pie_slab_band(filter_dims, output_dims, conv_params);
+    if (band == 0) {
+        return 0;
+    }
     const int slab_w = (out_wd - 1) * s_wd + filter_dims->width;
     return (((band - 1) * s_ht + filter_dims->height) * slab_w +
             filter_dims->height * filter_dims->width) * 16;

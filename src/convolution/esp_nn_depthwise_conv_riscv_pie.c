@@ -13,6 +13,51 @@
 #include "esp_nn_conv_dispatch_riscv_pie.h"
 #include "esp_nn_depthwise_conv_mac_riscv_pie.h"
 
+#if defined(ESP_PLATFORM)
+#include "sdkconfig.h"
+#endif
+
+#ifdef CONFIG_CACHE_L2_CACHE_SIZE
+#define DW_PIE_L2_CACHE_BYTES CONFIG_CACHE_L2_CACHE_SIZE
+#else
+#define DW_PIE_L2_CACHE_BYTES (128 * 1024)
+#endif
+
+/* The band of output rows the slab path runs, at least 1 when
+ * dw_pie_slab_band is.
+ * The slab path runs every 16-channel block over the whole band, so each
+ * block reads every input row and writes every output row of the band.
+ * When the input and output of the whole map, all channels, are larger
+ * than the L2 cache, those rows fall out of the cache between blocks and
+ * every block streams them from memory again. The band is then capped so
+ * its rows, all channels, take a quarter of the L2 cache, unless that
+ * leaves a single row. Below the L2 size the rows stay cached and the long
+ * band is faster. The cap only shortens the band, so the slab still fits
+ * the scratch that dw_pie_slab_size gave. */
+static int dw_pie_slab_band_l2(const data_dims_t *input_dims,
+                               const data_dims_t *filter_dims,
+                               const data_dims_t *output_dims,
+                               const dw_conv_params_t *conv_params)
+{
+    int band = dw_pie_slab_band(filter_dims, output_dims, conv_params);
+    const int s_ht = conv_params->stride.height;
+    const int in_row = input_dims->width * input_dims->channels;
+    const int out_row = output_dims->width * output_dims->channels;
+    if ((int64_t) input_dims->height * in_row +
+            (int64_t) output_dims->height * out_row > DW_PIE_L2_CACHE_BYTES) {
+        /* A band reads (band - 1) * s_ht + filter_ht input rows and writes
+         * band output rows. */
+        const int fixed = (filter_dims->height - s_ht) * in_row;
+        const int fit = (DW_PIE_L2_CACHE_BYTES / 4 - fixed) / (s_ht * in_row + out_row);
+        /* Single-row bands cost more in halo copies and short position
+         * batches than the cache misses they save. */
+        if (fit >= 2) {
+            band = min(band, fit);
+        }
+    }
+    return band;
+}
+
 /* External fallback */
 void esp_nn_depthwise_conv_s8_opt(const data_dims_t *input_dims,
                                    const int8_t *input_data,
@@ -325,7 +370,7 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         /* A dual-core slice is smaller than the full call, so its own band
          * may be longer. slab_bytes, sized for the full call, bounds it. */
         const int slab_rows = (slab_bytes / 16 - filter_ht * filter_wd) / slab_w;
-        const int band = min(dw_pie_slab_band(input_dims, filter_dims, output_dims, conv_params),
+        const int band = min(dw_pie_slab_band_l2(input_dims, filter_dims, output_dims, conv_params),
                              (slab_rows - filter_ht) / stride_ht + 1);
         int8_t *slab = (int8_t *) vrq_t + 14 * ch_pad;
         int8_t *fslab = slab + ((band - 1) * stride_ht + filter_ht) * slab_w * 16;

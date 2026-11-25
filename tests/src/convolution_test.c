@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 82; itr++) {
+    for (int itr = 0; itr < 83; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -867,6 +867,19 @@ void esp_nn_depthwise_conv_s8_test()
             stride_wd = 2;
             stride_ht = 2;
             break;
+        case 82: // 1-D, 1100 wide, 16 channels, 9-tap filter, pad 4: one slab
+                 // row is over the slab limit, so the P4/S31 slab path is off
+            input_wd = 1100;
+            input_ht = 1;
+            filter_ht = 1;
+            filter_wd = 9;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 4;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -1013,6 +1026,14 @@ void esp_nn_depthwise_conv_s8_test()
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
+#if CONFIG_NN_OPTIMIZED && (CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31)
+        /* The P4/S31 slab takes at most 16 KB: a 1-D map past that does not
+         * ask for a slab of its whole width. */
+        if (itr == 82 && scratch_buf_size > 4096) {
+            TEST_FAIL("[%3d] scratch %d bytes for a 1-D map\n", itr, scratch_buf_size);
+            goto dc_s8_cleanup;
+        }
+#endif
         /* No pre-check on the getter's size: a kernel that needs more than it
          * asked for trips the SCRATCH_GUARD, one that needs scratch when the
          * getter said 0 faults on the NULL buffer (reset after every case). */
