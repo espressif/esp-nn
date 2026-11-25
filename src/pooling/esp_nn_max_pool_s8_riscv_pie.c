@@ -292,6 +292,21 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
         return;
     }
 
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+    /* ESP32-P4 before rev v3 counts at most ESP_NN_HWLOOP_MAX_COUNT hardware
+     * loop iterations. A band of more pixels or 16-byte blocks, or a window
+     * of more taps, takes the reference. Other builds have no limit. */
+    if (__builtin_expect(output_wd > ESP_NN_HWLOOP_MAX_COUNT ||
+            (((int32_t) output_wd * channels) >> 4) > ESP_NN_HWLOOP_MAX_COUNT ||
+            filter_wd > ESP_NN_HWLOOP_MAX_COUNT || filter_ht > ESP_NN_HWLOOP_MAX_COUNT, 0)) {
+        esp_nn_max_pool_s8_ansi(input, input_wd, input_ht, output, output_wd,
+                                output_ht, stride_wd, stride_ht, filter_wd, filter_ht,
+                                pad_wd, pad_ht, activation_min, activation_max,
+                                channels);
+        return;
+    }
+#endif
+
     ESP_NN_PIE_ENABLE();
 
     int8_t act_min_val = (int8_t) activation_min;

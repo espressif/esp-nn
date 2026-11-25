@@ -134,6 +134,10 @@ void esp_nn_avg_pool_s8_test()
 /* Bytes after the max_pool output that must stay untouched */
 #define MAX_POOL_GUARD 64
 
+/* When set, every max pool input is at most 0 except the last pixel, which
+ * is 127, so a window loop that stops early gets the wrong max. */
+static bool max_pool_peak_last;
+
 /* in_off and out_off put the input and outputs that many bytes past a
  * 16-byte boundary. out_wd and out_ht are given, so a test can ask for the
  * extra right/bottom output of TFLite SAME padding (pad_wd and pad_ht are the
@@ -164,6 +168,9 @@ static void run_max_pool_test_out(uint16_t input_wd, uint16_t input_ht, uint16_t
 
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 256 - 128;
+        if (max_pool_peak_last) {
+            input[i] = i >= size - channels ? 127 : -(rand() % 129);
+        }
     }
     memset(output_opt + out_size, 0x5a, MAX_POOL_GUARD);
 
@@ -351,4 +358,17 @@ void esp_nn_max_pool_s8_test()
     run_max_pool_test(7, 5, 47, 3, 3, 2, 2, 1, 1, iter++);                /* d = 31 */
     run_max_pool_test(5, 5, 56, 4, 4, 1, 1, 1, 1, iter++);                /* 4 blocks, d = 24 */
     run_max_pool_test_buf(6, 6, 44, 5, 5, 1, 1, 2, 2, -128, 127, 8, 4, iter++);
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    /* Bands and windows of more than 4095 hardware loop iterations, the
+     * ESP32-P4 rev < v3 limit */
+    run_max_pool_test(4200, 1, 16, 2, 1, 1, 1, 0, 0, iter++);       /* 1x2 flat band */
+    run_max_pool_test(4200, 2, 16, 2, 2, 1, 1, 0, 0, iter++);       /* 2x2 flat band */
+    run_max_pool_test(8200, 2, 16, 2, 2, 2, 2, 0, 0, iter++);       /* 2x2, 4100 pixels */
+    run_max_pool_test(4102, 3, 16, 3, 3, 1, 1, 0, 0, iter++);       /* 3x3 flat band of 4100 blocks */
+    max_pool_peak_last = true;
+    run_max_pool_test(4200, 1, 48, 4200, 1, 1, 1, 0, 0, iter++);    /* 1x4200 window */
+    /* 40 channels: 3 blocks, the last one overlapping the one before */
+    run_max_pool_test(4200, 1, 40, 4200, 1, 1, 1, 0, 0, iter++);    /* 1x4200 window */
+    max_pool_peak_last = false;
+#endif
 }
