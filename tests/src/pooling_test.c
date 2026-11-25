@@ -15,6 +15,9 @@
 #include <esp_nn.h>
 #include "test_utils.h"
 
+/* 0: random input, else every avg pool input is avg_pool_fill. */
+static int avg_pool_fill;
+
 static void run_avg_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t channels,
                                   uint16_t filter_wd, uint16_t filter_ht,
                                   uint16_t stride_wd, uint16_t stride_ht,
@@ -44,7 +47,7 @@ static void run_avg_pool_test_act(uint16_t input_wd, uint16_t input_ht, uint16_t
     output_opt = (int8_t *) (((uint32_t) out_opt_orig + 15) & ~15);
 
     for (int i = 0; i < size; ++i) {
-        input[i] = rand() % 256 - 128;
+        input[i] = avg_pool_fill ? avg_pool_fill : rand() % 256 - 128;
     }
     memset(output_opt + out_size, 0x5a, guard);
 
@@ -129,6 +132,17 @@ void esp_nn_avg_pool_s8_test()
     run_avg_pool_test(6, 5, 12, 2, 2, 1, 1, 2, 2, iter++);                /* ch % 8 == 4 */
     run_avg_pool_test(1, 8, 16, 1, 2, 3, 1, 1, 0, iter++);                /* one column */
     run_avg_pool_test_act(6, 6, 20, 2, 2, 1, 1, 2, 2, 5, 30, iter++);     /* clamped to 5 */
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    /* Windows of more than 4095 positions: rows past the ESP32-P4 rev < v3
+     * hardware loop limit, and the largest lane sums. */
+    run_avg_pool_test(4200, 1, 16, 4200, 1, 1, 1, 0, 0, iter++);
+    avg_pool_fill = 127;
+    run_avg_pool_test(70, 70, 20, 70, 70, 1, 1, 0, 0, iter++);
+    avg_pool_fill = -128;
+    run_avg_pool_test(70, 70, 20, 70, 70, 1, 1, 0, 0, iter++);
+    run_avg_pool_test(4200, 1, 16, 4200, 1, 1, 1, 0, 0, iter++);
+    avg_pool_fill = 0;
+#endif
 }
 
 /* Bytes after the max_pool output that must stay untouched */
