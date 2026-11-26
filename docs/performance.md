@@ -12,6 +12,7 @@ Setup per chip:
 - **ESP32-P4:** 360 MHz, HEX PSRAM at 200 MHz, 128 KB L2 cache.
 - **ESP32-S31:** 320 MHz, data in internal memory. PIE runs on core 1 only, and ESP-IDF moves
   tasks that use the optimized kernels to core 1.
+- **ESP32:** 240 MHz, data in internal memory. Conv and depthwise run on the MAC16 unit.
 
 The "Memory" column says where the tensors were.
 
@@ -29,12 +30,20 @@ The "Memory" column says where the tensors were.
 | ESP32-S31 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 4112714 | 134972 | 30.47 | Internal |
 | ESP32-S31 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 269713 | 13278 | 20.31 | Internal |
 | ESP32-S31 | input(10,10), filter(64x3x3x3), pad(0,0), stride(1,1) | 1799955 | 64103 | 28.08 | Internal |
+| ESP32 | input(10,10), filter(64x1x1x64), pad(0,0), stride(1,1) | 5319365 | 557370 | 9.54 | Internal |
+| ESP32 | input(8,8), filter(16x1x1x16), pad(0,0), stride(1,1) | 362155 | 41125 | 8.81 | Internal |
+| ESP32 | input(8,8), filter(64x3x3x3), pad(0,0), stride(1,1) | 1555669 | 146380 | 10.63 | Internal |
+| ESP32 | input(10,10), filter(64x3x3x3), pad(0,0), stride(1,1) | 2766529 | 248834 | 11.12 | Internal |
+| ESP32 | input(8,8), filter(16x3x3x16), pad(0,0), stride(2,2), SAME | 405397 | 57879 | 7.00 | Internal |
 
 The rows above come from bench_app runs:
 
 - ESP32-S3 at 240 MHz, ESP-IDF v6.1. Two runs gave the same cycles.
 - ESP32-P4 revision v3.2, ESP-IDF v6.1, median of 9 runs. bench_app asks for 360 MHz, which this revision runs at 400 MHz.
 - ESP32-S31 revision v0.0 at 320 MHz, ESP-IDF master (v6.2-dev), median of 9 runs.
+
+The ESP32 rows come from ESP32-D0WD-V3 revision v3.0 at 240 MHz, ESP-IDF v6.0, with no PSRAM.
+Each value is the median of 9 bench_app runs.
 
 ## Depthwise Convolution
 
@@ -54,8 +63,16 @@ The rows above come from bench_app runs:
 | ESP32-S31 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1032306 | 575970 | 1.79 | Internal |
 | ESP32-S31 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 6951956 | 459558 | 15.13 | Internal |
 | ESP32-S31 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 3464350 | 237854 | 14.57 | Internal |
+| ESP32 | input(18,18), pad(0,0), stride(1,1), filter: 1x3x3x16 | 1305418 | 141854 | 9.20 | Internal |
+| ESP32 | input (16, 16), pad(0,0), stride(1,1) filter: 1x3x3x16 | 998830 | 106683 | 9.36 | Internal |
+| ESP32 | out(10,10), pad(1,1), stride(1,1), filter: 1x3x3x16 | 485210 | 57930 | 8.38 | Internal |
+| ESP32 | input(12,12), pad(1,1), stride(1,1), filter: 8x5x5x4 | 1459094 | 894820 | 1.63 | Internal |
+| ESP32 | input (1, 384), pad(0,1), stride(1,1), filter: 1x3x1x128 | 12439754 | 6680341 | 1.86 | Internal |
+| ESP32 | input (1, 192), pad(0,1), stride(1,2), filter: 1x3x1x256 | 6206598 | 3323718 | 1.87 | Internal |
 
 The ESP32-P4 depthwise rows were measured with the ESP32-P4 at 400 MHz.
+
+On ESP32 only 3x3 depthwise runs on MAC16. The other filters run the generic kernel.
 
 ## Fully Connected
 
