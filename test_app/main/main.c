@@ -107,6 +107,11 @@ void app_main()
     esp_nn_dual_core_enable();
     printf("DUAL_CORE: %s\n", esp_nn_dual_core_active() ? "active" : "inactive");
 #endif
+#ifdef ESP_NN_HWLOOP_MAX_COUNT
+    /* Built with ESP_NN_TEST_REV_LT_V3_PATHS: the emulator job checks this. */
+    printf("REV_LT_V3_PATHS: hwloop_max=%d vldbc_ip_broken=%d\n",
+           (int) ESP_NN_HWLOOP_MAX_COUNT, (int) ESP_NN_VLDBC_IP_BROKEN);
+#endif
     /* s8 tests */
     ESP_LOGI(TAG, "Running s8 tests...");
     RUN_TEST(esp_nn_add_elementwise_s8_test, "add_s8");

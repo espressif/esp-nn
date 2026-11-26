@@ -99,6 +99,12 @@ RESULT_RE = re.compile(r'^TEST_RESULT: (?P<result>\w+)')
 # verify cases only when the app reports the worker as active.
 DUAL_CORE_RE = re.compile(r'^DUAL_CORE: active')
 
+# An image staged under a name with this tag runs the ESP32-P4 rev < v3 code
+# paths on a rev v3 build (test_app with ESP_NN_TEST_REV_LT_V3_PATHS). The app
+# must print the line below, or the paths were not built in.
+REV_LT_V3_TAG = 'rev_lt_v3_paths'
+REV_LT_V3_RE = re.compile(r'^REV_LT_V3_PATHS: ')
+
 CSV_FIELDS = ('idf_version', 'target', 'kernel', 'passed', 'failed', 'skipped',
               'source')
 
@@ -117,6 +123,8 @@ class Run:
         self.empty_suites = []      # suites that verified nothing (passed=0)
         self.seen_suites = set()    # suites that reported a TEST: verdict
         self.dual_core_active = False
+        self.needs_rev_lt_v3 = REV_LT_V3_TAG in idf_version
+        self.rev_lt_v3_seen = False
         self.failed = 0
         self.skipped = 0
         self.result = None
@@ -145,7 +153,8 @@ class Run:
     @property
     def ok(self):
         return (self.result == 'PASS' and self.failed == 0 and self.passed > 0
-                and not self.empty_suites and not self.missing_suites)
+                and not self.empty_suites and not self.missing_suites
+                and (self.rev_lt_v3_seen or not self.needs_rev_lt_v3))
 
 
 def find_images(bins_dir):
@@ -198,6 +207,9 @@ def parse_line(run, line):
                 return True
     if DUAL_CORE_RE.match(line):
         run.dual_core_active = True
+        return False
+    if REV_LT_V3_RE.match(line):
+        run.rev_lt_v3_seen = True
         return False
 
     match = TEST_RE.match(line)
@@ -277,6 +289,8 @@ def run_one(emu, run, timeout):
         run.reason = 'suite(s) verified no cases: %s' % ', '.join(run.empty_suites)
     elif run.result == 'PASS' and run.missing_suites:
         run.reason = 'suite(s) never ran: %s' % ', '.join(run.missing_suites)
+    elif run.result == 'PASS' and run.needs_rev_lt_v3 and not run.rev_lt_v3_seen:
+        run.reason = 'image was built without ESP_NN_TEST_REV_LT_V3_PATHS'
 
 
 def write_reports(runs, out_dir):
