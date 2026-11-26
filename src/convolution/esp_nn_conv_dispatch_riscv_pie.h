@@ -256,7 +256,10 @@ static inline int dw_pie_slab_band(const data_dims_t *filter_dims,
  * so it reads the input once per block. It is taken when:
  * - at least 1/8 of the positions have a window that crosses the input
  *   edge, as the edge windows cost far more than the copy, or
- * - there is a single channel block, so the input is read only once. */
+ * - there is a single channel block, and some window crosses the input
+ *   edge or the block is partial. Without edges, a full block reads the
+ *   input once on the non-slab path too, while a partial block (8-15
+ *   channels) would run in scalar C there. */
 static inline int dw_pie_slab_size(const data_dims_t *input_dims,
                                    const data_dims_t *filter_dims,
                                    const data_dims_t *output_dims,
@@ -277,6 +280,9 @@ static inline int dw_pie_slab_size(const data_dims_t *input_dims,
                                    out_ht, y_lo) - y_lo;
     if (input_dims->channels > 16 && ix > 0 && iy > 0 &&
             8 * (int64_t) ix * iy > 7 * (int64_t) out_wd * out_ht) {
+        return 0;
+    }
+    if (ix == out_wd && iy == out_ht && input_dims->channels % 16 == 0) {
         return 0;
     }
     const int band = dw_pie_slab_band(filter_dims, output_dims, conv_params);
