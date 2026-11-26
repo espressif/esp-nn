@@ -211,7 +211,10 @@ void esp_nn_avg_pool_s8_esp32s3(const int8_t *input,
  * @brief       fully connected
  *
  * @note        inputs type: int8_t, output: int8_t
- *              input offsets: although int32_t, they are contained in 8 bits [-128, 127]
+ *              input offsets: although int32_t, they are in [-128, 128]
+ *              (TFLite passes -zero_point, in [-127, 128])
+ *              out_mult >= 0 and out_shift >= -31, as TFLite's
+ *              QuantizeMultiplier always gives
  *
  *              Any row_len and out_channels are accepted, and input_data and
  *              filter_data may be arbitrarily aligned. Alignment and remainders
@@ -236,8 +239,11 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
  * @brief       fully connected - per channel
  *
  * @note        inputs type: int8_t, output: int8_t
- *              input offsets: although int32_t, they are contained in 8 bits [-128, 127]
- *              out_mult, out_shift: int32_t* containing per-channel data
+ *              input offsets: although int32_t, they are in [-128, 128]
+ *              (TFLite passes -zero_point, in [-127, 128])
+ *              out_mult, out_shift: int32_t* containing per-channel data, each
+ *              out_mult >= 0 and out_shift >= -31, as TFLite's
+ *              QuantizeMultiplier always gives
  *
  *              Any row_len and out_channels are accepted, and input_data and
  *              filter_data may be arbitrarily aligned. Alignment and remainders
@@ -338,6 +344,8 @@ void esp_nn_set_mean_scratch_buf_esp32s3(void *buffer);
 #define esp_nn_avg_pool_s8 esp_nn_avg_pool_s8_esp32s3
 #define esp_nn_max_pool_s8 esp_nn_max_pool_s8_esp32s3
 
+/* Batched per-channel FC: as esp_nn_fully_connected_per_ch_s8_esp32s3 for
+ * `batches` input rows, with the same input offset and requant ranges. */
 void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
                                        const int32_t input_offset,
                                        const uint16_t row_len,

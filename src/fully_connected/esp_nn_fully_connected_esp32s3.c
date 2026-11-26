@@ -6,8 +6,11 @@
 
 /*
  * FC multi-path dispatcher for ESP32-S3.
- * - Adds the per-channel offset correction (input_offset * filter row sum + bias) in C
- * - Dispatches to s8 MAC assembly (aligned, large row_len) or s16 assembly (fallback)
+ * - 16-byte aligned input, filter_offset == 0, row_len >= 16: the one-pass
+ *   kernel (esp_nn_fc_fused_s8_esp32s3.c), which folds the input offset into
+ *   its MACs
+ * - Otherwise: the s8 dot path, which adds the per-channel offset correction
+ *   (input_offset * filter row sum + bias) in C, or the s16 assembly
  */
 
 #include <stdint.h>
@@ -18,6 +21,7 @@
 #include "esp_nn_fc_internal.h"
 #include <esp_nn.h>
 #include "../common/esp_nn_filter_sum_esp32s3.h"
+#include "esp_nn_fc_requant_esp32s3.h"
 
 /* Original s16 assembly (renamed) */
 extern void esp_nn_fc_s16_esp32s3(const int8_t *input_data,
@@ -48,6 +52,24 @@ extern void esp_nn_fc_per_ch_s16_esp32s3(const int8_t *input_data,
                                           const int32_t activation_min,
                                           const int32_t activation_max);
 
+/* One-pass kernel (esp_nn_fc_fused_s8_esp32s3.c): filter_offset == 0,
+ * 16-byte aligned input and row_len >= 16 (fc_fused_wins). It is exact for
+ * input_offset in [-256, 254]. quant_step is 0 for per-tensor and 1 for per-channel
+ * mult/shift. */
+extern void esp_nn_fc_fused_s8_esp32s3(const int8_t *input_data,
+                                       const int32_t input_offset,
+                                       const uint16_t row_len,
+                                       const int8_t *filter_data,
+                                       const int32_t *bias,
+                                       int8_t *out_data,
+                                       const uint16_t out_channels,
+                                       const int32_t out_offset,
+                                       const int32_t *out_shift,
+                                       const int32_t *out_mult,
+                                       const int32_t quant_step,
+                                       const int32_t activation_min,
+                                       const int32_t activation_max);
+
 /* Shared s8 dot product from common. `a` must be 16-byte aligned, `b` may be
  * unaligned (handled via USAR+QUP). The product is symmetric, so whichever of
  * input/filter happens to be aligned can be passed as `a`.
@@ -59,11 +81,10 @@ extern void esp_nn_fc_per_ch_s16_esp32s3(const int8_t *input_data,
  *   b (unaligned): 17..31 bytes over for even n, 1..15 for odd n
  * Reads only. Nothing is written outside out_data.
  *
- * Swapping the operands therefore moves the larger over-read from the filter
- * onto the input. It does not introduce one: as `a`, a 16-byte aligned input was
- * already over-read by 16 bytes on even n, once per output channel, and that is
- * the case for every model the aligned fast path has ever served. The swap takes
- * the input from <=16 to <=31 bytes and drops the filter from <=31 to <=16.
+ * fc_dot_rows() passes the aligned filter row as `a` and the input as `b`, so
+ * the filter is read up to 16 bytes over and the input up to 31 bytes over.
+ * The batched kernel passes whichever operand is aligned as `a`. With an
+ * aligned input, each filter row is then read up to 31 bytes over.
  * These are aligned loads from mapped SRAM/PSRAM and do not fault; the only
  * theoretical corner is a tensor ending within 32 bytes of the end of a mapped
  * region. */
@@ -76,21 +97,20 @@ extern int32_t esp_nn_dot_s8_unaligned_esp32s3(const int8_t *a,
  * input. Anything less has to go to the ansi reference. */
 #define FC_S16_INPUT_ALIGN  8
 
-/* When the dot path beats the fused s16 assembly. It has ~2x the assembly's
- * throughput but pays a per-channel filter-sum the assembly folds into its MAC
- * for free, plus a scalar tail once more per pass for a row_len that is not a
- * whole number of vectors. Two regimes, both measured on S3 (row_len 16..1024,
- * out_ch 1..256; out_ch never shifts the boundary):
- *   input_offset != 0: correction pass runs, tail paid twice -> 192 + tail*16
- *   input_offset == 0: no correction pass, tail paid once    ->  64 + tail*8
- * The io==0 constants being exactly half-ish of the io!=0 ones matches the
- * model: one filter pass and one tail instead of two of each.
- *
- * These constants are empirical, so they can drift with cache geometry: the
- * two-pass case doubles the traffic once the filter outgrows dcache. Both paths
+/* When the s8 dot path beats the s16 assembly. The dot path has about
+ * twice the assembly's MAC rate, but pays a per-channel filter-sum pass when
+ * input_offset != 0, which the assembly folds into its MAC. Measured on S3
+ * (row_len 16 to 1024, out_ch 1 to 256, which never moves the boundary):
+ * - input_offset != 0: from row_len 192.
+ * - input_offset == 0: from row_len 64.
+ * Its callers take the dot path only for whole 16-byte rows, so the tail
+ * term is 0 there. It stays because it keeps the compiler from testing the
+ * filter alignment ahead of the one-pass branch, which costs that branch
+ * 2-3 cycles per call.
+ * The boundary is empirical and can drift with cache geometry. Both paths
  * are bit-exact, so a mis-tuned boundary costs a few percent, never
- * correctness. Fusing the sum into the MAC pass would remove the second pass
- * and the boundary with it. */
+ * correctness. The per-row kernels take the one-pass kernel first whenever
+ * fc_fused_wins(), so this gate only picks between the two older paths. */
 static inline bool fc_dot_path_wins(uint16_t row_len, int32_t input_offset)
 {
     const int tail = row_len & 15;
@@ -98,6 +118,84 @@ static inline bool fc_dot_path_wins(uint16_t row_len, int32_t input_offset)
         return row_len >= 64 + tail * 8;
     }
     return row_len >= 192 + tail * 16;
+}
+
+/* When the one-pass kernel beats both older paths. It needs
+ * filter_offset == 0 and a 16-byte aligned input. It takes any input_offset
+ * in [-256, 254], which covers the API range. With input_offset != 0 it
+ * saves the dot path's filter-sum pass. In every case it runs about twice the
+ * s16 assembly's MAC rate, and its row loop needs no call per channel. Rows
+ * shorter than one vector stay on the s16 assembly: the kernel's per-call
+ * tail setup costs more than it saves there. */
+static inline bool fc_fused_wins(const int8_t *input_data, uint16_t row_len,
+                                 int32_t filter_offset)
+{
+    return filter_offset == 0 && ((uintptr_t)input_data & 15) == 0 && row_len >= 16;
+}
+
+/* Per-tensor entry to the one-pass kernel. noinline keeps the address-taken
+ * copies of mult/shift out of the caller's frame. */
+static __attribute__((noinline)) void esp_nn_fc_fused_s8_pt(const int8_t *input_data,
+        const int32_t input_offset, const uint16_t row_len,
+        const int8_t *filter_data, const int32_t *bias, int8_t *out_data,
+        const uint16_t out_channels, const int32_t out_offset,
+        int32_t out_shift, int32_t out_mult,
+        const int32_t activation_min, const int32_t activation_max)
+{
+    esp_nn_fc_fused_s8_esp32s3(input_data, input_offset, row_len, filter_data,
+                               bias, out_data, out_channels, out_offset,
+                               &out_shift, &out_mult, 0,
+                               activation_min, activation_max);
+}
+
+/* The s8 dot path: filter_offset == 0 and 16-byte aligned filter rows
+ * (aligned base, row_len % 16 == 0). The one-pass kernel takes every aligned
+ * input, so only unaligned inputs come here. Both entry points share it to
+ * keep the code small. quant_step is 0 for per-tensor and 1 for per-channel
+ * mult/shift. */
+static __attribute__((noinline)) void fc_dot_rows(const int8_t *input_data,
+        const int32_t input_offset, const uint16_t row_len,
+        const int8_t *filter_data, const int32_t *bias, int8_t *out_data,
+        const uint16_t out_channels, const int32_t out_offset,
+        const int32_t *out_shift, const int32_t *out_mult, const int32_t quant_step,
+        const int32_t activation_min, const int32_t activation_max)
+{
+    const int32_t row_len_div16 = row_len >> 4;
+
+    for (int ch = 0; ch < out_channels; ch++) {
+        const int8_t *f_ptr = filter_data + ch * row_len;
+        /* Per-channel correction, inline (no out_channels-sized VLA) */
+        int32_t corr = 0;
+        if (input_offset != 0) {
+            corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
+        }
+        if (bias) {
+            corr += bias[ch];
+        }
+        /* The aligned operand goes first; the dot product is symmetric. */
+        int32_t acc = esp_nn_dot_s8_unaligned_esp32s3(f_ptr, input_data, row_len_div16);
+
+        acc += corr;
+
+        acc = fc_requant(acc, out_mult[ch * quant_step], out_shift[ch * quant_step]);
+        acc += out_offset;
+        acc = max(acc, activation_min);
+        acc = min(acc, activation_max);
+        out_data[ch] = (int8_t)acc;
+    }
+}
+
+/* Per-tensor entry to fc_dot_rows(). */
+static __attribute__((noinline)) void fc_dot_rows_pt(const int8_t *input_data,
+        const int32_t input_offset, const uint16_t row_len,
+        const int8_t *filter_data, const int32_t *bias, int8_t *out_data,
+        const uint16_t out_channels, const int32_t out_offset,
+        int32_t out_shift, int32_t out_mult,
+        const int32_t activation_min, const int32_t activation_max)
+{
+    fc_dot_rows(input_data, input_offset, row_len, filter_data, bias, out_data,
+                out_channels, out_offset, &out_shift, &out_mult, 0,
+                activation_min, activation_max);
 }
 
 void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
@@ -114,15 +212,20 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                                        const int32_t activation_min,
                                        const int32_t activation_max)
 {
-    /* The s8 fast path needs one of the two operands 16-byte aligned. Filter
-     * rows are aligned only if the base is aligned and every row is a whole
-     * number of vectors. */
-    const bool input_aligned = ((uintptr_t)input_data & 15) == 0;
+    if (fc_fused_wins(input_data, row_len, filter_offset)) {
+        esp_nn_fc_fused_s8_pt(input_data, input_offset, row_len, filter_data,
+                              bias, out_data, out_channels, out_offset,
+                              out_shift, out_mult, activation_min, activation_max);
+        return;
+    }
+    /* The input is not 16-byte aligned here (or the s16 assembly takes the
+     * call), so the dot path needs aligned filter rows: an aligned base and a
+     * row_len that is a whole number of vectors. */
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
     if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, input_offset)
-        || (!input_aligned && !filter_rows_aligned), 0)) {
+        || !filter_rows_aligned, 0)) {
         if ((uintptr_t)input_data & (FC_S16_INPUT_ALIGN - 1)) {
             esp_nn_fully_connected_s8_ansi(input_data, input_offset, row_len,
                                            filter_data, filter_offset, bias,
@@ -138,41 +241,9 @@ void esp_nn_fully_connected_s8_esp32s3(const int8_t *input_data,
                               activation_min, activation_max);
         return;
     }
-    {
-        int32_t row_len_div16 = row_len >> 4;
-
-        int32_t row_len_rem = row_len & 15;
-        int32_t simd_bytes = row_len_div16 << 4;
-
-        for (int ch = 0; ch < out_channels; ch++) {
-            const int8_t *f_ptr = filter_data + ch * row_len;
-            /* Per-channel correction, inline (no out_channels-sized VLA) */
-            int32_t corr = 0;
-            if (input_offset != 0) {
-                corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
-            }
-            if (bias) {
-                corr += bias[ch];
-            }
-            /* Pass the aligned operand first; the dot product is symmetric. */
-            int32_t acc = input_aligned
-                ? esp_nn_dot_s8_unaligned_esp32s3(input_data, f_ptr, row_len_div16)
-                : esp_nn_dot_s8_unaligned_esp32s3(f_ptr, input_data, row_len_div16);
-
-            /* Scalar remainder for non-multiple-of-16 row_len */
-            for (int i = 0; i < row_len_rem; i++) {
-                acc += (int32_t)input_data[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
-            }
-
-            acc += corr;
-
-            acc = esp_nn_multiply_by_quantized_mult(acc, out_mult, out_shift);
-            acc += out_offset;
-            acc = max(acc, activation_min);
-            acc = min(acc, activation_max);
-            out_data[ch] = (int8_t)acc;
-        }
-    }
+    fc_dot_rows_pt(input_data, input_offset, row_len, filter_data, bias, out_data,
+                   out_channels, out_offset, out_shift, out_mult,
+                   activation_min, activation_max);
 }
 
 void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
@@ -189,12 +260,19 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
                                        const int32_t activation_min,
                                        const int32_t activation_max)
 {
-    const bool input_aligned = ((uintptr_t)input_data & 15) == 0;
+    if (fc_fused_wins(input_data, row_len, filter_offset)) {
+        esp_nn_fc_fused_s8_esp32s3(input_data, input_offset, row_len, filter_data,
+                                   bias, out_data, out_channels, out_offset,
+                                   out_shift, out_mult, 1,
+                                   activation_min, activation_max);
+        return;
+    }
+    /* As in the per-tensor entry: the dot path needs aligned filter rows. */
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
     if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, input_offset)
-        || (!input_aligned && !filter_rows_aligned), 0)) {
+        || !filter_rows_aligned, 0)) {
         if ((uintptr_t)input_data & (FC_S16_INPUT_ALIGN - 1)) {
             esp_nn_fully_connected_per_ch_s8_ansi(input_data, input_offset, row_len,
                                                   filter_data, filter_offset, bias,
@@ -209,40 +287,9 @@ void esp_nn_fully_connected_per_ch_s8_esp32s3(const int8_t *input_data,
                                      activation_min, activation_max);
         return;
     }
-    {
-        int32_t row_len_div16 = row_len >> 4;
-
-        int32_t row_len_rem = row_len & 15;
-        int32_t simd_bytes = row_len_div16 << 4;
-
-        for (int ch = 0; ch < out_channels; ch++) {
-            const int8_t *f_ptr = filter_data + ch * row_len;
-            /* Per-channel correction, inline (no out_channels-sized VLA) */
-            int32_t corr = 0;
-            if (input_offset != 0) {
-                corr = esp_nn_filter_sum_s8_esp32s3(f_ptr, row_len) * input_offset;
-            }
-            if (bias) {
-                corr += bias[ch];
-            }
-            /* Pass the aligned operand first; the dot product is symmetric. */
-            int32_t acc = input_aligned
-                ? esp_nn_dot_s8_unaligned_esp32s3(input_data, f_ptr, row_len_div16)
-                : esp_nn_dot_s8_unaligned_esp32s3(f_ptr, input_data, row_len_div16);
-
-            for (int i = 0; i < row_len_rem; i++) {
-                acc += (int32_t)input_data[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
-            }
-
-            acc += corr;
-
-            acc = esp_nn_multiply_by_quantized_mult(acc, out_mult[ch], out_shift[ch]);
-            acc += out_offset;
-            acc = max(acc, activation_min);
-            acc = min(acc, activation_max);
-            out_data[ch] = (int8_t)acc;
-        }
-    }
+    fc_dot_rows(input_data, input_offset, row_len, filter_data, bias, out_data,
+                out_channels, out_offset, out_shift, out_mult, 1,
+                activation_min, activation_max);
 }
 
 /* Batch 1 uses the public per-channel entry, so the header gate can split it.
@@ -285,14 +332,14 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
     const bool filter_rows_aligned = (((uintptr_t)filter_data & 15) == 0)
                                      && ((row_len & 15) == 0);
 
-    /* Same eligibility as the per-row fast path, except that each filter-row
-     * sum is shared by all input rows here, so for batches > 1 its cost is
-     * amortised and the offset-free threshold applies. The dot needs one
-     * operand 16-byte aligned (input rows are the common case). Otherwise
-     * defer to the per-row kernel, which further dispatches to s16 asm / ansi
-     * as needed. */
-    const int32_t gate_offset = (batches > 1) ? 0 : input_offset;
-    if (__builtin_expect(filter_offset != 0 || !fc_dot_path_wins(row_len, gate_offset)
+    /* One row has nothing to share, so it takes the per-row kernel and its
+     * one-pass path. For more rows, each filter-row sum is shared by all of
+     * them, so its cost is amortised and the offset-free threshold applies.
+     * The dot needs one operand 16-byte aligned (input rows are the common
+     * case). Otherwise defer to the per-row kernel, which further dispatches
+     * to s16 asm / ansi as needed. */
+    if (__builtin_expect(batches == 1 || filter_offset != 0
+        || !fc_dot_path_wins(row_len, 0)
         || (!input_aligned && !filter_rows_aligned), 0)) {
         for (int32_t b = 0; b < batches; b++) {
             esp_nn_fully_connected_per_ch_s8_esp32s3(
@@ -303,9 +350,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
         return;
     }
 
+    /* Rows here are whole 16-byte vectors (input_aligned or
+     * filter_rows_aligned above), so there is no scalar tail. */
     const int32_t row_len_div16 = row_len >> 4;
-    const int32_t row_len_rem = row_len & 15;
-    const int32_t simd_bytes = row_len_div16 << 4;
 
     /* out_channel outer, batch inner: f_ptr stays cache-resident across batches.
      * The correction is batch-independent (filter_offset == 0 here), so it is
@@ -328,11 +375,8 @@ void esp_nn_fully_connected_per_ch_s8_batch_esp32s3(const int8_t *input_data,
             int32_t acc = input_aligned
                 ? esp_nn_dot_s8_unaligned_esp32s3(in, f_ptr, row_len_div16)
                 : esp_nn_dot_s8_unaligned_esp32s3(f_ptr, in, row_len_div16);
-            for (int i = 0; i < row_len_rem; i++) {
-                acc += (int32_t)in[simd_bytes + i] * (int32_t)f_ptr[simd_bytes + i];
-            }
             acc += corr;
-            acc = esp_nn_multiply_by_quantized_mult(acc, mult, shift);
+            acc = fc_requant(acc, mult, shift);
             acc += out_offset;
             acc = max(acc, activation_min);
             acc = min(acc, activation_max);
