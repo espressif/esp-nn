@@ -187,7 +187,12 @@ static inline int esp_nn_conv_scratch_size_riscv_pie_impl(const data_dims_t *inp
     return align_buf_size;
 }
 
+/* Position arrays of the ch_mult == 1 kernel, kept in the scratch instead
+ * of the stack (dw_pie_pos_t in esp_nn_depthwise_conv_riscv_pie.c). */
+#define DW_PIE_POS_BYTES 832
+
 /* Scratch of the ch_mult == 1 kernel, in order:
+ * - the position arrays (DW_PIE_POS_BYTES);
  * - the per-channel comb, 16-byte aligned and padded to 16 channels, so a
  *   vector load of a partial block stays inside it;
  * - the accumulators of 32 positions x 16 lanes;
@@ -197,7 +202,7 @@ static inline int esp_nn_conv_scratch_size_riscv_pie_impl(const data_dims_t *inp
 static inline int dw_pie_ch1_scratch_size(int channels)
 {
     const int ch_pad = (channels + 15) & ~15;
-    return 16 + ch_pad * 4 + (32 * 16 + 4) * 4 + 14 * ch_pad;
+    return 16 + DW_PIE_POS_BYTES + ch_pad * 4 + (32 * 16 + 4) * 4 + 14 * ch_pad;
 }
 
 static inline int dw_pie_min(int a, int b)

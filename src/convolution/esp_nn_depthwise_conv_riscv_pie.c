@@ -231,6 +231,20 @@ static void dw_pie_edge_rect(const dw_edge_t *e, int oy0, int rh, int ox0, int r
     }
 }
 
+/* Output positions of the current batch. They take 832 bytes, so they live
+ * in the layer scratch, not on the (possibly worker) stack. */
+typedef struct {
+    int8_t *c_out[32];
+    int c_y[32], c_x[32];
+    int pos_y[16], pos_x[16];
+    int8_t *out_p[16];
+    int16_t ys[16], ye[16], xs[16], xe[16];
+    const int8_t *e_ip[16];
+    int32_t e_fr[16];
+} dw_pie_pos_t;
+_Static_assert(sizeof(dw_pie_pos_t) <= DW_PIE_POS_BYTES && DW_PIE_POS_BYTES % 16 == 0,
+               "DW_PIE_POS_BYTES");
+
 /* PIE ch_mult == 1 path, channels >= 8, 16 channels per QACC pass.
  * - QACC starts at comb[ch] = filter_sum[ch] * input_offset + bias[ch] and
  *   accumulates in * filter over the full window. Taps outside the input
@@ -276,7 +290,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
      * halves), shift in [-20, -1] and (1 + 2 * out_offset) << rs to split
      * into two int16 factors, and an activation range inside int8. */
     const int ch_pad = (channels + 15) & ~15;
-    int32_t *comb_v = (int32_t *) (((uintptr_t) layer_scratch + 15) & ~(uintptr_t) 15);
+    dw_pie_pos_t *pos = (dw_pie_pos_t *) (((uintptr_t) layer_scratch + 15) & ~(uintptr_t) 15);
+    int32_t *comb_v = (int32_t *) ((int8_t *) pos + DW_PIE_POS_BYTES);
     /* Accumulators of up to 32 positions x 16 channels, position-major,
      * then a 16-byte buffer and the table. */
     int32_t *acc = comb_v + ch_pad;
@@ -497,8 +512,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
             int8_t *op0 = out_data + (oy_c * out_wd + ox_c) * channels;
             /* positions of the chunk, for blocks that do not take the
              * fused loop */
-            int8_t *c_out[32];
-            int c_y[32], c_x[32];
+            int8_t **c_out = pos->c_out;
+            int *c_y = pos->c_y, *c_x = pos->c_x;
             bool have_pos = false;
             win.np = np;
             int ch_idx = c_beg;
@@ -607,8 +622,8 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
      * covers a batch of inner positions. */
     while (pass < 2) {
         int np = 0;
-        int pos_y[16], pos_x[16];
-        int8_t *out_p[16];
+        int *pos_y = pos->pos_y, *pos_x = pos->pos_x;
+        int8_t **out_p = pos->out_p;
         /* all positions of the batch have the full window inside the input */
         bool all_inner = true;
         /* input and positions left in the row of the first position */
@@ -652,10 +667,10 @@ static void depthwise_conv_s8_ch1_pie_impl(const data_dims_t *input_dims,
         }
         win.np = np;
         /* window clipped to the input: rows [ys, ye), columns [xs, xe) */
-        int16_t ys[16], ye[16], xs[16], xe[16];
+        int16_t *ys = pos->ys, *ye = pos->ye, *xs = pos->xs, *xe = pos->xe;
         /* edge windows: input at (ys, xs) and filter offset of row ys */
-        const int8_t *e_ip[16];
-        int32_t e_fr[16];
+        const int8_t **e_ip = pos->e_ip;
+        int32_t *e_fr = pos->e_fr;
         for (int p = 0; p < np && !all_inner; p++) {
             ys[p] = max(0, -pos_y[p]);
             xs[p] = max(0, -pos_x[p]);
