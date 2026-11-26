@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <common_functions.h>
+#include <esp_nn_ansi_headers.h>
 
 /**
  * Max pooling for s8 using ESP32-P4 PIE SIMD.
@@ -29,6 +30,17 @@ void esp_nn_max_pool_s8_riscv_pie(const int8_t *input,
                                  const int32_t activation_max,
                                  const uint16_t channels)
 {
+    /* The vector clamp uses int8 limits. Others, which TFLite never passes,
+     * take the reference so the result stays exact. */
+    if (activation_min < INT8_MIN || activation_min > INT8_MAX ||
+            activation_max < INT8_MIN || activation_max > INT8_MAX) {
+        esp_nn_max_pool_s8_ansi(input, input_wd, input_ht, output, output_wd,
+                                output_ht, stride_wd, stride_ht, filter_wd, filter_ht,
+                                pad_wd, pad_ht, activation_min, activation_max,
+                                channels);
+        return;
+    }
+
     /* Enable PIE */
     ESP_NN_PIE_ENABLE();
 

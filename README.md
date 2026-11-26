@@ -28,7 +28,7 @@ Speedup of the optimized s8 kernels over the portable ANSI C ones (cycles, ANSI 
 | Depthwise conv 5x5 | input 12x12, filter 8x5x5x4 | 4.49 | 1.94 | 1.75 |
 | Fully connected | length 271, 3 outputs | 5.32 | 5.01 | 5.11 |
 | Elementwise multiply | 1615 elements | 3.51 | 1.60 | 1.82 |
-| Max pooling 3x3 | input 16x16x16 | 7.83 | 19.94 | 12.65 |
+| Max pooling 3x3 | input 16x16x16 | 40.96 | 19.94 | 12.65 |
 | Average pooling 3x3 | input 16x16x16 | 3.62 | 3.59 | 3.95 |
 
 All kernels and shapes, with cycle counts and the setup per chip, are in

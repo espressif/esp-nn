@@ -99,7 +99,7 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
-| ESP32-S3 | input(16,16), filter(1x3x3x16) | 376294 | 48069 | 7.83 | Internal |
+| ESP32-S3 | input(16,16), filter(1x3x3x16) | 489650 | 11955 | 40.96 | Internal |
 | ESP32-P4 | input(16,16), filter (1x3x3x16) | 482184 | 24178 | 19.94 | Internal |
 | ESP32-S31 | input(16,16), filter(1x3x3x16) | 274866 | 21724 | 12.65 | Internal |
 
