@@ -87,6 +87,8 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 | ESP32-P4 | batch: 4, len: 128, ch: 200 | 975182 | 63822 | 15.28 | 2 | Internal |
 | ESP32-P4 | batch: 48, len: 160, ch: 32 | 2318600 | 91881 | 25.23 | 2 | Internal |
 | ESP32-P4 | batch: 64, len: 128, ch: 256 | 19977571 | 516458 | 38.68 | 2 | Internal |
+| ESP32-P4 | batch: 15, len: 64, ch: 64 | 617231 | 68243 | 9.04 | 1 | Internal |
+| ESP32-S31 | batch: 15, len: 64, ch: 64 | 617265 | 68323 | 9.03 | 1 | Internal |
 
 ## Elementwise Add
 

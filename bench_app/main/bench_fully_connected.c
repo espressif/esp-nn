@@ -190,6 +190,7 @@ typedef struct {
  * layers of small transformers. */
 static const fc_batch_shape_t s_batch_shapes[] = {
     { 16,  64,  64, BENCH_MEM_INT },
+    { 15,  64,  64, BENCH_MEM_INT },  /* one below the P4/S31 1x1 batch floor */
     { 32,  64, 128, BENCH_MEM_INT },
     {  4, 128, 192, BENCH_MEM_INT },
     {  4, 128, 200, BENCH_MEM_INT },
