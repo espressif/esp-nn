@@ -77,8 +77,10 @@ void esp_nn_add_elementwise_s8_test()
 
     /* Cases 10-21 reach the P4/S31 PIE fast path: left_shift 14..20 with
      * TFLite-like multipliers and shifts. Case 18 and cases 22-28 each put
-     * one parameter just outside that path, so the reference code runs. */
-    for (int itr = 0; itr < 29; itr++) {
+     * one parameter just outside that path, so the reference code runs.
+     * Cases 29-35 keep both inputs aligned and offset the output by 1..7:
+     * the S3 vector loop must not store through a misaligned output. */
+    for (int itr = 0; itr < 36; itr++) {
         int in1_skew = 0, in2_skew = 0, out_skew = 0;
         bool in_place = false;
         activation_min = -128;
@@ -155,6 +157,11 @@ void esp_nn_add_elementwise_s8_test()
             break;
         case 28: // output offset past the fast path
             output_offset = 128;
+            break;
+        case 29: case 30: case 31: case 32: case 33: case 34: case 35:
+            // aligned inputs, misaligned output
+            size = 1000 + 3;
+            out_skew = itr - 28;
             break;
         case 19: // narrowed activation range
             activation_min = -30;
