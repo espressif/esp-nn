@@ -55,8 +55,8 @@ static inline int32_t esp_nn_conv_s8_3x3_small_map_bytes(int in_channels, int ou
  * so both stay resident across the position loop. It only pays when the
  * whole filter does not fit the cache: a cached filter is cheap to
  * re-stream, and the staged path's batched dot is faster on short rows.
- * The kernel works on rows of 3 * in_channels bytes in 16-byte blocks, so
- * it needs in_channels % 16 == 0. */
+ * The kernel runs each window row in chunks of 6 blocks, so it needs
+ * in_channels % 32 == 0. */
 static inline int esp_nn_conv_s8_3x3_small_map_fits(int in_channels, int out_channels,
                                                      int out_wd, int out_ht,
                                                      int stride_wd, int stride_ht,
@@ -65,7 +65,7 @@ static inline int esp_nn_conv_s8_3x3_small_map_fits(int in_channels, int out_cha
     const int32_t map_bytes = esp_nn_conv_s8_3x3_small_map_bytes(in_channels, out_wd, out_ht,
                                                                  stride_wd, stride_ht);
     const int32_t filter_bytes = (int32_t)9 * in_channels * out_channels;
-    return (in_channels % 16) == 0
+    return in_channels % 32 == 0
            && map_bytes + 9 * in_channels <= cache_bytes
            && filter_bytes > cache_bytes;
 }
@@ -78,14 +78,46 @@ static inline int esp_nn_conv_s8_3x3_small_map_can_use(int in_channels, int out_
                                              stride_wd, stride_ht, ESP_NN_S3_DCACHE_BYTES);
 }
 
-/* Padded input + one aligned filter row + alignment slack. */
+/* Padded input + alignment slack. */
 static inline int esp_nn_conv_s8_3x3_small_map_scratch_size(int in_channels, int out_wd,
                                                              int out_ht, int stride_wd,
                                                              int stride_ht)
 {
     return esp_nn_conv_s8_3x3_small_map_bytes(in_channels, out_wd, out_ht, stride_wd, stride_ht)
-           + 9 * in_channels + 32;
+           + 16;
 }
+
+/* esp_nn_conv_s8_1x1_accx_esp32s3.c: s8 MACs into ACCX for in_ch % 16 == 0.
+ * Returns 1 when it ran, 0 when it declines, and -1 when it declines only
+ * for a short chunk (the asm table must then be rebuilt). */
+int esp_nn_conv_s8_1x1_accx_esp32s3(const int8_t *input, int spatial,
+                                    uint16_t in_ch, int32_t in_offset,
+                                    const int8_t *filter, const int32_t *bias,
+                                    int8_t *out_data, uint16_t out_ch,
+                                    int32_t out_offset,
+                                    const int32_t *out_shift,
+                                    const int32_t *out_mult,
+                                    int32_t act_min, int32_t act_max);
+
+void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
+                                       int32_t padded_row, int in_ch,
+                                       int32_t step_x, int32_t step_y,
+                                       int out_wd, int out_ht,
+                                       const int8_t *filter,
+                                       const int32_t *bias, int32_t in_offset,
+                                       int8_t *out_data, int out_ch,
+                                       int32_t out_offset,
+                                       const int32_t *out_shift,
+                                       const int32_t *out_mult,
+                                       int32_t act_min, int32_t act_max);
+
+/* esp_nn_conv_s8_1x1_1pos_esp32s3.c: one position as a matrix-vector
+ * product. `work` is 16-byte aligned and holds in_channels bytes. */
+void esp_nn_conv_s8_1x1_1pos_esp32s3(const int8_t *input,
+        uint16_t in_channels, int32_t input_offset, const int8_t *filter_data,
+        const int32_t *bias, int8_t *out_data, uint16_t out_channels,
+        int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
+        int32_t activation_min, int32_t activation_max, int8_t *work);
 
 /* esp_nn_conv_s8_3x3_small_map_esp32s3.c */
 void esp_nn_conv_s8_3x3_small_map(const int8_t *input, uint16_t input_wd,
@@ -97,12 +129,14 @@ void esp_nn_conv_s8_3x3_small_map(const int8_t *input, uint16_t input_wd,
         const int32_t *out_mult, int32_t activation_min,
         int32_t activation_max, void *scratch);
 
-/* Output positions staged per pass. One pass streams the filter once, so the
- * chunk only has to be long enough to amortise that; measured on ESP32-S3,
- * 8/16/32/48 land within a few percent of each other on yolo11n's shapes and
- * 16 is the best compromise across them. Filters over 64 KB use
- * ESP_NN_3X3_BATCH_POSITIONS_LARGE (below). */
-#define ESP_NN_3X3_BATCH_POSITIONS          16
+/* Output positions staged per pass. One pass streams the filter once, and
+ * longer chunks spread the per-call setup of the 1x1 asm. Measured on
+ * ESP32-S3, 32 beats 16 by 1-4% on yolo11n's shapes and 48 adds nothing.
+ * Filters over 64 KB use ESP_NN_3X3_BATCH_POSITIONS_LARGE (below). */
+#define ESP_NN_3X3_BATCH_POSITIONS          32
+
+/* Maps with fewer positions than this take the per-pixel path. */
+#define ESP_NN_3X3_BATCH_MIN_POSITIONS      16
 
 /* A filter over 64 KB cannot sit in internal RAM next to the arena, so every
  * chunk streams it from PSRAM again. Longer chunks stream it fewer times.
@@ -115,10 +149,22 @@ static inline int esp_nn_3x3_large_filter(int in_channels, int out_channels)
     return (uint32_t)in_channels * out_channels > (64 * 1024) / 9;
 }
 
+/* Short windows stage twice the positions per pass, which halves the per-OC
+ * setup per output. The staging stays small enough that the scratch keeps
+ * under the 64 KB that would push it to PSRAM. */
+#define ESP_NN_3X3_BATCH_POSITIONS_SHORT    64
+#define ESP_NN_3X3_SHORT_STAGING_BYTES      (24 * 1024)
+
 static inline int esp_nn_3x3_batch_positions(int in_channels, int out_channels)
 {
-    return esp_nn_3x3_large_filter(in_channels, out_channels)
-            ? ESP_NN_3X3_BATCH_POSITIONS_LARGE : ESP_NN_3X3_BATCH_POSITIONS;
+    if (esp_nn_3x3_large_filter(in_channels, out_channels)) {
+        return ESP_NN_3X3_BATCH_POSITIONS_LARGE;
+    }
+    if (9 * in_channels * ESP_NN_3X3_BATCH_POSITIONS_SHORT <=
+            ESP_NN_3X3_SHORT_STAGING_BYTES) {
+        return ESP_NN_3X3_BATCH_POSITIONS_SHORT;
+    }
+    return ESP_NN_3X3_BATCH_POSITIONS;
 }
 
 /* Panel work area for one chunk of staged windows. A large filter gets the
@@ -128,7 +174,8 @@ static inline int esp_nn_3x3_panel_work_bytes(int window_len_aligned,
                                               int in_channels, int out_channels)
 {
     if (!esp_nn_3x3_large_filter(in_channels, out_channels)) {
-        return esp_nn_conv_1x1_panel_scratch_size(window_len_aligned);
+        return esp_nn_conv_1x1_panel_scratch_size(window_len_aligned,
+                                                  out_channels);
     }
     const int tile = esp_nn_conv_1x1_panel_tile(window_len_aligned, out_channels);
     /* Plus the output staging for 32 positions of a panel, and slack. */
@@ -143,7 +190,7 @@ static inline int esp_nn_3x3_panel_work_bytes(int window_len_aligned,
  * layer - including ones whose filter fits the cache many times over. */
 static inline int esp_nn_conv_s8_3x3_use_batch(int out_wd, int out_ht)
 {
-    return ((int32_t)out_wd * out_ht) >= ESP_NN_3X3_BATCH_POSITIONS;
+    return ((int32_t)out_wd * out_ht) >= ESP_NN_3X3_BATCH_MIN_POSITIONS;
 }
 
 /*
@@ -318,7 +365,7 @@ static inline int esp_nn_conv_scratch_size_esp32s3_impl(const data_dims_t *input
         int batched_tail_size = esp_nn_conv_1x1_batched_work_bytes(in_ch, out_ch) +
                                 align_buf_size;
         /* OC-panel driver (filter > 24 KB): asm work + staging areas */
-        int panel_size = 24 * in_ch + 16 * 1024 + align_buf_size;
+        int panel_size = esp_nn_conv_1x1_panel_scratch_size(in_ch, out_ch);
         if ((int32_t)in_ch * out_ch <= 24 * 1024) {
             panel_size = 0;
         }

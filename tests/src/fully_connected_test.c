@@ -1346,7 +1346,8 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         const int batch = 16;
         const int row = 128;
         const int out_ch = 256;
-        const size_t pref_size = 24 * row + 16 * 1024 + 64;
+        /* The panel work area: 24 * in_ch + 16 * out_ch + 16 KB + 64. */
+        const size_t pref_size = 24 * row + 16 * out_ch + 16 * 1024 + 64;
         int8_t *in_o = ESP_NN_TEST_ALLOC((size_t) batch * row + 32);
         int8_t *flt_o = ESP_NN_TEST_ALLOC((size_t) row * out_ch + 32);
         int8_t *out_o = ESP_NN_TEST_ALLOC((size_t) batch * out_ch + 32);

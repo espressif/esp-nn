@@ -30,7 +30,8 @@
  * Also used by the 3x3 path, whose staged im2col windows are exactly a 1x1
  * problem with in_channels = 9 * in_channels.
  *
- * `scratch` needs esp_nn_conv_1x1_panel_scratch_size(in_channels) bytes.
+ * `scratch` needs esp_nn_conv_1x1_panel_scratch_size(in_channels,
+ * out_channels) bytes.
  */
 void esp_nn_conv_s8_mult8_1x1_oc_panel(
         const int8_t *input, int spatial_size, uint16_t in_channels,
@@ -40,12 +41,13 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel(
         int32_t activation_min, int32_t activation_max, void *scratch);
 
 /* Work area of esp_nn_conv_s8_mult8_1x1_batched_tail(): the asm's
- * 16 * in_channels transpose buffer, then 8 padded tail positions of input
+ * 16 * in_channels transpose buffer and its per-OC requant table
+ * (16 * out_channels), then 8 padded tail positions of input
  * (8 * in_channels) and of output (8 * out_channels). Callers add their own
  * alignment slack. */
 static inline int esp_nn_conv_1x1_batched_work_bytes(int in_channels, int out_channels)
 {
-    return 24 * in_channels + 8 * out_channels;
+    return 24 * in_channels + 24 * out_channels;
 }
 
 /* Output channels per panel for a filter behind the cache: a panel of rows
@@ -67,7 +69,9 @@ static inline int esp_nn_conv_1x1_panel_tile(int in_channels, int out_channels)
 }
 
 /* Like esp_nn_conv_s8_mult8_1x1_oc_panel, with a work area of `work_bytes`.
- * It needs at least 24 * in_channels + 40 * tile + 48 bytes, with tile from
+ * table_ready = 1: an earlier call ran the same channels on the same work
+ * area, so the asm's per-channel table is reused when one panel runs.
+ * It needs at least 24 * in_channels + 56 * tile + 48 bytes, with tile from
  * esp_nn_conv_1x1_panel_tile(): the output staging then holds 32 positions.
  * With less, it writes no output. */
 void esp_nn_conv_s8_mult8_1x1_oc_panel_ex(
@@ -76,11 +80,14 @@ void esp_nn_conv_s8_mult8_1x1_oc_panel_ex(
         int8_t *out_data, uint16_t out_channels, uint16_t out_stride,
         int32_t out_offset, const int32_t *out_shift, const int32_t *out_mult,
         int32_t activation_min, int32_t activation_max, void *scratch,
-        int work_bytes);
+        int work_bytes, int table_ready);
 
-/* Panel work area: transpose + tails (24 * in_channels), the staging buffer
- * the driver scatters from (16 KB), and alignment slack. */
-static inline int esp_nn_conv_1x1_panel_scratch_size(int in_channels)
+/* Panel work area: transpose + tails (24 * in_channels), the asm's per-OC
+ * requant table (16 bytes per channel of a panel), the staging buffer the
+ * driver scatters from (16 KB), and alignment slack. */
+static inline int esp_nn_conv_1x1_panel_scratch_size(int in_channels,
+                                                     int out_channels)
 {
-    return 24 * in_channels + 16 * 1024 + 64;
+    return 24 * in_channels + 16 * (out_channels < 1024 ? out_channels : 1024) +
+           16 * 1024 + 64;
 }

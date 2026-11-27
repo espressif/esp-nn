@@ -929,7 +929,7 @@ void esp_nn_conv_s8_test()
     uint16_t pad_wd, pad_ht, stride_wd, stride_ht;
 
     printf("\n######## Running %s ##########\n", __FUNCTION__);
-    for (int itr = 0; itr < 72; itr++) {
+    for (int itr = 0; itr < 74; itr++) {
         int8_t *scratch_front = NULL; /* case 59: guard band before scratch */
         /* Reset quant params to defaults each iteration */
         input_offset = 5;
@@ -1646,6 +1646,19 @@ void esp_nn_conv_s8_test()
             filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
             stride_wd = 1; stride_ht = 1;
             break;
+        /* 72-73: requant params mixed across channels (see below), so the
+         * ESP32-S3 ACCX and fast requant paths run beside their fallbacks. */
+        case 72: // 1x1, 48 KB filter: OC panels and position chunks, where
+                 // only the last channels are outside the fast requant
+            in_wd = 10; in_ht = 10; in_channels = 128; out_channels = 384;
+            filter_ht = 1; filter_wd = 1; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 73: // small-map 3x3, fast and exact requant per channel
+            in_wd = 6; in_ht = 6; in_channels = 256; out_channels = 64;
+            filter_ht = 3; filter_wd = 3; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
         default: // ch % 8 == 0
             in_wd = 8;
             in_ht = 8;
@@ -1742,6 +1755,26 @@ void esp_nn_conv_s8_test()
         if (itr == 17) {
             for (int i = 0; i < out_channels; ++i) {
                 out_shift[i] = -6;
+            }
+        }
+
+        /* Cases 72-73: some channels fall outside the fast requant (left
+         * shift > 0, or right shift > 21), so one layer mixes fast and exact
+         * channels. Case 72 keeps them in its last 128 channels: earlier OC
+         * panels can still take ACCX, and the last one falls back. Their
+         * mult and bias keep the outputs in range instead of saturating or
+         * collapsing to out_offset. */
+        if (itr == 72 || itr == 73) {
+            const int first_mixed = itr == 72 ? 256 : 0;
+            const int taps = filter_wd * filter_ht * in_channels;
+            for (int i = first_mixed; i < out_channels; ++i) {
+                if (i % 4 == 1) {
+                    out_shift[i] = 1;
+                    out_mult[i] = (taps > 1024 ? 1 << 19 : 1 << 20) + rand() % 1024;
+                } else if (i % 4 == 3) {
+                    out_shift[i] = -22 - (i / 4) % 2;
+                    bias[i] = rand() % (1 << 30) - (1 << 29);
+                }
             }
         }
 
