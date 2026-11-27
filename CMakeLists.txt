@@ -66,6 +66,15 @@ if(CONFIG_IDF_TARGET_ESP32S3)
         "src/softmax/esp_nn_softmax_s8_esp32s3.c")
 endif()
 
+if(CONFIG_IDF_TARGET_ESP32 AND CONFIG_NN_ESP32_MAC16)
+    set(esp32_srcs
+        "src/convolution/esp_nn_conv_esp32.c"
+        "src/convolution/esp_nn_conv_mac16_esp32.S"
+        "src/convolution/esp_nn_depthwise_conv_esp32.c"
+        "src/convolution/esp_nn_depthwise_conv_mac16_esp32.S"
+        "src/convolution/esp_nn_scratch_sizes_esp32.c")
+endif()
+
 # ESP32-S31 shares the P4 PIE/SIMD ISA, so it reuses the ESP32-P4 kernels
 if(CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
     set(riscv_pie_srcs
@@ -89,6 +98,7 @@ endif()
 idf_component_register(SRCS "${c_srcs}"
                             "${s3_srcs}"
                             "${riscv_pie_srcs}"
+                            "${esp32_srcs}"
                        INCLUDE_DIRS "include" "src/common")
 
 if(CONFIG_IDF_TARGET_ESP32S3)

@@ -10,7 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(ESP_PLATFORM)
 #include "sdkconfig.h"
+#endif
 
 #if defined(CONFIG_NN_OPTIMIZED) && (defined(CONFIG_IDF_TARGET_ESP32S3) || \
         defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31))

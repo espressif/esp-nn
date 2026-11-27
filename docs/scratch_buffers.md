@@ -31,6 +31,7 @@ Tools that compute scratch sizes ahead of time, such as code generators, can bui
 | --- | --- |
 | ESP32-S3 | `src/convolution/esp_nn_scratch_sizes_esp32s3.c` |
 | ESP32-P4, ESP32-S31 | `src/convolution/esp_nn_scratch_sizes_riscv_pie.c` |
+| ESP32 | `src/convolution/esp_nn_scratch_sizes_esp32.c`, or `src/*/*_opt.c` with `CONFIG_NN_ESP32_MAC16` off |
 | Other chips | `src/*/*_opt.c` |
 
 Build them with the macros that `sdkconfig.h` sets on the device, `CONFIG_IDF_TARGET_<TARGET>=1` and `CONFIG_NN_OPTIMIZED=1`, plus the `src/*/*_ansi.c` files. `esp_nn.h` then maps `esp_nn_get_conv_scratch_size()` and the other getters to the target's functions, as on the device.
@@ -62,4 +63,4 @@ gcc -std=c11 -DCONFIG_IDF_TARGET_ESP32P4=1 -DCONFIG_NN_OPTIMIZED=1 \
 ./sizes
 ```
 
-For ESP32-S3, use `CONFIG_IDF_TARGET_ESP32S3=1` and `esp_nn_scratch_sizes_esp32s3.c`. For other chips, use their `CONFIG_IDF_TARGET_*` macro and `src/*/*_opt.c`.
+For ESP32-S3, use `CONFIG_IDF_TARGET_ESP32S3=1` and `esp_nn_scratch_sizes_esp32s3.c`. For ESP32, use `CONFIG_IDF_TARGET_ESP32=1`, `CONFIG_NN_ESP32_MAC16=1` and `esp_nn_scratch_sizes_esp32.c`. Without `CONFIG_NN_ESP32_MAC16`, as when it is off in `sdkconfig`, ESP32 builds the generic getters from `src/*/*_opt.c`. For other chips, use their `CONFIG_IDF_TARGET_*` macro and `src/*/*_opt.c`.

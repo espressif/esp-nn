@@ -1,0 +1,2 @@
+# 240 MHz, as the ESP32-S3 rows of docs/performance.md
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

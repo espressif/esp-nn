@@ -1465,8 +1465,17 @@ void esp_nn_fully_connected_per_ch_s8_batch_1x1_test(void)
         const int zero_batch = esp_nn_get_fc_batch_scratch_size(0, row, out_ch);
         const int neg_batch = esp_nn_get_fc_batch_scratch_size(-1, row, out_ch);
         const int zero_row = esp_nn_get_fc_batch_scratch_size(batches, 0, out_ch);
-        if (ESP_NN_HAS_FC_S8_BATCH_SCRATCH != 1 || got != ref || got != ref_off ||
-                odd != odd_ref || hi != 0 || zero_batch != 0 ||
+#ifdef ESP_NN_FC_BATCH_VIA_CONV
+        const int want = ref, want_off = ref_off, want_odd = odd_ref;
+#else
+        /* No 1x1 path, for example ESP32: the getter returns 0 even where
+         * the conv getter does not. */
+        const int want = 0, want_off = 0, want_odd = 0;
+        (void) ref_off;
+        (void) odd_ref;
+#endif
+        if (ESP_NN_HAS_FC_S8_BATCH_SCRATCH != 1 || got != want || want != want_off ||
+                odd != want_odd || hi != 0 || zero_batch != 0 ||
                 neg_batch != 0 || zero_row != 0) {
             TEST_FAIL("[fc_scratch_size] got=%d ref=%d odd=%d hi=%d\n",
                       got, ref, odd, hi);

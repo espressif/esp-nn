@@ -17,6 +17,7 @@
 
 #include <common_functions.h>
 #include <esp_nn.h>
+#include "esp_nn_fc_internal.h"
 
 void esp_nn_fully_connected_s8_ansi(const int8_t *input_data,
                                     const int32_t input_offset,
@@ -120,6 +121,10 @@ int esp_nn_get_fc_batch_scratch_size(int32_t batches, uint16_t row_len,
     if (batches <= 0 || batches > UINT16_MAX || row_len == 0 || out_ch == 0) {
         return 0;
     }
+#ifndef ESP_NN_FC_BATCH_VIA_CONV
+    /* No 1x1 path on this target: the plain batch call takes no scratch. */
+    return 0;
+#endif
     const data_dims_t input_dims = {
         .width = 1, .height = batches, .channels = row_len,
     };
