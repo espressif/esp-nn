@@ -807,3 +807,86 @@ esp_nn_max_pool_s8_esp32s3_sliding_row_asm:
 .Lpool_sliding_3x3:
     pool_sliding_row 1,q3
     .size   esp_nn_max_pool_s8_esp32s3_sliding_row_asm, . - esp_nn_max_pool_s8_esp32s3_sliding_row_asm
+
+    // Full INT8 range: q6/q7 are free for independent loads. The caller
+    // clips the vertical bounds, so specialize for 2..5 valid input rows.
+    .macro pool_sliding_vertical_full count
+    mov.n   a9,a2
+    ee.vld.128.xp q1,a9,a6
+    ee.vld.128.xp q0,a9,a6
+    .if \count >= 3
+    ee.vld.128.xp q6,a9,a6
+    .endif
+    ee.vmax.s8 q1,q1,q0
+    .if \count >= 4
+    ee.vld.128.xp q7,a9,a6
+    .endif
+    .if \count == 5
+    ee.vld.128.xp q0,a9,a6
+    .endif
+    add.n   a2,a2,a5
+    .if \count >= 3
+    ee.vmax.s8 q1,q1,q6
+    .endif
+    .if \count == 5
+    ee.vmax.s8 q7,q7,q0
+    .endif
+    .if \count >= 4
+    ee.vmax.s8 q1,q1,q7
+    .endif
+    .endm
+
+    // Same running maxima as pool_sliding_row, without output clamps.
+    .macro pool_sliding_row_full pad, history, count
+    movi.n  a8,-\pad
+1:
+    pool_sliding_vertical_full \count
+    bltz    a8,2f
+    ee.vmax.s8 q0,\history,q1
+    ee.vst.128.xp q0,a3,a5
+2:
+    .if \pad == 2
+    ee.vmax.s8 q5,q4,q1
+    ee.vmax.s8 q4,q3,q1
+    .endif
+    ee.vmax.s8 q3,q2,q1
+    mv.qr   q2,q1
+    addi.n  a8,a8,1
+    addi.n  a4,a4,-1
+    bnez    a4,1b
+    ee.vst.128.xp \history,a3,a5
+    .if \pad == 2
+    ee.vst.128.xp q4,a3,a5
+    .endif
+    retw.n
+    .endm
+
+    .align 4
+    .global esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm
+    .hidden esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm
+    .type   esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm, @function
+esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm:
+    // Same call ABI as the clamped leaf. The activation arguments are unused.
+    // Keep the sentinel below the register-window spill area (frame - 48).
+    entry   a1,64
+    movi    a8,-128
+    s32i.n  a8,a1,0
+    ee.vldbc.8 q2,a1
+    mv.qr   q3,q2
+    l32i.n  a8,a1,64
+    beqi    a8,1,.Lpool_sliding_full_3x3
+    mv.qr   q4,q2
+    mv.qr   q5,q2
+    beqi    a7,5,.Lpool_sliding_full_5rows
+    beqi    a7,4,.Lpool_sliding_full_4rows
+    pool_sliding_row_full 2,q5,3
+.Lpool_sliding_full_4rows:
+    pool_sliding_row_full 2,q5,4
+.Lpool_sliding_full_5rows:
+    pool_sliding_row_full 2,q5,5
+.Lpool_sliding_full_3x3:
+    beqi    a7,3,.Lpool_sliding_full_3rows
+    pool_sliding_row_full 1,q3,2
+.Lpool_sliding_full_3rows:
+    pool_sliding_row_full 1,q3,3
+    .size   esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm, . - esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm

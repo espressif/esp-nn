@@ -67,10 +67,25 @@ _Static_assert(offsetof(s3mp_args_t, rows_left) == S3MP_ROWS_LEFT, "s3mp_args_t 
 typedef void s3mp_fn(s3mp_args_t *a, const int8_t *in, int8_t *out,
                      int n, int fw, int fh);
 extern s3mp_fn esp_nn_max_pool_s8_esp32s3_run, esp_nn_max_pool_s8_esp32s3_rows;
-extern void esp_nn_max_pool_s8_esp32s3_sliding_row_asm(
-    const int8_t *input, int8_t *output, uint32_t width, uint32_t channels,
-    uint32_t row_bytes, uint32_t rows, uint32_t pad,
-    int32_t activation_min, int32_t activation_max);
+typedef void s3mp_sliding_fn(const int8_t *input, int8_t *output, uint32_t width,
+                             uint32_t channels, uint32_t row_bytes, uint32_t rows,
+                             uint32_t pad, int32_t activation_min, int32_t activation_max);
+extern s3mp_sliding_fn esp_nn_max_pool_s8_esp32s3_sliding_row_asm,
+                      esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm;
+
+/* The full-range sliding kernel still loses on some large maps. These
+ * conservative thresholds were measured on ESP32-S3 with a 64 KiB DCache
+ * and octal PSRAM. For those maps, keep the existing pixel-major path. */
+static inline bool sliding_prefer_master(unsigned filter, unsigned channels,
+                                         uint64_t bytes, const int8_t *input)
+{
+    const bool ext = esp_ptr_external_ram(input);
+    if (filter == 3) {
+        return (channels >= 64 && bytes >= 16384) ||
+               (ext && channels >= 32 && bytes >= 32768);
+    }
+    return ext && channels >= 64 && bytes >= 49152;
+}
 
 /* An output pixel whose window misses the input entirely gets the clamped
  * INT8_MIN, as in the reference. That happens when the padding is as wide as
@@ -133,8 +148,15 @@ void esp_nn_max_pool_s8_esp32s3(const int8_t *input,
         const uintptr_t in_addr = (uintptr_t) input;
         const uintptr_t out_addr = (uintptr_t) output;
         const uintptr_t distance = in_addr < out_addr ? out_addr - in_addr : in_addr - out_addr;
-        /* Reuse requires disjoint input and output tensors of the same size. */
-        if (distance >= (uint64_t) row_bytes * input_ht) {
+        const uint64_t tensor_bytes = (uint64_t) row_bytes * input_ht;
+        const bool full_range = activation_min == INT8_MIN && activation_max == INT8_MAX;
+        /* Reuse requires disjoint tensors. The full-range path also has a
+         * measured size/placement gate; a rejected case falls through to
+         * the existing optimized implementation below. */
+        if (distance >= tensor_bytes &&
+                (!full_range || !sliding_prefer_master(filter_wd, channels, tensor_bytes, input))) {
+            s3mp_sliding_fn *const row = full_range ? esp_nn_max_pool_s8_esp32s3_sliding_row_full_asm
+                                                   : esp_nn_max_pool_s8_esp32s3_sliding_row_asm;
             for (int y = 0; y < output_ht; y++) {
                 const int top = y < pad_ht ? 0 : y - pad_ht;
                 const int end = y + pad_ht + 1;
@@ -142,7 +164,7 @@ void esp_nn_max_pool_s8_esp32s3(const int8_t *input,
                 const int8_t *in_row = input + top * row_bytes;
                 int8_t *out_row = output + y * row_bytes;
                 for (int ch = 0; ch < channels; ch += 16) {
-                    esp_nn_max_pool_s8_esp32s3_sliding_row_asm(
+                    row(
                         in_row + ch, out_row + ch, input_wd, channels, row_bytes,
                         bottom - top, pad_wd, activation_min, activation_max);
                 }
