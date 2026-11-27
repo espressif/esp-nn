@@ -107,6 +107,10 @@ esp_nn_add_elementwise_s8_esp32s3:  # 0x4
 
     l32i        a9,a1,92                   # [17]  id:1279 output+0x0
 
+    // ee.vst.l.64.ip ignores the low 3 address bits: skip if output is unaligned
+    extui       a13,a9,0,3
+    bnez        a13,.process_leftover
+
     l32i        a13,a1,116                  # [20]
     srai        a13,a13,3                   # [21]
     s32i.n      a13,a1,56                   # [22]  gra_spill_temp_13
