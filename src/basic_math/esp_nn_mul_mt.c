@@ -55,6 +55,16 @@ void esp_nn_mul_elementwise_s8_mt(const int8_t *input1_data,
                                   const int32_t activation_max,
                                   const int32_t size)
 {
+#if CONFIG_IDF_TARGET_ESP32S3
+    /* The S3 kernel clamps in 16-bit lanes, so activation limits outside
+     * int8 (such as INT32_MIN for "no clamp") take the reference code. */
+    if (activation_min < -128 || activation_max > 127) {
+        esp_nn_mul_elementwise_s8_ansi(input1_data, input2_data, input1_offset,
+                                       input2_offset, output, out_offset, out_mult,
+                                       out_shift, activation_min, activation_max, size);
+        return;
+    }
+#endif
     if (size >= 8192 && esp_nn_dual_core_begin()) {
         const int32_t half = (size / 2) & ~15;
         mul_s8_mt_job_t job = {

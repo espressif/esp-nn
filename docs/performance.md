@@ -91,9 +91,19 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
-| ESP32-S3 | size = 1615 | 122703 | 35002 | 3.51 | External |
-| ESP32-P4 | size = 1615 | 76585 | 47601 | 1.60 | External |
-| ESP32-S31 | size = 1615 | 83337 | 45765 | 1.82 | Internal |
+| ESP32-S3 | size = 1615 | 117961 | 6783 | 17.39 | External |
+| ESP32-P4 | size = 1615 | 72756 | 9413 | 7.73 | External |
+| ESP32-S31 | size = 1615 | 72748 | 9260 | 7.86 | Internal |
+
+## Channel Broadcast Multiply
+
+| Chip | Data info | ANSI C | Optimized | Ratio | Memory |
+| ---- | --------- | -----: | --------: | ----: | ------ |
+| ESP32-S3 | 49 positions x 576 channels | 2097974 | 148998 | 14.08 | External |
+| ESP32-P4 | 49 positions x 576 channels | 1245229 | 160931 | 7.74 | External |
+| ESP32-S31 | 49 positions x 576 channels | 1242538 | 155958 | 7.97 | Internal |
+
+The multiply rows were measured with the ESP32-P4 at 400 MHz.
 
 ## Max Pooling
 
