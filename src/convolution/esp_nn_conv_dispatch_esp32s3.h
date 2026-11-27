@@ -106,7 +106,7 @@ void esp_nn_conv_s8_3x3_small_map_accx(const int8_t *padded,
                                        const int8_t *filter,
                                        const int32_t *bias, int32_t in_offset,
                                        int8_t *out_data, int out_ch,
-                                       int32_t out_offset,
+                                       int out_stride, int32_t out_offset,
                                        const int32_t *out_shift,
                                        const int32_t *out_mult,
                                        int32_t act_min, int32_t act_max);
