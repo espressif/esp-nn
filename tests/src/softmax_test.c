@@ -14,6 +14,11 @@
 #include <esp_nn.h>
 #include "test_utils.h"
 
+/* When set, every input is at most 0 except the last one of the last full
+ * 16-group of each row, which is 127. The vector find-max must reach that
+ * group, as the scalar tail after it does not see the peak. */
+static bool sm_peak_last;
+
 static void run_softmax_test(int32_t height, int32_t width, int32_t mult,
                              int32_t shift, int32_t diff_min, int iter)
 {
@@ -35,6 +40,9 @@ static void run_softmax_test(int32_t height, int32_t width, int32_t mult,
 
     for (int i = 0; i < size; ++i) {
         input[i] = rand() % 255 - 128;
+        if (sm_peak_last) {
+            input[i] = i % width == (width & ~15) - 1 ? 127 : -(rand() % 129);
+        }
     }
 
     profile_c_start();
@@ -123,4 +131,11 @@ void esp_nn_softmax_s8_test()
      * find-max, which must not issue unaligned ee.vld.128 loads. */
     run_softmax_test(8, 36, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
     run_softmax_test(4, 1000, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    /* 4098 groups of 16 with the row max in the last group: the find-max
+     * hardware loop runs past 4095 iterations, the ESP32-P4 rev < v3 limit. */
+    sm_peak_last = true;
+    run_softmax_test(1, 4098 * 16 + 5, SM_MULT, SM_SHIFT, SM_DIFF_MIN, iter++);
+    sm_peak_last = false;
+#endif
 }

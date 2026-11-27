@@ -17,6 +17,33 @@ void esp_nn_set_softmax_scratch_buf_riscv_pie(void *buffer)
     p4_scratch_buf = (int32_t *) buffer;
 }
 
+/* Max of the groups * 16 int8 values at ptr, groups >= 1. */
+static inline __attribute__((always_inline))
+int32_t softmax_row_max_pie(const int8_t *ptr, int32_t groups)
+{
+    int32_t max_scalar;
+    asm volatile (
+        "mv     x30, %[ptr]              \n\t"
+        "esp.vld.128.ip q0, x30, 16      \n\t"  /* load first 16, advance */
+        "addi   %[cnt], %[cnt], -1       \n\t"  /* one group already loaded */
+        "beqz   %[cnt], 2f               \n\t"
+        /* for (k = 0; k < cnt; k++, p += 16) q0 = max(q0, p[0..15]); */
+        ESP_NN_HWLOOP_BEGIN
+        "esp.lp.setup 0, %[cnt], 1f      \n\t"
+        "esp.vld.128.ip q1, x30, 16      \n\t"  /* load next 16, advance */
+        ESP_NN_HWLOOP_LAST("esp.vmax.s8    q0, q0, q1", 3)  /* running max */
+        ESP_NN_HWLOOP_END
+        "2:                              \n\t"
+        /* esp.* GPR operands must be one of x8-x15 or x24-x31 (P4 and S31) */
+        "esp.max.s8.a   q0, x29          \n\t"  /* horizontal reduce */
+        "mv     %[max], x29              \n\t"
+        : [cnt] "+r"(groups), [max] "=r"(max_scalar)
+        : [ptr] "r"(ptr)
+        : "x29", "x30"
+    );
+    return max_scalar;
+}
+
 /**
  * Softmax for s8 optimized for ESP32-P4.
  * Phase 1 (find-max) uses PIE esp.vmax.s8 for 16 elements at a time.
@@ -75,26 +102,19 @@ void esp_nn_softmax_s8_riscv_pie(const int8_t *input_data,
             int32_t vec_count = (width >> 4);  /* number of 16-element groups */
             int32_t vec_processed = vec_count << 4;
 
-            int32_t max_scalar;
-            asm volatile (
-                "mv     x30, %[ptr]              \n\t"
-                "esp.vld.128.ip q0, x30, 16      \n\t"  /* load first 16, advance */
-                "addi   %[cnt], %[cnt], -1       \n\t"  /* one group already loaded */
-                "beqz   %[cnt], 2f               \n\t"
-                /* for (k = 0; k < cnt; k++, p += 16) q0 = max(q0, p[0..15]); */
-                ESP_NN_HWLOOP_BEGIN
-                "esp.lp.setup 0, %[cnt], 1f      \n\t"
-                "esp.vld.128.ip q1, x30, 16      \n\t"  /* load next 16, advance */
-                ESP_NN_HWLOOP_LAST("esp.vmax.s8    q0, q0, q1", 3)  /* running max */
-                ESP_NN_HWLOOP_END
-                "2:                              \n\t"
-                /* esp.max.s8.a GPR operand must be x26-x31 (required on S31) */
-                "esp.max.s8.a   q0, x29          \n\t"  /* horizontal reduce */
-                "mv     %[max], x29              \n\t"
-                : [cnt] "+r"(vec_count), [max] "=r"(max_scalar)
-                : [ptr] "r"(in_ptr)
-                : "x29", "x30"
-            );
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+            /* One hardware loop runs groups - 1 times, so a chunk of
+             * ESP_NN_HWLOOP_MAX_COUNT + 1 groups keeps it in range. */
+            int32_t max_scalar = INT8_MIN;
+            for (int32_t g = 0; g < vec_count; g += ESP_NN_HWLOOP_MAX_COUNT + 1) {
+                const int32_t n = vec_count - g < ESP_NN_HWLOOP_MAX_COUNT + 1 ?
+                                  vec_count - g : ESP_NN_HWLOOP_MAX_COUNT + 1;
+                const int32_t m = softmax_row_max_pie(in_ptr + 16 * g, n);
+                max_scalar = max(max_scalar, m);
+            }
+#else
+            const int32_t max_scalar = softmax_row_max_pie(in_ptr, vec_count);
+#endif
             max_in_row = (int8_t) max_scalar;
 
             /* Check remaining elements (< 16) */

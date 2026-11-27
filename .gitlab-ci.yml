@@ -81,6 +81,17 @@ build_idf_master_ansi:
     EXAMPLE_TARGETS: esp32 esp32s3 esp32c3 esp32c5 esp32p4 esp32s31
     IDF_EXTRA_FLAGS: "--preview -D SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ci.ansi"
 
+# The ESP32-P4 rev < v3 code paths in a rev v3 image, which esp-emu runs:
+# hardware loops in chunks of at most 7 iterations, and no esp.vldbc.8/16.ip
+# increments. The staging slug (master_p4_rev_lt_v3_paths) comes from the
+# job name, and the emulator stage checks that the app was built this way.
+build_idf_master_p4_rev_lt_v3_paths:
+  extends: .build_template
+  image: espressif/idf:latest
+  variables:
+    EXAMPLE_TARGETS: esp32p4
+    IDF_EXTRA_FLAGS: "-D ESP_NN_TEST_REV_LT_V3_PATHS=1"
+
 # ESP32-P4 before rev v3.0 needs every hardware loop placed by the rules in
 # src/common/common_functions.h (esp-idf#19025). Build test_app for those
 # revisions and check each loop in the ELF. The image uses the pre-rev-v3 PIE

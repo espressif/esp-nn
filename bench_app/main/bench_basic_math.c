@@ -38,6 +38,27 @@ static const bench_variant_t s_add_variants[] = {
     { "esp_nn", add_opt },
 };
 
+/* A MobileNetV2 residual add: TFLite's left shift of 20 and its multiplier
+ * and shift ranges. */
+#define ADD_TFLM_ARGS(in1, in2, out, n) (in1), (in2), 6, -3, 1073741824, 1561245917, 0, -1, \
+                                        20, (out), -9, 1689133120, -19, -128, 127, (n)
+
+static void add_tflm_ref(void *p, int v, int8_t *out)
+{
+    const math_ctx_t *c = p;
+    esp_nn_add_elementwise_s8_ansi(ADD_TFLM_ARGS(c->in1[v], c->in2[v], out, c->size));
+}
+
+static void add_tflm_opt(void *p, int v, int8_t *out)
+{
+    const math_ctx_t *c = p;
+    esp_nn_add_elementwise_s8(ADD_TFLM_ARGS(c->in1[v], c->in2[v], out, c->size));
+}
+
+static const bench_variant_t s_add_tflm_variants[] = {
+    { "esp_nn", add_tflm_opt },
+};
+
 /* ------------------------------------------------------------------- Mul -- */
 
 /* out_offset, out_mult, out_shift, activation_min, activation_max */
@@ -93,6 +114,13 @@ typedef struct {
 
 static const math_shape_t s_shapes[] = {
     { "add", 1, 1615, false, BENCH_MEM_EXT, add_ref, VARIANTS(s_add_variants) },
+    { "add_tflm", 1, 1615, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
+    /* MobileNetV2 residual adds, 56x56x24 down to 7x7x160. */
+    { "add_tflm", 56 * 56, 24, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
+    { "add_tflm", 28 * 28, 32, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
+    { "add_tflm", 14 * 14, 64, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
+    { "add_tflm", 14 * 14, 96, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
+    { "add_tflm", 7 * 7, 160, false, BENCH_MEM_EXT, add_tflm_ref, VARIANTS(s_add_tflm_variants) },
     { "mul", 1, 1615, false, BENCH_MEM_EXT, mul_ref, VARIANTS(s_mul_variants) },
     /* Squeeze-and-excite gating, MobileNetV3-Small. */
     { "mul_broadcast", 49, 576, true, BENCH_MEM_EXT, mul_bc_ref, VARIANTS(s_mul_bc_variants) },

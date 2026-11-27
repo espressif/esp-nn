@@ -12,6 +12,15 @@
 #include <stdint.h>
 #include <common_functions.h>
 
+/* for (k = 0; k < cnt; k++, p += stride) qacc += p[0..15] * q7; p in x30. */
+#define MEAN_ACC_LOOP \
+            ESP_NN_HWLOOP_BEGIN \
+            "esp.lp.setup 0, %[cnt], 1f     \n\t" \
+            "esp.vld.128.ip  q0, x30, 0     \n\t" \
+            "esp.vmulas.s8.qacc q0, q7      \n\t" \
+            ESP_NN_HWLOOP_LAST("add    x30, x30, %[stride]", 2) \
+            ESP_NN_HWLOOP_END
+
 void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
                                   int8_t *output,
                                   const int32_t height,
@@ -43,6 +52,8 @@ void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
          * positions. Keeping in one block prevents compiler from clobbering
          * q7 between the broadcast and the MAC loop. */
         const int8_t *base_ptr = input + ch;
+        int32_t left = num_elements;
+        int32_t n = left < ESP_NN_HWLOOP_MAX_COUNT ? left : ESP_NN_HWLOOP_MAX_COUNT;
         asm volatile (
             /* Broadcast 1 into q7 */
             "mv     x30, %[one]             \n\t"
@@ -51,18 +62,27 @@ void esp_nn_mean_nhwc_s8_riscv_pie(const int8_t *input,
             "esp.zero.qacc                   \n\t"
             /* Accumulate loop: stride = channels between spatial positions */
             "mv     x30, %[base]            \n\t"
-            /* for (k = 0; k < cnt; k++, p += channels) qacc += p[0..15]; */
-            ESP_NN_HWLOOP_BEGIN
-            "esp.lp.setup 0, %[cnt], 1f     \n\t"
-            "esp.vld.128.ip  q0, x30, 0     \n\t"
-            "esp.vmulas.s8.qacc q0, q7      \n\t"
-            ESP_NN_HWLOOP_LAST("add    x30, x30, %[stride]", 2)
-            ESP_NN_HWLOOP_END
+            MEAN_ACC_LOOP
             :
             : [one] "r"(&one_val), [base] "r"(base_ptr),
-              [cnt] "r"(num_elements), [stride] "r"((int32_t)channels)
+              [cnt] "r"(n), [stride] "r"((int32_t)channels)
             : "x30"
         );
+        /* Later chunks (ESP_NN_HWLOOP_MAX_COUNT) add to the QACC. */
+        for (left -= n; left > 0; left -= n) {
+            base_ptr += n * channels;
+            n = left < ESP_NN_HWLOOP_MAX_COUNT ? left : ESP_NN_HWLOOP_MAX_COUNT;
+            asm volatile (
+                "mv     x30, %[one]             \n\t"
+                "esp.vldbc.8.ip q7, x30, 0      \n\t"
+                "mv     x30, %[base]            \n\t"
+                MEAN_ACC_LOOP
+                :
+                : [one] "r"(&one_val), [base] "r"(base_ptr),
+                  [cnt] "r"(n), [stride] "r"((int32_t)channels)
+                : "x30"
+            );
+        }
 
         int32_t sums[16] __attribute__((aligned(16)));
         ESP_NN_QACC_EXTRACT_S32(sums);

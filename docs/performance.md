@@ -91,9 +91,23 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 
 | Chip | Data info | ANSI C | Optimized | Ratio | Memory |
 | ---- | --------- | -----: | --------: | ----: | ------ |
-| ESP32-S3 | size = 1615 | 281337 | 74440 | 3.78 | External |
-| ESP32-P4 | size = 1615 | 190786 | 88451 | 2.16 | External |
-| ESP32-S31 | size = 1615 | 196283 | 75032 | 2.62 | Internal |
+| ESP32-S3 | size = 1615 | 271410 | 60397 | 4.49 | External |
+| ESP32-P4 | size = 1615 | 185008 | 80108 | 2.31 | External |
+| ESP32-S31 | size = 1615 | 184064 | 80108 | 2.30 | Internal |
+
+These rows use parameters outside the ESP32-P4/S31 vector path, so they run the scalar code there.
+
+## Elementwise Add, TFLite Parameters
+
+Left shift 20 and the multiplier and shift ranges of a MobileNetV2 residual add.
+
+| Chip | Data info | ANSI C | Optimized | Ratio | Memory |
+| ---- | --------- | -----: | --------: | ----: | ------ |
+| ESP32-S3 | size = 1615 | 271412 | 58562 | 4.63 | External |
+| ESP32-P4 | size = 1615 | 188249 | 25024 | 7.52 | External |
+| ESP32-S31 | size = 1615 | 187025 | 24734 | 7.56 | Internal |
+
+The add rows were measured with the ESP32-P4 at 400 MHz.
 
 ## Elementwise Multiply
 

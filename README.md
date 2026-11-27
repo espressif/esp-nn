@@ -28,6 +28,7 @@ Speedup of the optimized s8 kernels over the portable ANSI C ones (cycles, ANSI 
 | Depthwise conv 3x3 | input 18x18, filter 1x3x3x16 | 13.18 | 29.56 | 29.39 |
 | Depthwise conv 5x5 | input 12x12, filter 8x5x5x4 | 4.91 | 1.81 | 1.79 |
 | Fully connected | length 271, 3 outputs | 5.32 | 5.01 | 5.11 |
+| Elementwise add | 1615 elements, TFLite parameters | 4.63 | 7.52 | 7.56 |
 | Elementwise multiply | 1615 elements | 17.39 | 7.73 | 7.86 |
 | Channel broadcast multiply | 49 positions x 576 channels | 14.08 | 7.74 | 7.97 |
 | Max pooling 3x3 | input 16x16x16 | 40.96 | 31.93 | 32.35 |

@@ -35,17 +35,23 @@ void esp_nn_mean_nhwc_s8_test()
     /* Test dimensions matching MobileNetV3 SE blocks */
     struct {
         int height, width, channels;
+        int fill; /* 0: random input, else every input is fill */
     } test_cases[] = {
-        {7, 7, 16},      /* small SE block */
-        {7, 7, 72},      /* medium SE block */
-        {14, 14, 40},    /* larger spatial */
-        {14, 14, 120},   /* larger channels */
-        {28, 28, 24},    /* early layer SE */
-        {1, 1, 576},     /* degenerate 1x1 */
-        {3, 3, 96},      /* small spatial */
-        {7, 7, 18},      /* channels % 4 == 2: tail */
-        {5, 3, 7},       /* channels below one block */
-        {1, 1, 1},       /* single channel */
+        {7, 7, 16, 0},      /* small SE block */
+        {7, 7, 72, 0},      /* medium SE block */
+        {14, 14, 40, 0},    /* larger spatial */
+        {14, 14, 120, 0},   /* larger channels */
+        {28, 28, 24, 0},    /* early layer SE */
+        {1, 1, 576, 0},     /* degenerate 1x1 */
+        {3, 3, 96, 0},      /* small spatial */
+        {7, 7, 18, 0},      /* channels % 4 == 2: tail */
+        {5, 3, 7, 0},       /* channels below one block */
+        {1, 1, 1, 0},       /* single channel */
+        {64, 64, 16, 0},    /* 4096 positions: past the P4 rev < v3 loop limit */
+        {65, 65, 16, 0},    /* 4225 positions: two chunks on P4 rev < v3 */
+        /* 4225 saturated positions: the largest lane sums */
+        {65, 65, 16, 127},
+        {65, 65, 16, -128},
     };
     const int num_tests = sizeof(test_cases) / sizeof(test_cases[0]);
 
@@ -84,7 +90,7 @@ void esp_nn_mean_nhwc_s8_test()
         int8_t *out_opt = (int8_t *)(((uint32_t)out_opt_orig + 15) & ~15);
 
         for (int i = 0; i < input_size; i++) {
-            input[i] = rand() % 256 - 128;
+            input[i] = test_cases[t].fill ? test_cases[t].fill : rand() % 256 - 128;
         }
 
         /* ANSI C reference */

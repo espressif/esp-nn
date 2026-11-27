@@ -8,6 +8,157 @@
 #include <string.h>
 #include <common_functions.h>
 
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+/*
+ * esp_nn_avg_pool_s8_riscv_pie for a filter wider than ESP_NN_HWLOOP_MAX_COUNT
+ * on ESP32-P4 before rev v3, whose hardware loop runs at most that many
+ * iterations. Each window row runs in chunks that all add to the QACC. Out
+ * of line, so the loop of the common layers stays as it is.
+ */
+static __attribute__((noinline)) void avg_pool_long_rows(const int8_t *input,
+                                 const uint16_t input_wd,
+                                 const uint16_t input_ht,
+                                 int8_t *output,
+                                 const uint16_t output_wd,
+                                 const uint16_t output_ht,
+                                 const uint16_t stride_wd,
+                                 const uint16_t stride_ht,
+                                 const uint16_t filter_wd,
+                                 const uint16_t filter_ht,
+                                 const uint16_t pad_wd,
+                                 const uint16_t pad_ht,
+                                 const int32_t activation_min,
+                                 const int32_t activation_max,
+                                 const uint16_t channels)
+{
+    /* Enable PIE */
+    ESP_NN_PIE_ENABLE();
+
+    /* Broadcast 1 into q7 for "multiply by 1" accumulation trick */
+    const int8_t one_val = 1;
+    asm volatile (
+        "mv     x30, %0             \n\t"
+        "esp.vldbc.8.ip q7, x30, 0  \n\t"
+        :: "r"(&one_val) : "x30"
+    );
+
+    const int32_t ch_16 = channels >> 4;
+
+    int32_t base_y = -pad_ht;
+    for (int32_t out_y = 0; out_y < output_ht; out_y++, base_y += stride_ht) {
+        int32_t base_x = -pad_wd;
+        for (int32_t out_x = 0; out_x < output_wd; out_x++, base_x += stride_wd) {
+            int32_t filter_y_start = max(0, -base_y);
+            int32_t filter_x_start = max(0, -base_x);
+            int32_t filter_y_end = min(filter_ht, input_ht - base_y);
+            int32_t filter_x_end = min(filter_wd, input_wd - base_x);
+            int8_t *out_ptr = output + (out_y * output_wd + out_x) * channels;
+
+            /* A window that misses the input averages to 0, as in the
+             * reference. Its hardware loop count would be 0 or less, which
+             * esp.lp.setup does not treat as no iterations. */
+            if (filter_x_end <= filter_x_start || filter_y_end <= filter_y_start) {
+                const int32_t empty = min(max(0, activation_min), activation_max);
+                memset(out_ptr, (int8_t) empty, channels);
+                continue;
+            }
+            int32_t filter_cnt = (filter_y_end - filter_y_start) * (filter_x_end - filter_x_start);
+            int32_t half_cnt = filter_cnt >> 1;
+
+            /* Process 16 channels at a time using QACC per-lane accumulation */
+            int32_t ch_offset = 0;
+            for (int32_t ch_blk = 0; ch_blk < ch_16; ch_blk++, ch_offset += 16) {
+
+                /* Clear per-lane accumulators */
+                asm volatile ("esp.zero.qacc \n\t");
+
+                /* Accumulate via QACC with stride-based fx loop */
+                for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
+                    int32_t in_y = base_y + fy;
+                    const int8_t *row_ptr = input + (in_y * input_wd + base_x + filter_x_start) * channels + ch_offset;
+                    int32_t fx_count = filter_x_end - filter_x_start;
+
+                    for (; fx_count > ESP_NN_HWLOOP_MAX_COUNT;
+                            fx_count -= ESP_NN_HWLOOP_MAX_COUNT) {
+                        asm volatile (
+                            "mv     x30, %[ptr]              \n\t"
+                            ESP_NN_HWLOOP_BEGIN
+                            "esp.lp.setup 0, %[cnt], 1f      \n\t"
+                            "esp.vld.128.ip  q0, x30, 0      \n\t"
+                            "esp.vmulas.s8.qacc q0, q7       \n\t"
+                            ESP_NN_HWLOOP_LAST("add    x30, x30, %[stride]", 2)
+                            ESP_NN_HWLOOP_END
+                            :
+                            : [ptr] "r"(row_ptr), [cnt] "r"(ESP_NN_HWLOOP_MAX_COUNT),
+                              [stride] "r"((int32_t)channels)
+                            : "x30"
+                        );
+                        row_ptr += ESP_NN_HWLOOP_MAX_COUNT * channels;
+                    }
+
+                    asm volatile (
+                        "mv     x30, %[ptr]              \n\t"
+                        /* for (k = 0; k < cnt; k++, p += channels) qacc += p[0..15]; */
+                        ESP_NN_HWLOOP_BEGIN
+                        "esp.lp.setup 0, %[cnt], 1f      \n\t"
+                        "esp.vld.128.ip  q0, x30, 0      \n\t"
+                        "esp.vmulas.s8.qacc q0, q7       \n\t"
+                        ESP_NN_HWLOOP_LAST("add    x30, x30, %[stride]", 2)
+                        ESP_NN_HWLOOP_END
+                        :
+                        : [ptr] "r"(row_ptr), [cnt] "r"(fx_count),
+                          [stride] "r"((int32_t)channels)
+                        : "x30"
+                    );
+                }
+
+                /* Extract 16 per-lane int32 sums from QACC:
+                 * qacc has 4 quadrants, each 128 bits = 4 × int32 */
+                int32_t sums[16] __attribute__((aligned(16)));
+                asm volatile (
+                    "mv                      x30, %0     \n\t"
+                    "esp.st.qacc.l.l.128.ip  x30, 16     \n\t"  /* lanes 0-3 */
+                    "esp.st.qacc.l.h.128.ip  x30, 16     \n\t"  /* lanes 4-7 */
+                    "esp.st.qacc.h.l.128.ip  x30, 16     \n\t"  /* lanes 8-11 */
+                    "esp.st.qacc.h.h.128.ip  x30, 0      \n\t"  /* lanes 12-15 */
+                    :: "r"(sums)
+                    : "x30", "memory"
+                );
+
+                /* Rounded division and activation clamp */
+                for (int k = 0; k < 16; k++) {
+                    int32_t s = sums[k];
+                    int32_t result = s > 0 ? (s + half_cnt) / filter_cnt
+                                           : (s - half_cnt) / filter_cnt;
+                    result = max(result, activation_min);
+                    result = min(result, activation_max);
+                    out_ptr[ch_offset + k] = (int8_t) result;
+                }
+            }
+
+            /* Handle remaining channels scalar */
+            for (int32_t ch_idx = ch_offset; ch_idx < channels; ch_idx++) {
+                int32_t result = 0;
+                int32_t count = 0;
+                for (int32_t fy = filter_y_start; fy < filter_y_end; fy++) {
+                    for (int32_t fx = filter_x_start; fx < filter_x_end; fx++) {
+                        int32_t in_y = base_y + fy;
+                        int32_t in_x = base_x + fx;
+                        result += input[(in_y * input_wd + in_x) * channels + ch_idx];
+                        count++;
+                    }
+                }
+                result = result > 0 ? (result + count / 2) / count
+                                    : (result - count / 2) / count;
+                result = max(result, activation_min);
+                result = min(result, activation_max);
+                out_ptr[ch_idx] = (int8_t) result;
+            }
+        }
+    }
+}
+#endif
+
 /**
  * Average pooling for s8 using ESP32-P4 PIE SIMD.
  *
@@ -32,6 +183,14 @@ void esp_nn_avg_pool_s8_riscv_pie(const int8_t *input,
                                  const int32_t activation_max,
                                  const uint16_t channels)
 {
+#if ESP_NN_HWLOOP_MAX_COUNT < INT32_MAX
+    if (filter_wd > ESP_NN_HWLOOP_MAX_COUNT) {
+        avg_pool_long_rows(input, input_wd, input_ht, output, output_wd, output_ht,
+                           stride_wd, stride_ht, filter_wd, filter_ht, pad_wd, pad_ht,
+                           activation_min, activation_max, channels);
+        return;
+    }
+#endif
     /* Enable PIE */
     ESP_NN_PIE_ENABLE();
 

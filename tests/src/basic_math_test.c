@@ -75,8 +75,100 @@ void esp_nn_add_elementwise_s8_test()
     int32_t activation_min = -128;
     int32_t activation_max = 127;
 
-    for (int itr = 0; itr < 10; itr++) {
+    /* Cases 10-21 reach the P4/S31 PIE fast path: left_shift 14..20 with
+     * TFLite-like multipliers and shifts. Case 18 and cases 22-28 each put
+     * one parameter just outside that path, so the reference code runs. */
+    for (int itr = 0; itr < 29; itr++) {
+        int in1_skew = 0, in2_skew = 0, out_skew = 0;
+        bool in_place = false;
+        activation_min = -128;
+        activation_max = 127;
+        if (itr >= 10) {
+            input1_offset = rand() % 256 - 127;
+            input2_offset = rand() % 256 - 127;
+            output_offset = rand() % 256 - 128;
+            input1_mult = 0x40000000 + rand() % 0x3fff0000;
+            input2_mult = 0x40000000 + rand() % 0x3fff0000;
+            output_mult = 0x40000000 + rand() % 0x3fff0000;
+            input1_shift = 0;
+            input2_shift = -1 - rand() % 3;
+            output_shift = -17 - rand() % 4;
+            left_shift = 20;
+            size = 4096 + 5;
+        }
         switch (itr) {
+        case 10: // real-model parameters, tail of 5
+            break;
+        case 11: // exactly one 8-element step
+            size = 8;
+            break;
+        case 12: // one step plus a tail of 5
+            size = 13;
+            break;
+        case 13: // unaligned inputs and output
+            size = 1000 + 3;
+            in1_skew = 1;
+            in2_skew = 3;
+            out_skew = 5;
+            break;
+        case 14: // output aliases input 1, as for an in-place add
+            size = 1000 + 7;
+            in_place = true;
+            break;
+        case 15: // int32 activation limits: the clamp is a no-op, the store wraps
+            activation_min = INT32_MIN;
+            activation_max = INT32_MAX;
+            break;
+        case 16: // all shifts 0, no rounding shift anywhere
+            input2_shift = 0;
+            output_shift = 0;
+            left_shift = 14;
+            break;
+        case 17: // largest shifts and multipliers the fast path takes
+            input1_shift = -20;
+            input2_shift = -20;
+            output_shift = -20;
+            input1_mult = 0x7fff7fff;
+            input2_mult = 0x7fff7fff;
+            output_mult = 0x7fff7fff;
+            break;
+        case 18: // input 1 multiplier at the fast-path limit
+            input1_mult = 0x7fff8000;
+            break;
+        case 22: // left_shift above the fast path
+            left_shift = 21;
+            break;
+        case 23: // left_shift below the fast path
+            left_shift = 13;
+            break;
+        case 24: // input offset below the fast path
+            input1_offset = -128;
+            break;
+        case 25: // input 2 shift past the fast path
+            input2_shift = -21;
+            break;
+        case 26: // output multiplier at the fast-path limit
+            output_mult = 0x7fff8000;
+            break;
+        case 27: // output shift past the fast path
+            output_shift = -21;
+            break;
+        case 28: // output offset past the fast path
+            output_offset = 128;
+            break;
+        case 19: // narrowed activation range
+            activation_min = -30;
+            activation_max = 60;
+            break;
+        case 20: // offset edges
+            input1_offset = -127;
+            input2_offset = 128;
+            output_offset = 127;
+            break;
+        case 21: // MobileNetV2 56x56x24 residual add
+            size = 56 * 56 * 24;
+            output_offset = -128;
+            break;
         case 0: // all zeros
             input1_offset = 0;
             input2_offset = 0;
@@ -138,7 +230,7 @@ void esp_nn_add_elementwise_s8_test()
             left_shift = 20;
             size = 216;
         break;
-        case 5: // dual-core split threshold (>= 8192) with an odd SIMD tail
+        case 5: // S3 dual-core split threshold (>= 8192) with an odd SIMD tail
             size = 8192 + 15;
             __attribute__((fallthrough));
         case 6: // exactly the threshold; case 5 leaves size at 8207 otherwise
@@ -159,10 +251,10 @@ void esp_nn_add_elementwise_s8_test()
             left_shift = rand() % 15;
         }
 
-        input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
-        input2_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
-        out_c_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
-        out_opt_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 16);
+        input1_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 32);
+        input2_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 32);
+        out_c_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 32);
+        out_opt_orig = (int8_t *) ESP_NN_TEST_ALLOC(size + 32);
 
         if (input1_orig == NULL || input2_orig == NULL ||
                 out_c_orig == NULL || out_opt_orig == NULL) {
@@ -170,13 +262,13 @@ void esp_nn_add_elementwise_s8_test()
             goto elementwise_add_test_cleanup;
         }
 
-        input1 = (int8_t *) (((uint32_t) input1_orig + 15) & ~15);
-        input2 = (int8_t *) (((uint32_t) input2_orig + 15) & ~15);
+        input1 = (int8_t *) ((((uint32_t) input1_orig + 15) & ~15) + in1_skew);
+        input2 = (int8_t *) ((((uint32_t) input2_orig + 15) & ~15) + in2_skew);
         if (itr == 4) {
             input2 = input2_orig; // unaligned input
         }
         out_data_c = (int8_t *) (((uint32_t)out_c_orig + 15) & ~15);
-        out_data_opt = (int8_t *) (((uint32_t)out_opt_orig + 15) & ~15);
+        out_data_opt = (int8_t *) ((((uint32_t)out_opt_orig + 15) & ~15) + out_skew);
 
 
         if (itr == 4) {
@@ -204,6 +296,9 @@ void esp_nn_add_elementwise_s8_test()
             profile_opt_start();
         }
 
+        if (in_place) {
+            out_data_opt = input1;
+        }
         /* Optimized function */
         esp_nn_add_elementwise_s8(input1, input2, input1_offset, input2_offset,
                                   input1_mult, input2_mult, input1_shift, input2_shift,
