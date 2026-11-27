@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_nn_defs.h"
 #include "esp_nn_ansi_headers.h"
@@ -446,7 +447,73 @@ static inline __attribute__((always_inline)) void esp_nn_fully_connected_per_ch_
 #define esp_nn_fully_connected_s8 esp_nn_fully_connected_s8_esp32s3
 #define esp_nn_fully_connected_per_ch_s8 esp_nn_fully_connected_per_ch_s8_esp32s3
 #endif
-#define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch_esp32s3
+void esp_nn_fc_batch_s8_esp32s3(const int8_t *input_data,
+                                const int32_t input_offset,
+                                const uint16_t row_len,
+                                const int8_t *filter_data,
+                                const int32_t filter_offset,
+                                const int32_t *bias,
+                                int8_t *out_data,
+                                const uint16_t out_channels,
+                                const int32_t out_offset,
+                                const int32_t *out_shift,
+                                const int32_t *out_mult,
+                                const int32_t activation_min,
+                                const int32_t activation_max,
+                                const int32_t batches);
+#if ESP_NN_DUAL_CORE_SUPPORTED
+void esp_nn_fc_batch_n_split_esp32s3(const int8_t *input_data,
+                                     const int32_t input_offset,
+                                     const uint16_t row_len,
+                                     const int8_t *filter_data,
+                                     const int32_t filter_offset,
+                                     const int32_t *bias,
+                                     int8_t *out_data,
+                                     const uint16_t out_channels,
+                                     const int32_t out_offset,
+                                     const int32_t *out_shift,
+                                     const int32_t *out_mult,
+                                     const int32_t activation_min,
+                                     const int32_t activation_max,
+                                     const int32_t batches);
+#endif
+/* Same arrangement as the batch-1 gate above. Below the floor this calls the
+ * batch kernel directly and does not claim the worker. At or above the floor
+ * the split claims the worker, or runs that kernel if the worker is missing
+ * or busy. The row test is the zero-offset dot threshold. */
+static inline __attribute__((always_inline)) void esp_nn_fully_connected_per_ch_s8_batch(
+        const int8_t *input_data, const int32_t input_offset, const uint16_t row_len,
+        const int8_t *filter_data, const int32_t filter_offset, const int32_t *bias,
+        int8_t *out_data, const uint16_t out_channels, const int32_t out_offset,
+        const int32_t *out_shift, const int32_t *out_mult,
+        const int32_t activation_min, const int32_t activation_max, const int32_t batches)
+{
+    if (batches == 1) {
+        esp_nn_fully_connected_per_ch_s8(input_data, input_offset, row_len,
+                filter_data, filter_offset, bias, out_data, out_channels,
+                out_offset, out_shift, out_mult, activation_min, activation_max);
+        return;
+    }
+#if ESP_NN_DUAL_CORE_SUPPORTED
+    const int row_aligned = (row_len & 15) == 0;
+    const int input_aligned = row_aligned && (((uintptr_t)input_data & 15) == 0);
+    const int filter_aligned = row_aligned && (((uintptr_t)filter_data & 15) == 0);
+    const int dot_ok = row_len >= (uint16_t)(64 + (row_len & 15) * 8);
+    if (batches > 1 && out_channels >= ESP_NN_FC_BATCH_DUAL_MIN_OUT &&
+            dot_ok && (input_aligned || filter_aligned)) {
+        esp_nn_fc_batch_n_split_esp32s3(input_data, input_offset, row_len,
+                filter_data, filter_offset, bias, out_data, out_channels,
+                out_offset, out_shift, out_mult, activation_min, activation_max,
+                batches);
+        return;
+    }
+#endif
+    esp_nn_fc_batch_s8_esp32s3(input_data, input_offset, row_len, filter_data,
+            filter_offset, bias, out_data, out_channels, out_offset, out_shift,
+            out_mult, activation_min, activation_max, batches);
+}
+/* Keep esp_nn.h from aliasing this name to the ANSI kernel. */
+#define esp_nn_fully_connected_per_ch_s8_batch esp_nn_fully_connected_per_ch_s8_batch
 
 void esp_nn_fully_connected_per_ch_s8_batch_scratch_esp32s3(const int8_t *input_data,
                                     const int32_t input_offset,

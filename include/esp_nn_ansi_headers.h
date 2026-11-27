@@ -303,9 +303,9 @@ void esp_nn_fully_connected_per_ch_s8_batch_ansi(const int8_t *input_data,
  *              in scratch. scratch must be 16-byte aligned, with
  *              scratch_size at least esp_nn_get_fc_batch_scratch_size for
  *              the same batches, row length and output channels. A NULL,
- *              unaligned or short scratch uses the no-scratch fallback:
- *              S3's target batch implementation (which uses gated direct
- *              dual-core FC at batch 1), or the P4/S31 PIE batch kernel.
+ *              unaligned or short scratch uses the no-scratch fallback.
+ *              On S3 and on dual-core P4, batch 1 uses the gated direct FC.
+ *              S31 cannot split, so it stays on the PIE batch kernel.
  *              The ANSI version always runs the plain batch call.
  *
  * @note        With CONFIG_NN_SKIP_NUDGE the 1x1 path uses the fast

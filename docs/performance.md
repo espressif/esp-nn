@@ -58,6 +58,8 @@ The ESP32-P4 depthwise rows were measured with the ESP32-P4 at 400 MHz.
 
 ## Fully Connected
 
+Optimized is the plain fully connected path, and Cores is how many cores that path uses after `esp_nn_dual_core_enable()`.
+
 | Chip | Data info | ANSI C | Optimized | Ratio | Cores | Memory |
 | ---- | --------- | -----: | --------: | ----: | ----: | ------ |
 | ESP32-S3 | len: 271, ch = 3, non-zero input offset | 8448 | 1589 | 5.32 | 1 | Internal |
@@ -67,6 +69,25 @@ The ESP32-P4 depthwise rows were measured with the ESP32-P4 at 400 MHz.
 | ESP32-P4 | len: 384, ch = 512, non-zero input offset | 1823280 | 128593 | 14.18 | 1 | Internal |
 | ESP32-P4 | len: 384, ch = 512, non-zero input offset | 1823374 | 71370 | 25.55 | 2 | Internal |
 | ESP32-S31 | len: 271, ch = 3, non-zero input offset | 7547 | 1475 | 5.11 | 1 | Internal |
+
+### Batched Fully Connected (plain batch)
+
+Optimized is the plain fully connected batch path, and Cores is how many cores that path uses after `esp_nn_dual_core_enable()`.
+
+| Chip | Data info | ANSI C | Optimized | Ratio | Cores | Memory |
+| ---- | --------- | -----: | --------: | ----: | ----: | ------ |
+| ESP32-S3 | batch: 16, len: 64, ch: 64 | 753611 | 95327 | 7.91 | 2 | Internal |
+| ESP32-S3 | batch: 32, len: 64, ch: 128 | 3012456 | 359442 | 8.38 | 2 | Internal |
+| ESP32-S3 | batch: 4, len: 128, ch: 192 | 1056287 | 89943 | 11.74 | 2 | Internal |
+| ESP32-S3 | batch: 4, len: 128, ch: 200 | 1100287 | 93523 | 11.76 | 2 | Internal |
+| ESP32-S3 | batch: 48, len: 160, ch: 32 | 2606325 | 151505 | 17.20 | 2 | Internal |
+| ESP32-S3 | batch: 64, len: 128, ch: 256 | 22531792 | 1501177 | 15.01 | 2 | Internal |
+| ESP32-P4 | batch: 16, len: 64, ch: 64 | 667954 | 48461 | 13.78 | 2 | Internal |
+| ESP32-P4 | batch: 32, len: 64, ch: 128 | 2671799 | 173801 | 15.37 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 192 | 942804 | 52355 | 18.01 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 200 | 982545 | 54267 | 18.11 | 2 | Internal |
+| ESP32-P4 | batch: 48, len: 160, ch: 32 | 2330483 | 85500 | 27.26 | 2 | Internal |
+| ESP32-P4 | batch: 64, len: 128, ch: 256 | 20113829 | 815257 | 24.67 | 2 | Internal |
 
 ### Batched Fully Connected (Weight Zero-Point 0)
 
@@ -82,10 +103,12 @@ Optimized is the 1×1 scratch path, and Cores is how many cores that path uses a
 | ESP32-S3 | batch: 64, len: 128, ch: 256 | 22544884 | 718330 | 31.39 | 2 | Internal |
 | ESP32-P4 | batch: 16, len: 64, ch: 64 | 657470 | 62621 | 10.50 | 2 | Internal |
 | ESP32-P4 | batch: 32, len: 64, ch: 128 | 2632680 | 131883 | 19.96 | 2 | Internal |
-| ESP32-P4 | batch: 4, len: 128, ch: 192 | 936243 | 61539 | 15.21 | 2 | Internal |
-| ESP32-P4 | batch: 4, len: 128, ch: 200 | 975182 | 63822 | 15.28 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 192 | 943792 | 52645 | 17.93 | 2 | Internal |
+| ESP32-P4 | batch: 4, len: 128, ch: 200 | 983074 | 54229 | 18.13 | 2 | Internal |
 | ESP32-P4 | batch: 48, len: 160, ch: 32 | 2318600 | 91881 | 25.23 | 2 | Internal |
 | ESP32-P4 | batch: 64, len: 128, ch: 256 | 19977571 | 516458 | 38.68 | 2 | Internal |
+
+On ESP32-P4, batch 4 with length 128 and 192 or 200 outputs stays on plain fully connected. The 1×1 gate leaves batches 2 through 8 with at least 64 outputs and a 16-byte-aligned row on that path, so those two optimized results are the plain dual-core batch kernel.
 
 ## Elementwise Add
 

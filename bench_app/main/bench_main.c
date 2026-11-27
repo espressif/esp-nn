@@ -49,7 +49,8 @@ static void bench_task(void *arg)
 void app_main(void)
 {
     /* One core. The worker stays off, except fully connected turns it on for
-     * the 384x512 second pass and turns it off again before returning.
+     * the 384x512 second pass and the batched second pass, and turns it off
+     * again before returning.
      * The stack is large because some kernels keep small arrays on it.
      * ESP32-S31 has PIE on core 1 only. */
 #if CONFIG_IDF_TARGET_ESP32S31
