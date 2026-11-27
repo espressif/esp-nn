@@ -25,7 +25,8 @@ Speedup of the optimized s8 kernels over the portable ANSI C ones (cycles, ANSI 
 | ------ | ----- | -------: | -------: | --------: |
 | Convolution 1x1 | input 10x10, filter 64x1x1x64 | 14.24 | 7.00 | 6.24 |
 | Convolution 1x1 | input 8x8, filter 16x1x1x16 | 8.01 | 3.51 | 2.94 |
-| Depthwise conv 5x5 | input 12x12, filter 8x5x5x4 | 4.91 | 1.94 | 1.75 |
+| Depthwise conv 3x3 | input 18x18, filter 1x3x3x16 | 13.18 | 29.56 | 29.39 |
+| Depthwise conv 5x5 | input 12x12, filter 8x5x5x4 | 4.91 | 1.81 | 1.79 |
 | Fully connected | length 271, 3 outputs | 5.32 | 5.01 | 5.11 |
 | Elementwise multiply | 1615 elements | 17.39 | 7.73 | 7.86 |
 | Channel broadcast multiply | 49 positions x 576 channels | 14.08 | 7.74 | 7.97 |

@@ -40,7 +40,7 @@ void esp_nn_depthwise_conv_s8_test()
     // The 27-32 block carries the large channel counts that regressed the P4
     // PIE path: its offset/bias workspace used to stop at 256 channels and
     // silently produced incorrect results above that limit.
-    for (int itr = 0; itr < 53; itr++) {
+    for (int itr = 0; itr < 85; itr++) {
         bool no_bias = false;
         /* Explicit output dims (0 = derive from pad/stride below). Needed for
          * TFLite-style asymmetric "SAME" padding where only the leading
@@ -646,6 +646,267 @@ void esp_nn_depthwise_conv_s8_test()
             force_out_wd = 8;
             force_out_ht = 8;
             break;
+        /* 60-66: the P4/S31 ch_mult 1 kernel. 60-63 cover its square 5x5
+         * pipeline and partial channel blocks, whose 16-byte output stores
+         * land at odd addresses. 64-66 cover the edges of its vector requant. */
+        case 60: // 5x5, 32 channels, pad 2
+            input_wd = 9; input_ht = 9; filter_ht = 5; filter_wd = 5;
+            ch_mult = 1; channels = 32; pad_wd = 2; pad_ht = 2;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 61: // 5x5, 25 channels (a 9-channel last block), pad 2, stride 2
+            input_wd = 11; input_ht = 11; filter_ht = 5; filter_wd = 5;
+            ch_mult = 1; channels = 25; pad_wd = 2; pad_ht = 2;
+            stride_wd = 2; stride_ht = 2;
+            break;
+        case 62: // 3x3, 20 channels (a 4-channel tail), pad 1
+            input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 20; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 63: // 3x3, 44 channels (a 12-channel last block), no pad
+            input_wd = 7; input_ht = 7; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 44; pad_wd = 0; pad_ht = 0;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        case 64: // 3x3 pad 1, shifts -15 to -20 and multipliers just inside the fast range
+        case 65: // as 64, multipliers past the fast range and one shift of -21
+        case 66: // 3x3 pad 1, in_offset 128: pad taps are -128
+            input_wd = 8; input_ht = 8; filter_ht = 3; filter_wd = 3;
+            ch_mult = 1; channels = 32; pad_wd = 1; pad_ht = 1;
+            stride_wd = 1; stride_ht = 1;
+            break;
+        /* 67-68: P4/S31 slab path on a map larger than the L2 cache (128 KB
+         * in the test app): the band is capped, so several bands each copy
+         * their own halo rows. */
+        case 67: // 28x28x96, pad 1, stride 1: bands of 5 rows
+            input_wd = 28;
+            input_ht = 28;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 68: // 37x37x96 to 19x19, pad 1, stride 2: a shorter last band
+            input_wd = 37;
+            input_ht = 37;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 69: // 9x9x960, pad 1: over the L2 size, but a capped band would be 1 row, so not capped
+            input_wd = 9;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 960;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 70: // one channel's multiplier above the PIE requant's range:
+                 // on P4/S31 only its 16-channel block takes the scalar requant
+            input_wd = 14;
+            input_ht = 14;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 71: // as 70, stride 2, the out-of-range channel in a partial block
+            input_wd = 15;
+            input_ht = 15;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 40;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        /* 72-75: P4/S31 non-slab path, where full 16-channel blocks run
+         * window, requant and store in one loop over chunks of up to 32
+         * inner positions. Rows of 38 and 19 positions wrap inside a chunk. */
+        case 72: // 40x40x24: a fused block and an 8-channel block
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 24;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 73: // 40x40x40 to 20x20, stride 2: two fused blocks and an 8-channel block
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 40;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 74: // 40x40x48, one channel past the PIE requant: its block takes the scalar requant
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 75: // 40x40x36: two fused blocks and 4 channels in scalar
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 36;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        /* 76-78: P4/S31 non-slab path with all channels in fused blocks:
+         * the edge rows and columns run from padded slabs of their input. */
+        case 76: // 40x40x32: edges on all four sides
+            input_wd = 40;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 77: // 41x41x48 to 21x21, stride 2: edges on all four sides
+            input_wd = 41;
+            input_ht = 41;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 48;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 78: // 24 wide, 100 high, 32 channels: the side strips run in chunks
+            input_wd = 24;
+            input_ht = 100;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        /* 79-81: P4 two-core split by channels for maps of few rows: the
+         * worker takes the first half of the 16-channel blocks. */
+        case 79: // 7x7x72: 32 and 40 channels, an 8-channel block in the second half
+            input_wd = 7;
+            input_ht = 7;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 72;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 80: // 7x7x96, one channel past the PIE requant in the second half
+            input_wd = 7;
+            input_ht = 7;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 96;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 81: // 9x9x64 to 5x5, stride 2
+            input_wd = 9;
+            input_ht = 9;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 64;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 2;
+            stride_ht = 2;
+            break;
+        case 82: // 1-D, 1100 wide, 16 channels, 9-tap filter, pad 4: one slab
+                 // row is over the slab limit, so the P4/S31 slab path is off
+            input_wd = 1100;
+            input_ht = 1;
+            filter_ht = 1;
+            filter_wd = 9;
+            ch_mult = 1;
+            channels = 16;
+            pad_wd = 4;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 83: // 10x10x1032, no pad (non-slab path): the 8-channel tail
+                 // moves back over blocks 63 and 64, and block 63 has a
+                 // channel past the PIE requant
+            input_wd = 10;
+            input_ht = 10;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 1032;
+            pad_wd = 0;
+            pad_ht = 0;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
+        case 84: // 400x40x32, pad 1: the top and bottom strips are wider
+                 // than the edge slab, so they run in chunks of columns
+            input_wd = 400;
+            input_ht = 40;
+            filter_ht = 3;
+            filter_wd = 3;
+            ch_mult = 1;
+            channels = 32;
+            pad_wd = 1;
+            pad_ht = 1;
+            stride_wd = 1;
+            stride_ht = 1;
+            break;
         default:
             input_wd = 6;
             input_ht = 6;
@@ -750,6 +1011,13 @@ void esp_nn_depthwise_conv_s8_test()
                 const int32_t step = ((i % 4) - 2) * 300000;
                 bias[i + 1] = (i & 1) ? (1 << 29) + step : -(1 << 29) - step;
             }
+            if (itr == 64) {
+                out_shift[i] = -15 - rand() % 6;
+                out_mult[i] = 0x7fff7f00 + rand() % 0x100;
+            } else if (itr == 65) {
+                out_shift[i] = -15 - rand() % 6;
+                out_mult[i] = 0x7fff8000 + rand() % 50;
+            }
         }
         if (itr == 42) {
             for (int i = 0; i < in_size; ++i) {
@@ -759,11 +1027,25 @@ void esp_nn_depthwise_conv_s8_test()
                 filter_data[i] = -128;
             }
         }
+        if (itr == 65) {
+            out_shift[channels * ch_mult - 1] = -21;
+        }
+        if (itr == 70) {
+            out_mult[17] = 0x7fffc000;
+        } else if (itr == 71) {
+            out_mult[35] = 0x7fffffff;
+        } else if (itr == 74) {
+            out_mult[20] = 0x7fffffff;
+        } else if (itr == 80) {
+            out_mult[70] = 0x7fffffff;
+        } else if (itr == 83) {
+            out_mult[1020] = 0x7fffffff;
+        }
 
         data_dims_t input_dims = {.width = input_wd, .height = input_ht, .channels = channels, 1};
         data_dims_t output_dims = {.width = out_wd, .height = out_ht, .channels = channels * ch_mult, 1};
         data_dims_t filter_dims = {.width = filter_wd, .height = filter_ht, 0, 0};
-        const int32_t test_input_offset = itr == 21 ? 0 : input_offset;
+        const int32_t test_input_offset = itr == 21 ? 0 : itr == 66 ? 128 : input_offset;
         const int32_t test_act_min = itr == 45 ? INT32_MIN : activation_min;
         const int32_t test_act_max = itr == 45 ? INT32_MAX : activation_max;
         dw_conv_params_t conv_params = {.in_offset = test_input_offset, .out_offset = out_offset, .ch_mult = ch_mult,
@@ -773,6 +1055,14 @@ void esp_nn_depthwise_conv_s8_test()
 
         int scratch_buf_size = esp_nn_get_depthwise_conv_scratch_size(&input_dims, &filter_dims,
                                                                       &output_dims, &conv_params);
+#if CONFIG_NN_OPTIMIZED && (CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31)
+        /* The P4/S31 slab takes at most 16 KB: a 1-D map past that does not
+         * ask for a slab of its whole width. */
+        if (itr == 82 && scratch_buf_size > 4096) {
+            TEST_FAIL("[%3d] scratch %d bytes for a 1-D map\n", itr, scratch_buf_size);
+            goto dc_s8_cleanup;
+        }
+#endif
         /* No pre-check on the getter's size: a kernel that needs more than it
          * asked for trips the SCRATCH_GUARD, one that needs scratch when the
          * getter said 0 faults on the NULL buffer (reset after every case). */

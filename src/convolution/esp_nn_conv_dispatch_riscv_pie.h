@@ -12,6 +12,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <esp_nn_defs.h>
 
@@ -186,15 +187,174 @@ static inline int esp_nn_conv_scratch_size_riscv_pie_impl(const data_dims_t *inp
     return align_buf_size;
 }
 
+/* Position arrays of the ch_mult == 1 kernel, kept in the scratch instead
+ * of the stack (dw_pie_pos_t in esp_nn_depthwise_conv_riscv_pie.c). */
+#define DW_PIE_POS_BYTES 832
+
+/* Scratch of the ch_mult == 1 kernel, in order:
+ * - the position arrays (DW_PIE_POS_BYTES);
+ * - the per-channel comb, 16-byte aligned and padded to 16 channels, so a
+ *   vector load of a partial block stays inside it;
+ * - the accumulators of 32 positions x 16 lanes;
+ * - a 16-byte buffer;
+ * - the int16 table of esp_nn_dw_vrq_riscv_pie, 14 bytes per padded
+ *   channel. */
+static inline int dw_pie_ch1_scratch_size(int channels)
+{
+    const int ch_pad = (channels + 15) & ~15;
+    return 16 + DW_PIE_POS_BYTES + ch_pad * 4 + (32 * 16 + 4) * 4 + 14 * ch_pad;
+}
+
+static inline int dw_pie_min(int a, int b)
+{
+    return a < b ? a : b;
+}
+
+/* Output positions [lo, hi) along one axis whose window lies inside the
+ * input, with hi >= lo. The getter and the kernel both use these. */
+static inline int dw_pie_inner_lo(int pad, int stride, int out)
+{
+    return dw_pie_min(out, (pad + stride - 1) / stride);
+}
+
+static inline int dw_pie_inner_hi(int in, int pad, int stride, int filt,
+                                  int out, int lo)
+{
+    const int end = in + pad < filt ? 0 :
+                    dw_pie_min(out, (in + pad - filt) / stride + 1);
+    return end > lo ? end : lo;
+}
+
+/* The padded slab of one 16-channel block takes up to this many bytes.
+ * A layer where one band of output rows needs more takes the non-slab
+ * path. */
+#define DW_PIE_SLAB_MAX (16 * 1024)
+
+/* Output rows per band of the input slab: as many as fit DW_PIE_SLAB_MAX,
+ * at most out_ht, or 0 when not even one fits. The slab size comes from
+ * this band. The kernel may run shorter bands (dw_pie_slab_band_l2), and
+ * the size does not depend on the device. */
+static inline int dw_pie_slab_band(const data_dims_t *filter_dims,
+                                   const data_dims_t *output_dims,
+                                   const dw_conv_params_t *conv_params)
+{
+    const int s_ht = conv_params->stride.height;
+    const int row = ((output_dims->width - 1) * conv_params->stride.width +
+                     filter_dims->width) * 16;
+    const int rows = DW_PIE_SLAB_MAX / row;
+    if (rows < filter_dims->height) {
+        return 0;
+    }
+    return dw_pie_min((rows - filter_dims->height) / s_ht + 1,
+                      (int) output_dims->height);
+}
+
+/* Bytes of one band of the padded input slab of a 16-channel block plus
+ * the filter block repacked to 16 bytes per tap, or 0 when the slab path
+ * is not taken. In the slab every window lies inside, so all positions
+ * take the inner-window MAC. The slab path runs channel blocks outermost,
+ * so it reads the input once per block. It is taken when:
+ * - at least 1/8 of the positions have a window that crosses the input
+ *   edge, as the edge windows cost far more than the copy, or
+ * - there is a single channel block, and some window crosses the input
+ *   edge or the block is partial. Without edges, a full block reads the
+ *   input once on the non-slab path too, while a partial block (8-15
+ *   channels) would run in scalar C there. */
+static inline int dw_pie_slab_size(const data_dims_t *input_dims,
+                                   const data_dims_t *filter_dims,
+                                   const data_dims_t *output_dims,
+                                   const dw_conv_params_t *conv_params)
+{
+    const int out_wd = output_dims->width, out_ht = output_dims->height;
+    if (out_wd == 0 || out_ht == 0) {
+        return 0;
+    }
+    /* output positions whose window is inside the input, per axis */
+    const int s_wd = conv_params->stride.width, s_ht = conv_params->stride.height;
+    const int p_wd = conv_params->padding.width, p_ht = conv_params->padding.height;
+    const int x_lo = dw_pie_inner_lo(p_wd, s_wd, out_wd);
+    const int y_lo = dw_pie_inner_lo(p_ht, s_ht, out_ht);
+    const int ix = dw_pie_inner_hi(input_dims->width, p_wd, s_wd, filter_dims->width,
+                                   out_wd, x_lo) - x_lo;
+    const int iy = dw_pie_inner_hi(input_dims->height, p_ht, s_ht, filter_dims->height,
+                                   out_ht, y_lo) - y_lo;
+    if (input_dims->channels > 16 && ix > 0 && iy > 0 &&
+            8 * (int64_t) ix * iy > 7 * (int64_t) out_wd * out_ht) {
+        return 0;
+    }
+    if (ix == out_wd && iy == out_ht && input_dims->channels % 16 == 0) {
+        return 0;
+    }
+    const int band = dw_pie_slab_band(filter_dims, output_dims, conv_params);
+    if (band == 0) {
+        return 0;
+    }
+    const int slab_w = (out_wd - 1) * s_wd + filter_dims->width;
+    return (((band - 1) * s_ht + filter_dims->height) * slab_w +
+            filter_dims->height * filter_dims->width) * 16;
+}
+
+/* Bytes of the padded edge slab of the 3x3 kernel without the slab path:
+ * the top and bottom output rows and the left and right columns outside
+ * the inner positions run from a padded copy of their input. A side strip
+ * runs in chunks of at least 16 rows, and a top or bottom strip in chunks
+ * of columns, so the slab stays within DW_PIE_SLAB_MAX. 0, so the edges
+ * take the generic edge path, when:
+ * - there is no edge, or the filter is not 3x3;
+ * - the channels are not whole 16-channel blocks, as the kernel takes the
+ *   edge slab only then;
+ * - even one column of a strip or 16 rows of a side would not fit. */
+static inline int dw_pie_edge_size(const data_dims_t *input_dims,
+                                   const data_dims_t *filter_dims,
+                                   const data_dims_t *output_dims,
+                                   const dw_conv_params_t *conv_params)
+{
+    const int out_wd = output_dims->width, out_ht = output_dims->height;
+    if (filter_dims->width != 3 || filter_dims->height != 3 || out_wd == 0 || out_ht == 0 ||
+            (input_dims->channels & 15) != 0) {
+        return 0;
+    }
+    const int s_wd = conv_params->stride.width, s_ht = conv_params->stride.height;
+    const int p_wd = conv_params->padding.width, p_ht = conv_params->padding.height;
+    const int x_lo = dw_pie_inner_lo(p_wd, s_wd, out_wd);
+    const int y_lo = dw_pie_inner_lo(p_ht, s_ht, out_ht);
+    const int x_hi = dw_pie_inner_hi(input_dims->width, p_wd, s_wd, 3, out_wd, x_lo);
+    const int y_hi = dw_pie_inner_hi(input_dims->height, p_ht, s_ht, 3, out_ht, y_lo);
+    const int tb = y_lo > out_ht - y_hi ? y_lo : out_ht - y_hi;
+    const int lr = x_lo > out_wd - x_hi ? x_lo : out_wd - x_hi;
+    int vecs = 0, need = 0;
+    if (tb > 0) {
+        vecs = ((tb - 1) * s_ht + 3) * ((out_wd - 1) * s_wd + 3);
+        need = ((tb - 1) * s_ht + 3) * 3;
+    }
+    if (lr > 0) {
+        const int side = (15 * s_ht + 3) * ((lr - 1) * s_wd + 3);
+        vecs = vecs > side ? vecs : side;
+        need = need > side ? need : side;
+    }
+    if (vecs == 0 || (need + 9) * 16 > DW_PIE_SLAB_MAX) {
+        return 0;
+    }
+    return dw_pie_min((vecs + 9) * 16, DW_PIE_SLAB_MAX);
+}
+
+/* The PIE ch_mult == 1 kernel feeds -in_offset as an int8 lane value. */
+static inline bool dw_pie_ch1_ok(const data_dims_t *input_dims,
+                                 const dw_conv_params_t *conv_params)
+{
+    return conv_params->ch_mult == 1 && input_dims->channels >= 8 &&
+           conv_params->in_offset >= -127 && conv_params->in_offset <= 128;
+}
+
 static inline int esp_nn_depthwise_conv_scratch_size_riscv_pie_impl(const data_dims_t *input_dims,
                                                                    const data_dims_t *filter_dims,
                                                                    const data_dims_t *output_dims,
                                                                    const dw_conv_params_t *conv_params)
 {
-    (void) filter_dims;
-    (void) output_dims;
-    if (conv_params->ch_mult == 1 && input_dims->channels >= 8) {
-        return input_dims->channels * sizeof(int32_t);
+    if (dw_pie_ch1_ok(input_dims, conv_params)) {
+        const int slab = dw_pie_slab_size(input_dims, filter_dims, output_dims, conv_params);
+        return dw_pie_ch1_scratch_size(input_dims->channels) + slab +
+               (slab ? 0 : dw_pie_edge_size(input_dims, filter_dims, output_dims, conv_params));
     }
     return 0;
 }
