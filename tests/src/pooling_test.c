@@ -275,4 +275,10 @@ void esp_nn_max_pool_s8_test()
     run_max_pool_test_buf(10, 10, 32, 3, 3, 1, 1, 1, 1, -128, 127, 8, 8, iter++); /* 2x2 corners */
     /* activation limits outside int8 take the reference */
     run_max_pool_test_act(8, 8, 16, 2, 2, 2, 2, 0, 0, -200, 200, iter++);
+    /* 5x5 sliding-window pooling with stride 1 and SAME padding */
+    run_max_pool_test(12, 12, 128, 5, 5, 1, 1, 2, 2, iter++);
+    run_max_pool_test(16, 8, 32, 5, 5, 1, 1, 2, 2, iter++);
+    run_max_pool_test(5, 5, 16, 5, 5, 1, 1, 2, 2, iter++);
+    /* The same geometry takes the reference with activation limits outside int8 */
+    run_max_pool_test_act(12, 12, 16, 5, 5, 1, 1, 2, 2, -200, 200, iter++);
 }

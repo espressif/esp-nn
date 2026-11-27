@@ -741,3 +741,69 @@ esp_nn_max_pool_s8_esp32s3_rows:
     bnez    a8, .Lrows
     retw
     .size   esp_nn_max_pool_s8_esp32s3_rows, . - esp_nn_max_pool_s8_esp32s3_rows
+
+    .macro pool_sliding_store value
+    ee.vmax.s8    q0,\value,q6
+    ee.vmin.s8    q0,q0,q7
+    ee.vst.128.xp q0,a3,a5
+    .endm
+
+    // q2..q5 hold running maxima over the last one through four columns.
+    // q1 holds the new column's vertical maximum. q6/q7 are activation bounds.
+    .macro pool_sliding_row pad, history
+    movi.n  a8,-\pad
+1:
+    mov.n   a9,a2
+    ee.vld.128.xp q1,a9,a6
+    loopgtz a7,2f
+    ee.vld.128.xp q0,a9,a6
+    ee.vmax.s8 q1,q1,q0
+2:
+    add.n   a2,a2,a5
+    bltz    a8,3f
+    ee.vmax.s8 q0,\history,q1
+    pool_sliding_store q0
+3:
+    .if \pad == 2
+    ee.vmax.s8 q5,q4,q1
+    ee.vmax.s8 q4,q3,q1
+    .endif
+    ee.vmax.s8 q3,q2,q1
+    mv.qr   q2,q1
+    addi.n  a8,a8,1
+    addi.n  a4,a4,-1
+    bnez    a4,1b
+
+    // The last \pad windows have no new input columns on the right.
+    pool_sliding_store \history
+    .if \pad == 2
+    pool_sliding_store q4
+    .endif
+    retw.n
+    .endm
+
+    .align 4
+    .global esp_nn_max_pool_s8_esp32s3_sliding_row_asm
+    .hidden esp_nn_max_pool_s8_esp32s3_sliding_row_asm
+    .type   esp_nn_max_pool_s8_esp32s3_sliding_row_asm, @function
+esp_nn_max_pool_s8_esp32s3_sliding_row_asm:
+    // One aligned 16-channel group across a row. The caller clips vertical
+    // bounds, so a7 is the positive count of input rows in every column.
+    entry   a1,32
+    addi.n  a7,a7,-1
+    movi    a8,-128
+    s32i.n  a8,a1,0
+    ee.vldbc.8 q2,a1
+    mv.qr   q3,q2
+    addi    a9,a1,36
+    addi    a10,a1,40
+    ee.vldbc.8 q6,a9
+    ee.vldbc.8 q7,a10
+    l32i.n  a8,a1,32
+    beqi    a8,1,.Lpool_sliding_3x3
+    mv.qr   q4,q2
+    mv.qr   q5,q2
+    pool_sliding_row 2,q5
+.Lpool_sliding_3x3:
+    pool_sliding_row 1,q3
+    .size   esp_nn_max_pool_s8_esp32s3_sliding_row_asm, . - esp_nn_max_pool_s8_esp32s3_sliding_row_asm
