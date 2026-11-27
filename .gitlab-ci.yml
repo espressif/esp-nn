@@ -148,9 +148,11 @@ build_bench_app:
     - idf.py $BENCH_IDF_FLAGS set-target $TARGET build
     - done
 
-# esp-emu runs the esp32c3/c5/c6/h2/p4/s31 images; the other targets (incl.
-# the RISC-V esp32c2 and esp32s3) stay build-only. 1.0.0 is the first release
-# that boots the esp32s31 image on IDF master without a reboot loop. The
+# esp-emu models esp32c3/c5/c6/h2/p4/s3/s31; the other targets (incl. the
+# RISC-V esp32c2) stay build-only. 0.51.0 runs the S3 ee.* SIMD kernels. The
+# job installs the esp-emu release in ESP_EMU_VERSION, or the latest one when
+# it is empty. That release has to run every PIE instruction the kernels and
+# tests use. The
 # verdict is the app's TEST_RESULT line.
 emulate_tests:
   stage: test
@@ -159,18 +161,23 @@ emulate_tests:
   tags:
     - build
   variables:
-    ESP_EMU_VERSION: "1.0.0"
     EMU_TIMEOUT: "600"
     DEBIAN_FRONTEND: noninteractive
-  # 23+ emulated runs of up to EMU_TIMEOUT each, four at a time.
+    # The esp-emu release, such as 1.2.0. Empty installs the latest release.
+    ESP_EMU_VERSION: "1.2.0"
+  # 38 emulated runs of up to EMU_TIMEOUT each, four at a time: at most
+  # ceil(38 / 4) * 600 s = 100 min, inside the timeout.
   timeout: 2h
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
     - when: on_success
   script:
-    - curl -fsSL https://raw.githubusercontent.com/espressif/esp-emulator/main/install.sh
-      | sh -s -- --version ${ESP_EMU_VERSION} --bin-dir /usr/local/bin --quiet
+    # Download first, so a failed download fails the job.
+    - curl -fsSL -o esp-emu-install.sh
+      https://raw.githubusercontent.com/espressif/esp-emulator/main/install.sh
+    - sh esp-emu-install.sh --bin-dir /usr/local/bin --quiet
+      ${ESP_EMU_VERSION:+--version "$ESP_EMU_VERSION"}
     - python3 tools/ci/run_emulator_tests.py
       --bins-dir test_app/ci_bins
       --out-dir test_results

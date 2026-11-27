@@ -24,8 +24,9 @@ import time
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
-# Targets esp-emu runs in CI; everything else is build-only.
-EMU_TARGETS = ('esp32c3', 'esp32c5', 'esp32c6', 'esp32h2', 'esp32p4', 'esp32s31')
+# Targets esp-emu models; everything else is build-only in CI.
+EMU_TARGETS = ('esp32c3', 'esp32c5', 'esp32c6', 'esp32h2', 'esp32p4', 'esp32s3',
+               'esp32s31')
 
 # One rule per (target, IDF range) combination that must not be emulated.
 # `min_idf` is the first working release, `max_idf` the last; give at least one.
@@ -66,7 +67,8 @@ EXPECTED_SUITES = (
     'add_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'mul_sweep_s8', 'depthwise_conv_s8',
     'conv_s8', 'relu6_s8', 'avg_pool_s8', 'max_pool_s8', 'fc_s8', 'fc_per_ch_s8',
     'fc_per_ch_s8_batch', 'fc_per_ch_s8_batch_1x1', 'fc_align_s8', 'alignment_s8',
-    'fc_large_s8', 'softmax_s8', 'hard_swish_s8', 'mean_nhwc_s8', 'dual_core',
+    'fc_large_s8', 'fc_dual_core_s8', 'softmax_s8', 'hard_swish_s8', 'mean_nhwc_s8',
+    'dual_core',
 )
 
 # Each of these is printed once per boot (the ROM banner and the reset-reason
@@ -77,8 +79,13 @@ EXPECTED_SUITES = (
 BOOT_RES = (re.compile(r'^ESP-ROM:'), re.compile(r'^rst:0x[0-9a-fA-F]+[ ,(]'))
 
 # Stamped into every report row so a result can be tied to the emulator that
-# produced it.
-EMU_SOURCE = 'esp-emu ' + os.environ.get('ESP_EMU_VERSION', 'unknown')
+# produced it. CI installs the latest release, so main() asks the binary.
+EMU_SOURCE = 'esp-emu unknown'
+
+# The oldest esp-emu that runs every test image: 0.51.0 runs the S3 ee.*
+# kernels, and 1.0.0 the S31 images built with IDF master. An older emulator
+# fails as REBOOT, PANIC or an illegal instruction, so main() stops early.
+MIN_EMU_VERSION = (1, 0, 0)
 
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 TEST_RE = re.compile(r'^TEST: (?P<kernel>[^,]+), passed=(?P<passed>\d+), '
@@ -296,6 +303,25 @@ def write_reports(runs, out_dir):
                              run.skipped, run.result or 'NO_VERDICT', run.reason))
 
 
+def emu_version(emu):
+    """`esp-emu --version` prints "esp-emu X.Y.Z". Only its first line goes
+    into the reports."""
+    try:
+        out = subprocess.run([emu, '--version'], capture_output=True,
+                             text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return 'esp-emu unknown'
+    if out.returncode != 0 or not out.stdout.strip():
+        return 'esp-emu unknown'
+    return out.stdout.strip().splitlines()[0]
+
+
+def parse_version(source):
+    """(X, Y, Z) from "esp-emu X.Y.Z", or None."""
+    m = re.search(r'(\d+)\.(\d+)\.(\d+)', source)
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bins-dir', default='test_app/ci_bins',
@@ -318,6 +344,13 @@ def main():
         sys.exit(0 if args.is_emulated in EMU_TARGETS else 1)
 
     emu = shutil.which(args.emu) or args.emu
+    global EMU_SOURCE
+    EMU_SOURCE = emu_version(emu)
+    print(EMU_SOURCE, flush=True)
+    version = parse_version(EMU_SOURCE)
+    if version is not None and version < MIN_EMU_VERSION:
+        sys.exit('%s is too old: the tests need esp-emu %s or later'
+                 % (EMU_SOURCE, '.'.join(map(str, MIN_EMU_VERSION))))
     logs_dir = os.path.join(args.out_dir, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
 

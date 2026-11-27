@@ -144,10 +144,13 @@ jobs:
   emulate:
     needs: build
     runs-on: ubuntu-latest
+    # 33 emulated runs of up to EMU_TIMEOUT each, four at a time: at most
+    # ceil(33 / 4) * 600 s = 90 min, inside the timeout.
     timeout-minutes: 120
     env:
-      ESP_EMU_VERSION: "1.0.0"
       EMU_TIMEOUT: "600"
+      # The esp-emu release, such as 1.2.0. Empty installs the latest release.
+      ESP_EMU_VERSION: "1.2.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -157,11 +160,17 @@ jobs:
           path: test_app/ci_bins/
           merge-multiple: true
 
+      # The esp-emu release in ESP_EMU_VERSION, or the latest when it is empty.
+      # run_emulator_tests.py logs its version.
       - name: Install esp-emulator
+        shell: bash
         run: |
           mkdir -p "${HOME}/.local/bin"
-          curl -fsSL https://raw.githubusercontent.com/espressif/esp-emulator/main/install.sh \
-            | sh -s -- --version "${ESP_EMU_VERSION}" --bin-dir "${HOME}/.local/bin" --quiet
+          # Download first, so a failed download fails the step.
+          curl -fsSL -o esp-emu-install.sh \
+            https://raw.githubusercontent.com/espressif/esp-emulator/main/install.sh
+          sh esp-emu-install.sh --bin-dir "${HOME}/.local/bin" --quiet \
+            ${ESP_EMU_VERSION:+--version "$ESP_EMU_VERSION"}
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Run test_app in esp-emulator
