@@ -789,17 +789,17 @@ esp_nn_max_pool_s8_esp32s3_rows:
 esp_nn_max_pool_s8_esp32s3_sliding_row_asm:
     // One aligned 16-channel group across a row. The caller clips vertical
     // bounds, so a7 is the positive count of input rows in every column.
-    entry   a1,32
+    entry   a1,64
     addi.n  a7,a7,-1
     movi    a8,-128
     s32i.n  a8,a1,0
     ee.vldbc.8 q2,a1
     mv.qr   q3,q2
-    addi    a9,a1,36
-    addi    a10,a1,40
+    addi    a9,a1,68
+    addi    a10,a1,72
     ee.vldbc.8 q6,a9
     ee.vldbc.8 q7,a10
-    l32i.n  a8,a1,32
+    l32i.n  a8,a1,64
     beqi    a8,1,.Lpool_sliding_3x3
     mv.qr   q4,q2
     mv.qr   q5,q2
