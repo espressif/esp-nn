@@ -78,7 +78,64 @@ void esp_nn_add_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                         const int32_t activation_min,
                                         const int32_t activation_max,
                                         const int32_t size);
-#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_riscv_pie
+void esp_nn_add_elementwise_s8_mt_riscv_pie(const int8_t *input1_data,
+                                            const int8_t *input2_data,
+                                            const int32_t input1_offset,
+                                            const int32_t input2_offset,
+                                            const int32_t input1_mult,
+                                            const int32_t input2_mult,
+                                            const int32_t input1_shift,
+                                            const int32_t input2_shift,
+                                            const int32_t left_shift,
+                                            int8_t *output,
+                                            const int32_t out_offset,
+                                            const int32_t out_mult,
+                                            const int32_t out_shift,
+                                            const int32_t activation_min,
+                                            const int32_t activation_max,
+                                            const int32_t size);
+
+/* Below this many elements, handing half of the add to the other core costs
+ * more than it saves (ESP32-P4, PIE kernel: break-even near 650 elements). */
+#ifndef ESP_NN_ADD_S8_MT_MIN_SIZE
+#define ESP_NN_ADD_S8_MT_MIN_SIZE 1024
+#endif
+
+/* Small arrays go to the single-core kernel at the call site, without the
+ * dual-core front's call and claim. */
+static inline __attribute__((always_inline))
+void esp_nn_add_elementwise_s8_riscv_pie_gate(const int8_t *input1_data,
+                                              const int8_t *input2_data,
+                                              const int32_t input1_offset,
+                                              const int32_t input2_offset,
+                                              const int32_t input1_mult,
+                                              const int32_t input2_mult,
+                                              const int32_t input1_shift,
+                                              const int32_t input2_shift,
+                                              const int32_t left_shift,
+                                              int8_t *output,
+                                              const int32_t out_offset,
+                                              const int32_t out_mult,
+                                              const int32_t out_shift,
+                                              const int32_t activation_min,
+                                              const int32_t activation_max,
+                                              const int32_t size)
+{
+    if (size < ESP_NN_ADD_S8_MT_MIN_SIZE) {
+        esp_nn_add_elementwise_s8_riscv_pie(input1_data, input2_data, input1_offset,
+                                            input2_offset, input1_mult, input2_mult,
+                                            input1_shift, input2_shift, left_shift,
+                                            output, out_offset, out_mult, out_shift,
+                                            activation_min, activation_max, size);
+    } else {
+        esp_nn_add_elementwise_s8_mt_riscv_pie(input1_data, input2_data, input1_offset,
+                                               input2_offset, input1_mult, input2_mult,
+                                               input1_shift, input2_shift, left_shift,
+                                               output, out_offset, out_mult, out_shift,
+                                               activation_min, activation_max, size);
+    }
+}
+#define esp_nn_add_elementwise_s8 esp_nn_add_elementwise_s8_riscv_pie_gate
 
 void esp_nn_mul_elementwise_s8_riscv_pie(const int8_t *input1_data,
                                         const int8_t *input2_data,

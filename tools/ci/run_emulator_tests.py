@@ -64,11 +64,11 @@ PANIC_MARKERS = (
 # one extra bounded-dot check), and a suite that verified nothing already fails
 # through empty_suites.
 EXPECTED_SUITES = (
-    'add_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'mul_sweep_s8', 'depthwise_conv_s8',
-    'conv_s8', 'relu6_s8', 'avg_pool_s8', 'max_pool_s8', 'fc_s8', 'fc_per_ch_s8',
-    'fc_per_ch_s8_batch', 'fc_per_ch_s8_batch_1x1', 'fc_align_s8', 'alignment_s8',
-    'fc_large_s8', 'fc_dual_core_s8', 'softmax_s8', 'hard_swish_s8', 'mean_nhwc_s8',
-    'dual_core',
+    'add_s8', 'add_sweep_s8', 'mul_s8', 'mul_broadcast_ch_s8', 'mul_sweep_s8',
+    'depthwise_conv_s8', 'conv_s8', 'relu6_s8', 'avg_pool_s8', 'max_pool_s8',
+    'fc_s8', 'fc_per_ch_s8', 'fc_per_ch_s8_batch', 'fc_per_ch_s8_batch_1x1',
+    'fc_align_s8', 'alignment_s8', 'fc_large_s8', 'fc_dual_core_s8',
+    'softmax_s8', 'hard_swish_s8', 'mean_nhwc_s8', 'dual_core',
 )
 
 # Each of these is printed once per boot (the ROM banner and the reset-reason

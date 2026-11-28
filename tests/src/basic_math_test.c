@@ -1000,3 +1000,426 @@ mul_sweep_cleanup:
         }
     }
 }
+
+
+/*
+ * Add sweep: the elementwise add against the ANSI C reference over lengths
+ * 0..160 (around the 8- and 16-element vector steps), every buffer alignment,
+ * all input and output shifts, left shifts, the multiplier and offset limits,
+ * narrow activation ranges, random parameters, parameters on both sides of
+ * the optimized kernels' limits, outputs that alias an input, and long arrays
+ * (the dual-core split). Multipliers >= 0 and shifts <= 0 throughout, as from
+ * TFLite. Guard bytes around the output catch writes past either end.
+ */
+#define ADD_SWEEP_MAX       160
+#define ADD_SWEEP_LONG      (3 * 8192 + 37)
+#define ADD_SWEEP_GUARD     32
+#define ADD_SWEEP_GUARD_VAL 0x5a
+
+typedef struct {
+    int32_t in1_off, in2_off, out_off;
+    int32_t in1_mult, in2_mult, in1_shift, in2_shift, left_shift;
+    int32_t out_mult, out_shift, act_min, act_max;
+} add_sweep_q_t;
+
+static uint32_t add_sweep_seed;
+
+static uint32_t add_sweep_rand(void)
+{
+    add_sweep_seed ^= add_sweep_seed << 13;
+    add_sweep_seed ^= add_sweep_seed >> 17;
+    add_sweep_seed ^= add_sweep_seed << 5;
+    return add_sweep_seed;
+}
+
+/* Run one case on buffers at the given misalignments and compare. */
+static bool add_sweep_run(int8_t *const bufs[4], int size, const add_sweep_q_t *q,
+                          int al1, int al2, int alo, int fill, int inplace)
+{
+    int8_t *in1 = bufs[0] + ADD_SWEEP_GUARD + al1;
+    int8_t *in2 = bufs[1] + ADD_SWEEP_GUARD + al2;
+    int8_t *out_c = bufs[2] + ADD_SWEEP_GUARD + alo;
+    int8_t *out_opt = bufs[3] + ADD_SWEEP_GUARD + alo;
+
+    for (int i = 0; i < size; i++) {
+        in1[i] = fill == 1 ? -128 : fill == 2 ? 127 : (int8_t) add_sweep_rand();
+        in2[i] = fill == 1 ? 127 : fill == 2 ? -128 : (int8_t) add_sweep_rand();
+    }
+    memset(bufs[3], ADD_SWEEP_GUARD_VAL, size + 2 * ADD_SWEEP_GUARD + 16);
+    /* In place: the output is the aliased input, between guards of its own */
+    int8_t *const alias_buf = inplace == 1 ? bufs[0] : bufs[1];
+    int8_t *const alias = inplace == 1 ? in1 : in2;
+    const int alias_lead = (int) (alias - alias_buf);
+    if (inplace) {
+        memset(alias_buf, ADD_SWEEP_GUARD_VAL, alias_lead);
+        memset(alias + size, ADD_SWEEP_GUARD_VAL, ADD_SWEEP_GUARD);
+        out_opt = alias;
+    }
+
+    esp_nn_add_elementwise_s8_ansi(in1, in2, q->in1_off, q->in2_off, q->in1_mult, q->in2_mult,
+                                   q->in1_shift, q->in2_shift, q->left_shift, out_c, q->out_off,
+                                   q->out_mult, q->out_shift, q->act_min, q->act_max, size);
+    esp_nn_add_elementwise_s8(in1, in2, q->in1_off, q->in2_off, q->in1_mult, q->in2_mult,
+                              q->in1_shift, q->in2_shift, q->left_shift, out_opt, q->out_off,
+                              q->out_mult, q->out_shift, q->act_min, q->act_max, size);
+
+    bool ok = CHECK_EQUAL(out_c, out_opt, size);
+    const int8_t *const lead = inplace ? alias_buf : bufs[3];
+    const int lead_len = inplace ? alias_lead : ADD_SWEEP_GUARD + alo;
+    for (int i = 0; ok && i < lead_len; i++) {
+        ok = lead[i] == (int8_t) ADD_SWEEP_GUARD_VAL;
+    }
+    for (int i = 0; ok && i < ADD_SWEEP_GUARD; i++) {
+        ok = out_opt[size + i] == (int8_t) ADD_SWEEP_GUARD_VAL;
+    }
+    if (!ok) {
+        printf("%s: size=%d align=%d/%d/%d fill=%d inplace=%d off=%"PRId32"/%"PRId32"/%"PRId32
+               " in1=%"PRId32"/%"PRId32" in2=%"PRId32"/%"PRId32" ls=%"PRId32
+               " out=%"PRId32"/%"PRId32" act=[%"PRId32", %"PRId32"]\n",
+               __FUNCTION__, size, al1, al2, alo, fill, inplace, q->in1_off, q->in2_off, q->out_off,
+               q->in1_mult, q->in1_shift, q->in2_mult, q->in2_shift, q->left_shift,
+               q->out_mult, q->out_shift, q->act_min, q->act_max);
+        for (int i = 0; i < size; i++) {
+            if (out_c[i] != out_opt[i]) {
+                printf("first mismatch at %d: got %d exp %d\n", i, out_opt[i], out_c[i]);
+                break;
+            }
+        }
+    }
+    return ok;
+}
+
+static bool add_sweep_case(int8_t *const bufs[4], int size, const add_sweep_q_t *q,
+                           int al1, int al2, int alo, int fill)
+{
+    return add_sweep_run(bufs, size, q, al1, al2, alo, fill, 0);
+}
+
+/* One quantization over a few lengths and alignments. */
+static bool add_sweep_sizes(int8_t *const bufs[4], const add_sweep_q_t *q, int fill)
+{
+    static const int sizes[] = { 1, 7, 8, 9, 15, 16, 17, 47, 96, 131 };
+    bool ok = true;
+    for (int s = 0; ok && s < (int) (sizeof(sizes) / sizeof(sizes[0])); s++) {
+        const int al = (s * 5) % 16;
+        ok = add_sweep_case(bufs, sizes[s], q, al, (al + 3) % 16, (al + 7) % 16, fill);
+    }
+    return ok;
+}
+
+static add_sweep_q_t add_sweep_random_q(void)
+{
+    add_sweep_q_t q;
+    q.in1_off = (int32_t) (add_sweep_rand() % 256) - 127;
+    q.in2_off = (int32_t) (add_sweep_rand() % 256) - 127;
+    q.out_off = (int32_t) (add_sweep_rand() % 256) - 128;
+    q.in1_mult = (int32_t) (add_sweep_rand() & 0x7fffffff);
+    q.in2_mult = (int32_t) (add_sweep_rand() & 0x7fffffff);
+    q.out_mult = (int32_t) (add_sweep_rand() & 0x7fffffff);
+    /* mostly TFLite's int8 add (one input at 1 << 30, no shift; left shift 20) */
+    if (add_sweep_rand() % 2) {
+        if (add_sweep_rand() % 2) {
+            q.in1_mult = 1 << 30;
+        } else {
+            q.in2_mult = 1 << 30;
+        }
+    }
+    q.in1_shift = -(int32_t) (add_sweep_rand() % 8 ? add_sweep_rand() % 4 : add_sweep_rand() % 31);
+    q.in2_shift = -(int32_t) (add_sweep_rand() % 8 ? add_sweep_rand() % 4 : add_sweep_rand() % 31);
+    q.left_shift = add_sweep_rand() % 4 ? 20 : (int32_t) (add_sweep_rand() % 23);
+    q.out_shift = -(int32_t) (add_sweep_rand() % 4 ? 16 + add_sweep_rand() % 5 : add_sweep_rand() % 31);
+    int32_t a = (int32_t) (add_sweep_rand() % 256) - 128;
+    int32_t b = (int32_t) (add_sweep_rand() % 256) - 128;
+    q.act_min = a < b ? a : b;
+    q.act_max = a < b ? b : a;
+    return q;
+}
+
+/*
+ * Parameters that keep each input's rescaled value d small (a few hundred),
+ * so that an error of 1 in either input's rounding shows in the output:
+ * log-uniform multipliers (or a small multiple of 2^16 with no shift),
+ * random left shifts, the input shifts chosen to bring
+ * 255 * M * 2^ls / 2^(31 + s) near 2^8, and the output multiplier and shift
+ * chosen to map the largest sum near 100.
+ */
+static add_sweep_q_t add_sweep_fine_q(void)
+{
+    add_sweep_q_t q = add_sweep_random_q();
+    q.left_shift = 15 + (int32_t) (add_sweep_rand() % 8);   /* 15..22 */
+    int64_t dmax = 0;
+    for (int k = 0; k < 2; k++) {
+        /* log-uniform in 2^14..2^31 */
+        const int e = 14 + (int) (add_sweep_rand() % 17);
+        int32_t m = (int32_t) ((1u << e) + (add_sweep_rand() & ((1u << e) - 1)));
+        m = m < 0 ? INT32_MAX : m;
+        int32_t s = 0;
+        int64_t d = ((int64_t) 255 * m) >> (31 - q.left_shift);
+        while (d > 384 && s < 31) {
+            d >>= 1;
+            s++;
+        }
+        s = s + (int32_t) (add_sweep_rand() % 3) - 1;
+        s = s < 0 ? 0 : s > 30 ? 30 : s;
+        if (add_sweep_rand() % 4 == 0) {
+            /* a whole multiple of 2^16 and no shift, like TFLite's 1 << 30 */
+            m = (int32_t) (1 + add_sweep_rand() % 4) << 16;
+            s = 0;
+        }
+        dmax += (((int64_t) 255 * m) >> (31 - q.left_shift) >> s) + 1;
+        if (k == 0) {
+            q.in1_mult = m;
+            q.in1_shift = -s;
+        } else {
+            q.in2_mult = m;
+            q.in2_shift = -s;
+        }
+    }
+    q.out_shift = 0;
+    q.out_mult = INT32_MAX;
+    for (int32_t so = 0; so <= 30; so++) {
+        int64_t mo = ((int64_t) 100 << (31 + so)) / dmax;
+        if (mo >= (1 << 30)) {
+            q.out_shift = -so;
+            q.out_mult = mo > INT32_MAX ? INT32_MAX : (int32_t) mo;
+            break;
+        }
+    }
+    return q;
+}
+
+void esp_nn_add_s8_sweep_test()
+{
+    int8_t *bufs[4] = { NULL };
+    const int len = ADD_SWEEP_LONG + 2 * ADD_SWEEP_GUARD + 16;  /* guard, 15, data, guard */
+    for (int i = 0; i < 4; i++) {
+        bufs[i] = (int8_t *) ESP_NN_TEST_ALLOC(len + 16);
+        if (bufs[i] == NULL) {
+            TEST_SKIP("%s error allocating buffers\n", __FUNCTION__);
+            goto add_sweep_cleanup;
+        }
+    }
+    /* 16-byte aligned bases; each case adds its own misalignment */
+    int8_t *base[4];
+    for (int i = 0; i < 4; i++) {
+        base[i] = (int8_t *) (((uintptr_t) bufs[i] + 15) & ~(uintptr_t) 15);
+    }
+    add_sweep_seed = 0x9e3779b9u;
+    /* an int8 residual add as TFLite quantizes it */
+    const add_sweep_q_t typical = { 9, 10, -9, 2121186378, 1 << 30, -1, 0, 20,
+                                    1087053468, -18, -128, 127 };
+    bool ok;
+
+    /* 1. Lengths 0..160, all alignments */
+    ok = true;
+    for (int n = 0; ok && n <= ADD_SWEEP_MAX; n++) {
+        ok = add_sweep_case(base, n, &typical, n % 16, (n * 3) % 16, (n * 7) % 16, 0);
+    }
+    for (int al = 0; ok && al < 16; al++) {
+        for (int al2 = 0; ok && al2 < 16; al2++) {
+            ok = add_sweep_case(base, 80, &typical, al, al2, (al * 3 + al2) % 16, 0);
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[lengths and alignments] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[lengths and alignments] failed\n", __FUNCTION__);
+    }
+
+    /* 2. Every input and output shift down to -30 (the reference's mask for 31
+     * overflows), and left shifts 0..22 */
+    ok = true;
+    for (int32_t shift = -30; ok && shift <= 0; shift++) {
+        add_sweep_q_t q = typical;
+        q.in1_shift = shift;
+        q.in2_shift = -((-shift * 7) % 31);
+        ok = add_sweep_sizes(base, &q, 0);
+        q = typical;
+        q.out_shift = shift;
+        q.out_mult = 0x7ffffff0 + shift * 977;
+        ok = ok && add_sweep_sizes(base, &q, 0) && add_sweep_sizes(base, &q, 1 + (-shift % 2));
+    }
+    for (int32_t ls = 0; ok && ls <= 22; ls++) {
+        for (int fill = 0; ok && fill < 3; fill++) {
+            add_sweep_q_t q = typical;
+            q.left_shift = ls;
+            q.out_shift = -(ls > 2 ? ls - 2 : 0);
+            ok = add_sweep_sizes(base, &q, fill);
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[shifts] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[shifts] failed\n", __FUNCTION__);
+    }
+
+    /* 3. Multipliers at the limits, with the input shifts around the vector range */
+    ok = true;
+    {
+        const int32_t mults[] = { 0, 1, 2, 0x7fff, 0x8000, 0x3fffffff, 0x40000000, 0x7fff7fff,
+                                  0x7fff8000, 0x7ffffffe, INT32_MAX };
+        const int32_t shifts[] = { 0, -1, -2, -15, -16 };
+        const int nm = sizeof(mults) / sizeof(mults[0]);
+        const int ns = sizeof(shifts) / sizeof(shifts[0]);
+        for (int m1 = 0; ok && m1 < nm; m1++) {
+            for (int m2 = 0; ok && m2 < nm; m2++) {
+                add_sweep_q_t q = typical;
+                q.in1_mult = mults[m1];
+                q.in2_mult = mults[m2];
+                q.in1_shift = shifts[(m1 + m2) % ns];
+                q.in2_shift = shifts[(m1 * 3 + m2 * 2) % ns];
+                q.out_mult = mults[(m1 * 7 + m2) % nm];
+                ok = add_sweep_sizes(base, &q, (m1 + m2) % 3);
+            }
+        }
+        const int32_t out_shifts[] = { 0, -1, -17, -18, -19, -28, -29, -30 };
+        for (int m = 0; ok && m < nm; m++) {
+            for (int s = 0; ok && s < (int) (sizeof(out_shifts) / sizeof(out_shifts[0])); s++) {
+                for (int fill = 0; ok && fill < 3; fill++) {
+                    add_sweep_q_t q = typical;
+                    q.out_mult = mults[m];
+                    q.out_shift = out_shifts[s];
+                    ok = add_sweep_sizes(base, &q, fill);
+                }
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[multipliers] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[multipliers] failed\n", __FUNCTION__);
+    }
+
+    /* 4. Offsets and activation ranges at the limits */
+    ok = true;
+    {
+        const int32_t in_offs[] = { -127, -1, 0, 1, 127, 128 };
+        const int32_t out_offs[] = { -128, -1, 0, 127 };
+        const int32_t acts[][2] = { {-128, 127}, {-10, 10}, {0, 0}, {-128, -128}, {127, 127} };
+        for (int a = 0; ok && a < (int) (sizeof(in_offs) / sizeof(in_offs[0])); a++) {
+            for (int b = 0; ok && b < (int) (sizeof(in_offs) / sizeof(in_offs[0])); b++) {
+                for (int o = 0; ok && o < (int) (sizeof(out_offs) / sizeof(out_offs[0])); o++) {
+                    for (int r = 0; ok && r < (int) (sizeof(acts) / sizeof(acts[0])); r++) {
+                        add_sweep_q_t q = typical;
+                        q.in1_off = in_offs[a];
+                        q.in2_off = in_offs[b];
+                        q.out_off = out_offs[o];
+                        q.act_min = acts[r][0];
+                        q.act_max = acts[r][1];
+                        q.out_shift = -16 - (a + b + o + r) % 4;
+                        ok = add_sweep_sizes(base, &q, (a + r) % 3);
+                    }
+                }
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[offsets and ranges] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[offsets and ranges] failed\n", __FUNCTION__);
+    }
+
+    /* 5. Random parameters, lengths and alignments */
+    ok = true;
+    for (int i = 0; ok && i < 600; i++) {
+        const add_sweep_q_t q = add_sweep_random_q();
+        const int n = 1 + (int) (add_sweep_rand() % ADD_SWEEP_MAX);
+        const int al1 = (int) (add_sweep_rand() % 16);
+        const int al2 = (int) (add_sweep_rand() % 16);
+        const int alo = (int) (add_sweep_rand() % 16);
+        ok = add_sweep_case(base, n, &q, al1, al2, alo, 0);
+    }
+    if (ok) {
+        TEST_PASS("%s[random] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[random] failed\n", __FUNCTION__);
+    }
+
+    /* 6. Small rescaled inputs, where the rounding of every stage shows */
+    ok = true;
+    for (int i = 0; ok && i < 1500; i++) {
+        const add_sweep_q_t q = add_sweep_fine_q();
+        const int n = 16 + (int) (add_sweep_rand() % (ADD_SWEEP_MAX - 15));
+        const int al1 = (int) (add_sweep_rand() % 16);
+        const int al2 = (int) (add_sweep_rand() % 16);
+        const int alo = (int) (add_sweep_rand() % 16);
+        ok = add_sweep_case(base, n, &q, al1, al2, alo, 0);
+    }
+    if (ok) {
+        TEST_PASS("%s[fine rounding] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[fine rounding] failed\n", __FUNCTION__);
+    }
+
+    /* 7. Each limit of the optimized kernels, from inside and from outside:
+     * left shifts 13..21, input and output shifts -21..-19, multipliers
+     * around 0x7fff8000, output offsets just outside int8 */
+    ok = true;
+    {
+        const int32_t mults[] = { 0x7fff7fff, 0x7fff8000, 0x7fffffff };
+        const int32_t offs[] = { -129, -128, 127, 128 };
+        for (int i = 0; ok && i < 9 * 3 * 3 * 4; i++) {
+            add_sweep_q_t q = typical;
+            q.left_shift = 13 + i % 9;
+            q.in1_shift = -19 - (i / 9) % 3;
+            q.in2_shift = -19 - (i / 27) % 3;
+            q.out_shift = -19 - (i / 3) % 3;
+            q.in1_mult = mults[i % 3];
+            q.in2_mult = mults[(i / 3) % 3];
+            q.out_mult = mults[(i / 9) % 3];
+            q.out_off = offs[(i / 81) % 4];
+            q.act_min = -300;
+            q.act_max = 300;
+            ok = add_sweep_sizes(base, &q, i % 3);
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[limits] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[limits] failed\n", __FUNCTION__);
+    }
+
+    /* 8. Output aliasing either input, short and long, every alignment */
+    ok = true;
+    {
+        const int sizes[] = { 1, 7, 8, 9, 15, 16, 17, 31, 33, 100, 4111, 8209, 3 * 4096 + 7 };
+        for (int s = 0; ok && s < (int) (sizeof(sizes) / sizeof(sizes[0])); s++) {
+            for (int al = 0; ok && al < 16; al += (sizes[s] > 100 ? 5 : 1)) {
+                const add_sweep_q_t q = (al % 2) ? add_sweep_random_q() : typical;
+                ok = add_sweep_run(base, sizes[s], &q, al, (al * 7) % 16, 0, 0, 1) &&
+                     add_sweep_run(base, sizes[s], &q, (al * 3) % 16, al, 0, 0, 2);
+            }
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[in place] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[in place] failed\n", __FUNCTION__);
+    }
+
+    /* 9. Long arrays: the dual-core split when it is on, odd lengths */
+    ok = true;
+    {
+        const int longs[] = { 1023, 1024, 1025, 1039, 2047, 2048, 2063, 3071, 3072, 4095, 4096, 4111, 6143, 6144, 8191,
+                              8192, 8209, 3 * 4096 + 1, ADD_SWEEP_LONG };
+        for (int l = 0; ok && l < (int) (sizeof(longs) / sizeof(longs[0])); l++) {
+            add_sweep_q_t q = typical;
+            if (l % 2) {
+                q = add_sweep_random_q();
+            }
+            ok = add_sweep_case(base, longs[l], &q, l % 16, (l * 5) % 16, (l * 9) % 16, 0);
+        }
+    }
+    if (ok) {
+        TEST_PASS("%s[long arrays] passed\n", __FUNCTION__);
+    } else {
+        TEST_FAIL("%s[long arrays] failed\n", __FUNCTION__);
+    }
+
+add_sweep_cleanup:
+    for (int i = 0; i < 4; i++) {
+        if (bufs[i]) {
+            free(bufs[i]);
+        }
+    }
+}
